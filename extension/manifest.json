@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Followthroo for LinkedIn",
   "short_name": "Followthroo",
-  "version": "2.5.0",
+  "version": "2.5.1",
   "description": "Save people from LinkedIn into your Followthroo CRM and send your outreach, at a pace and daily limit you set.",
   "homepage_url": "https://followthroo.com",
   "minimum_chrome_version": "116",

@@ -9,6 +9,16 @@ export const metadata = { title: "Changelog — Followthroo" };
  */
 const ENTRIES = [
   {
+    version: "0.11.4",
+    date: "Sep 2026",
+    items: [
+      "Fixed a serious one: the browser helper could send a connection request to the wrong person. A LinkedIn profile page carries other people’s Connect buttons — “People also viewed” and “More profiles for you” each show a card per person, with a working Connect on it — and the helper searched the whole page, so it could click a stranger’s. An invitation cannot be quietly recalled",
+      "It now only ever acts on the profile’s own card, never the suggestions around it. If that card offers no Connect, it does nothing rather than reach for the nearest one",
+      "It also checks it is on the right profile before acting. A renamed or stale LinkedIn link can redirect you to somebody else entirely; that now stops the action and says so, instead of contacting whoever loaded",
+      "Fixed: a message could go to the wrong conversation. LinkedIn keeps earlier chats docked at the bottom of the screen, and the helper typed into the first box it found rather than the window it had just opened",
+    ],
+  },
+  {
     version: "0.11.3",
     date: "Sep 2026",
     items: [

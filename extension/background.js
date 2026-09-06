@@ -374,13 +374,54 @@ chrome.storage.onChanged.addListener((ch) => { if (ch.enabled && ch.enabled.newV
  */
 async function fillLinkedInAction(action) {
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-  const all = (sel) => Array.from(document.querySelectorAll(sel));
-  const btnByLabel = (re) =>
-    all('button, a[role="button"]').find((b) => re.test(((b.getAttribute("aria-label") || b.textContent || "").trim())));
+
+  /**
+   * The profile's OWN action area, never the whole page.
+   *
+   * A LinkedIn profile carries other people's Connect buttons: "People also
+   * viewed" and "More profiles for you" each render a card per person, with a
+   * working Connect on it. Searching the whole document for /^Connect/ therefore
+   * finds a stranger from the sidebar as readily as the person you meant, and
+   * clicking it sends a real invitation to somebody you never selected.
+   *
+   * That is not a cosmetic bug — it is worse than sending nothing — so the
+   * search is anchored to the section containing the profile's <h1>, falls back
+   * to <main>, and never reaches <aside>.
+   */
+  const scope = () => {
+    const h1 = document.querySelector("main h1, h1");
+    const card = h1 && (h1.closest("section") || h1.closest("div.ph5") || h1.parentElement);
+    return card || document.querySelector("main") || document.body;
+  };
+  const inScope = (el) => {
+    if (!el) return false;
+    if (el.closest("aside")) return false; // recommendation rails live here
+    return scope().contains(el) || (document.querySelector("main")?.contains(el) && !el.closest("aside"));
+  };
+  const all = (sel) => Array.from(scope().querySelectorAll(sel));
+  const label = (b) => ((b.getAttribute("aria-label") || b.textContent || "").trim());
+  const btnByLabel = (re) => all('button, a[role="button"]').find((b) => re.test(label(b)) && inScope(b));
 
   // Bail early if LinkedIn bounced us to a login/checkpoint page.
   if (/\/(login|checkpoint|authwall)/.test(location.pathname) || document.querySelector('input[name="session_key"]')) {
     return { status: "failed", result: "not logged in to LinkedIn in this browser" };
+  }
+
+  /**
+   * Are we actually on the person we were asked to contact?
+   *
+   * LinkedIn redirects: a renamed vanity URL, a members-only profile, or a stale
+   * link can land on someone else entirely. Combined with the sidebar problem
+   * above, "invite whoever is on screen" is how the wrong person gets a
+   * connection request — and an invitation cannot be quietly taken back.
+   */
+  const wantSlug = (action.linkedinUrl || "").replace(/\/+$/, "").split("/in/")[1]?.split(/[?#/]/)[0];
+  const haveSlug = location.pathname.replace(/\/+$/, "").split("/in/")[1]?.split(/[?#/]/)[0];
+  if (wantSlug && haveSlug && decodeURIComponent(wantSlug) !== decodeURIComponent(haveSlug)) {
+    return {
+      status: "failed",
+      result: `landed on /in/${haveSlug} but this action is for /in/${wantSlug} — not acting on the wrong profile`,
+    };
   }
 
   await sleep(2500 + Math.random() * 2500); // let the profile settle
@@ -398,14 +439,29 @@ async function fillLinkedInAction(action) {
   /** The modal LinkedIn opens for an invitation, if one is open. */
   const openModal = () => document.querySelector('.artdeco-modal[role="dialog"], div[role="dialog"]');
 
+  const MSG_BOX =
+    '.msg-form__contenteditable[contenteditable="true"], .msg-form__contenteditable, div[role="textbox"][contenteditable="true"]';
+  const msgBoxes = () => Array.from(document.querySelectorAll(MSG_BOX));
+
   async function fillMessage() {
     const mb = messageBtn || btnByLabel(/^Message\b/i);
     if (!mb) return { status: "skipped", result: "no Message button" };
+
+    // Which windows were already open BEFORE we asked for this one. LinkedIn
+    // keeps previous conversations docked along the bottom of the screen, and
+    // taking the first message box in the document means typing this person's
+    // message into whoever was open already — and then sending it to them.
+    const before = new Set(msgBoxes());
     mb.click();
     await sleep(2800);
-    const box = document.querySelector(
-      '.msg-form__contenteditable[contenteditable="true"], .msg-form__contenteditable, div[role="textbox"][contenteditable="true"]'
-    );
+
+    const box =
+      // The window that appeared because we clicked Message.
+      msgBoxes().find((b) => !before.has(b)) ||
+      // Already open, so nothing is new: trust the one LinkedIn focused, and
+      // failing that the most recently docked, never the oldest.
+      (document.activeElement && document.activeElement.closest?.(MSG_BOX)) ||
+      msgBoxes().at(-1);
     if (!box) return { status: "failed", result: "message box not found" };
     box.focus();
     document.execCommand("insertText", false, raw || "Hi!");
@@ -413,10 +469,17 @@ async function fillLinkedInAction(action) {
       return { status: "drafted", result: "message drafted — review it and click Send yourself", kind: "message" };
     }
 
+    // Send within the form we just typed into. LinkedIn allows several message
+    // windows open at once, so a document-wide search for the send button can
+    // fire in a different conversation entirely — sending this person's message
+    // to whoever else happened to be open.
+    const form = box.closest("form") || box.closest(".msg-form") || box.parentElement;
+    const within = form || document;
+
     await sleep(600 + Math.random() * 700);
     const send =
-      document.querySelector("button.msg-form__send-button:not([disabled])") ||
-      all('button, a[role="button"]').find(
+      within.querySelector("button.msg-form__send-button:not([disabled])") ||
+      Array.from(within.querySelectorAll('button, a[role="button"]')).find(
         (b) => /^send$/i.test((b.getAttribute("aria-label") || b.textContent || "").trim()) && !b.disabled,
       );
     if (!send) return { status: "failed", result: "auto-send on, but no enabled Send button in the message form" };
@@ -426,10 +489,7 @@ async function fillLinkedInAction(action) {
     // as a sent message — the CRM would claim contact that never happened, and
     // the sequence would move on to a follow-up.
     await sleep(1800);
-    const after = document.querySelector(
-      '.msg-form__contenteditable[contenteditable="true"], div[role="textbox"][contenteditable="true"]'
-    );
-    const cleared = !after || !(after.textContent || "").trim();
+    const cleared = !(box.textContent || "").trim();
     return cleared
       ? { status: "sent", result: "message sent", kind: "message" }
       : { status: "failed", result: "clicked Send but the message box still has text — treating as not sent", kind: "message" };
@@ -444,11 +504,20 @@ async function fillLinkedInAction(action) {
     if (!connect) return null; // not invitable from here
     connect.click();
     await sleep(2200);
-    const addNote = all("button").find((b) => /add a note/i.test((b.getAttribute("aria-label") || b.textContent || "")));
+
+    // From here on the work happens inside the dialog LinkedIn just opened, which
+    // is appended at document level rather than inside the profile card — so the
+    // profile-scoped helpers above do not apply and would find nothing.
+    const dlg = openModal();
+    if (!dlg) return { status: "failed", result: "clicked Connect but no invite dialog appeared", kind: "invite" };
+
+    const addNote = Array.from(dlg.querySelectorAll("button")).find((b) =>
+      /add a note/i.test((b.getAttribute("aria-label") || b.textContent || "")),
+    );
     if (inviteNote && addNote) {
       addNote.click();
       await sleep(1200);
-      const ta = document.querySelector('textarea#custom-message, textarea[name="message"], textarea');
+      const ta = dlg.querySelector('textarea#custom-message, textarea[name="message"], textarea');
       if (ta) { ta.focus(); ta.value = inviteNote; ta.dispatchEvent(new Event("input", { bubbles: true })); }
     }
     if (!autoSend) {
@@ -456,10 +525,10 @@ async function fillLinkedInAction(action) {
     }
 
     await sleep(700 + Math.random() * 900);
-    const scope = openModal() || document;
+    const live = openModal() || dlg;
     const send =
-      scope.querySelector('button[aria-label="Send now"]:not([disabled]), button[aria-label*="Send invitation"]:not([disabled])') ||
-      Array.from(scope.querySelectorAll("button")).find(
+      live.querySelector('button[aria-label="Send now"]:not([disabled]), button[aria-label*="Send invitation"]:not([disabled])') ||
+      Array.from(live.querySelectorAll("button")).find(
         (b) => /^send( now| invitation)?$/i.test(((b.getAttribute("aria-label") || b.textContent || "").trim())) && !b.disabled,
       );
     if (!send) return { status: "failed", result: "auto-send on, but no enabled Send button in the invite dialog", kind: "invite" };
