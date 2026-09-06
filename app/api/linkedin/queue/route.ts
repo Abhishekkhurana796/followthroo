@@ -29,7 +29,20 @@ export async function GET(req: NextRequest) {
     ok({
       pacing: { minDelaySec: account.minDelaySec, maxDelaySec: account.maxDelaySec },
       mode: account.mode,
-      actions: actions.map((a) => ({ id: a.id, type: a.type, linkedinUrl: a.linkedinUrl, note: a.note, leadName: a.leadName })),
+      // Hand-picked rather than spread, so a new column on LinkedInAction never
+      // leaks to the extension by accident. The cost of that is this list has to
+      // be kept in step: autoSend was computed by claimActions and dropped right
+      // here, so the extension always saw undefined, always drafted, and left
+      // the tab sitting open. The verification for it asserted claimActions
+      // rather than this response, so it passed while the feature did nothing.
+      actions: actions.map((a) => ({
+        id: a.id,
+        type: a.type,
+        linkedinUrl: a.linkedinUrl,
+        note: a.note,
+        leadName: a.leadName,
+        autoSend: a.autoSend,
+      })),
     })
   );
 }

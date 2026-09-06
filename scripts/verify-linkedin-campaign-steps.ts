@@ -265,6 +265,31 @@ async function main() {
       ok(claimed.some((a) => a.campaignId === campaign.id), "an empty selection still means 'all campaigns'");
 
       console.log("\n— autoSend reaches the extension —");
+      //
+      // Through the ROUTE, not just claimActions. The first version of this
+      // asserted claimActions and passed while the feature did nothing, because
+      // the route hand-picks the fields it returns and autoSend was not on the
+      // list. What the extension actually receives is the only thing that counts.
+      {
+        await prisma.linkedInAction.updateMany({ where: { organizationId: org.id }, data: { status: "pending" } });
+        await prisma.linkedInAccount.update({ where: { id: account.id }, data: { autoSend: true } });
+
+        const { GET } = await import("../app/api/linkedin/queue/route");
+        const { NextRequest } = await import("next/server");
+        const res = await GET(
+          new NextRequest(`https://example.invalid/api/linkedin/queue?limit=5`, {
+            headers: { Authorization: `Bearer ${account.extToken}` },
+          }),
+        );
+        const body = (await res.json()) as { data?: { actions?: { autoSend?: boolean }[] } };
+        const served = body.data?.actions ?? [];
+        ok(served.length > 0, "the queue endpoint serves actions");
+        ok(
+          served.every((a) => a.autoSend === true),
+          "…and every one carries autoSend over the wire, not just out of claimActions",
+        );
+      }
+
       await prisma.linkedInAction.updateMany({ where: { organizationId: org.id }, data: { status: "pending" } });
       account = await prisma.linkedInAccount.update({ where: { id: account.id }, data: { autoSend: true } });
       claimed = await claimActions(account, 10);

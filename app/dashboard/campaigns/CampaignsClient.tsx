@@ -247,10 +247,18 @@ export default function CampaignsPage() {
     setMode("build");
   }
 
+  /** Does this sequence actually send email? Only then is a mailbox required. */
+  const needsMailbox = nodes.some((n) => n.type === "send" && n.stepType === "email");
+
   async function save(e: React.FormEvent) {
     e.preventDefault();
     if (!name.trim()) return setMsg({ kind: "error", text: "Campaign name is required." });
-    if (!selectedAccount) return setMsg({ kind: "error", text: "Choose the mailbox this campaign sends from." });
+    // A mailbox is only needed if something in the sequence actually sends email.
+    // Requiring one on a LinkedIn-only campaign asked people to nominate an
+    // address that would never be used, and blocked the sequence until they did.
+    if (needsMailbox && !selectedAccount) {
+      return setMsg({ kind: "error", text: "Choose the mailbox the email steps send from." });
+    }
     setBusy(true); setMsg(null);
     try {
       const body = { name, sequence: toGraph(nodes), sendingAccountId: selectedAccount || null };
@@ -544,18 +552,28 @@ export default function CampaignsPage() {
                       <Label>Campaign title *</Label>
                       <Input required value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Q3 Sales Follow-up" />
                     </div>
-                    <div>
-                      <Label>Send from *</Label>
-                      <Select value={selectedAccount} onChange={(e) => setSelectedAccount(e.target.value)}>
-                        <option value="">Select a mailbox…</option>
-                        {sendingAccounts.map((acc) => <option key={acc.id} value={acc.id}>{acc.name} ({acc.email})</option>)}
-                      </Select>
-                      {sendingAccounts.length === 0 && (
-                        <p className="mt-1.5 text-xs text-danger">
-                          No mailbox connected. Campaigns can&apos;t send until you connect one in Sending accounts.
-                        </p>
-                      )}
-                    </div>
+                    {/* Only shown when the sequence actually contains an email
+                        step. A LinkedIn-only campaign has no use for a mailbox,
+                        and asking for one implied invites go out through it. */}
+                    {needsMailbox ? (
+                      <div>
+                        <Label>Send email from *</Label>
+                        <Select value={selectedAccount} onChange={(e) => setSelectedAccount(e.target.value)}>
+                          <option value="">Select a mailbox…</option>
+                          {sendingAccounts.map((acc) => <option key={acc.id} value={acc.id}>{acc.name} ({acc.email})</option>)}
+                        </Select>
+                        {sendingAccounts.length === 0 && (
+                          <p className="mt-1.5 text-xs text-danger">
+                            No mailbox connected. The email steps can&apos;t send until you connect one in Sending accounts.
+                          </p>
+                        )}
+                      </div>
+                    ) : (
+                      <p className="text-xs text-ink-soft">
+                        No mailbox needed — nothing here sends email. LinkedIn steps go out through your connected
+                        LinkedIn account.
+                      </p>
+                    )}
                   </div>
                 </Panel>
                 <div className="flex gap-2">
