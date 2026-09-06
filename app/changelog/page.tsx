@@ -9,6 +9,14 @@ export const metadata = { title: "Changelog — Followthroo" };
  */
 const ENTRIES = [
   {
+    version: "0.11.2",
+    date: "Sep 2026",
+    items: [
+      "Fixed: automatic sending genuinely did nothing. It opened the profile in a tab and stopped there. The setting was read correctly on the server and then dropped before it was sent to the browser helper, so the helper never knew it was switched on",
+      "Fixed: a LinkedIn-only campaign demanded you pick a mailbox before it would save, which suggested connection requests go out through your email. The mailbox field now appears only when the sequence actually sends email",
+    ],
+  },
+  {
     version: "0.11.1",
     date: "Sep 2026",
     items: [
