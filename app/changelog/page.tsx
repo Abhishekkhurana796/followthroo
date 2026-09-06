@@ -9,6 +9,16 @@ export const metadata = { title: "Changelog — Followthroo" };
  */
 const ENTRIES = [
   {
+    version: "0.11.3",
+    date: "Sep 2026",
+    items: [
+      "Fixed the real reason automatic sending did nothing: the browser helper could stop permanently. Its timer was armed one beat at a time, and three ordinary situations — paused, not set up, or a draft waiting on you — returned without arming the next one. Hitting any of them killed it silently until Chrome restarted",
+      "The timer is now a heartbeat that cannot be lost. Missing one costs a minute rather than the rest of the day",
+      "With automatic sending on, the helper no longer shows you a card asking you to send it yourself — that card was left over from manual mode and told you to do the exact thing you had turned automatic sending on to avoid",
+      "Corrected the helper’s own wording. It said “we never click Send for you”, which stopped being true the moment automatic sending shipped",
+    ],
+  },
+  {
     version: "0.11.2",
     date: "Sep 2026",
     items: [

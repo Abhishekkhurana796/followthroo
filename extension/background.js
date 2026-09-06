@@ -25,14 +25,47 @@ const POLL_ALARM = "ft-linkedin-poll";
 const DRAFT_STALE_MS = 40 * 60 * 1000;
 
 function cfg() {
-  return new Promise((r) => chrome.storage.local.get(["apiBase", "token", "enabled", "stats", "draft"], r));
+  return new Promise((r) =>
+    chrome.storage.local.get(
+      // autoSendKnown is the last value the server told us. The draft check runs
+      // before we have a fresh action to read it from, so it has to be remembered.
+      ["apiBase", "token", "enabled", "stats", "draft", "nextRunAt", "autoSendKnown"],
+      r,
+    ),
+  );
 }
 function setStatus(msg, isError) {
   console.log(`[followthroo] ${msg}`);
   chrome.storage.local.set({ lastStatus: msg, lastStatusAt: Date.now(), lastStatusError: !!isError });
 }
+/**
+ * When the next poll may happen.
+ *
+ * This used to be a one-shot alarm — `chrome.alarms.create(name, { when })` —
+ * which meant the timer only survived if pollOnce ran all the way to the bottom
+ * and armed the next one. Three early returns did not (paused, not configured,
+ * and a draft awaiting review), so hitting any of them killed the extension
+ * silently and permanently: no alarm, no polling, no error, until Chrome
+ * restarted. A stuck draft took it down for forty minutes and looked exactly
+ * like "auto-send does not work".
+ *
+ * Now the alarm is a periodic heartbeat that nothing can lose, and pacing is a
+ * timestamp the heartbeat checks. Losing a beat costs one minute; it cannot cost
+ * the whole session.
+ */
+const HEARTBEAT_MINUTES = 1;
+
+function ensureHeartbeat() {
+  chrome.alarms.get(POLL_ALARM, (existing) => {
+    if (!existing) chrome.alarms.create(POLL_ALARM, { periodInMinutes: HEARTBEAT_MINUTES });
+  });
+}
+
+/** Hold off until `sec` from now. The heartbeat keeps beating regardless. */
 function schedule(sec) {
-  chrome.alarms.create(POLL_ALARM, { when: Date.now() + Math.max(30, Math.round(sec)) * 1000 });
+  const at = Date.now() + Math.max(30, Math.round(sec)) * 1000;
+  chrome.storage.local.set({ nextRunAt: at });
+  ensureHeartbeat();
 }
 function waitForTab(tabId) {
   return new Promise((resolve) => {
@@ -184,7 +217,13 @@ async function runScrapeJob(apiBase, token) {
 }
 
 async function pollOnce() {
-  const { apiBase, token, enabled, stats, draft } = await cfg();
+  const { apiBase, token, enabled, stats, draft, nextRunAt, autoSendKnown } = await cfg();
+
+  // The heartbeat fires every minute regardless of pacing; this is what keeps
+  // the 45–120s gap between actions. Returning here is free and, unlike the old
+  // one-shot alarm, returning early can no longer strand the extension.
+  if (nextRunAt && Date.now() < nextRunAt) return;
+
   if (!enabled) return setStatus("paused — press Start in the popup");
   if (!token || !apiBase) return setStatus("not configured — set App URL + token, then Save", true);
 
@@ -196,12 +235,19 @@ async function pollOnce() {
   // said so. The server already reclaims a stale `drafted` row after
   // DRAFT_STALE_MS; the extension now lets go on the same schedule.
   if (draft) {
-    const age = Date.now() - (draft.at || 0);
-    if (age < DRAFT_STALE_MS) {
+    // A draft is a manual-mode artefact. If automatic sending is on it is a
+    // leftover from before the switch was flipped, and keeping it would block
+    // the queue while the popup told the person to go and click Send by hand —
+    // which is exactly what they turned the switch on to stop doing.
+    if (autoSendKnown === true) {
+      await chrome.storage.local.remove("draft");
+      setStatus("cleared a leftover draft — sending automatically now");
+    } else if (Date.now() - (draft.at || 0) < DRAFT_STALE_MS) {
       return setStatus("awaiting your review — open the popup to confirm or skip");
+    } else {
+      await chrome.storage.local.remove("draft");
+      setStatus("a draft went unreviewed for 40 minutes — released it and carrying on");
     }
-    await chrome.storage.local.remove("draft");
-    setStatus("a draft went unreviewed for 40 minutes — released it and carrying on");
   }
 
   // Guard the most common misconfig: the wrong host has no queue endpoint behind it.
@@ -244,6 +290,10 @@ async function pollOnce() {
     schedule(75);
     return setStatus("connected — queue is empty (add a LinkedIn campaign step + leads with a LinkedIn URL)");
   }
+
+  // Remember what the server said, so the draft check on the next poll knows
+  // whether a stored draft is still meaningful.
+  await chrome.storage.local.set({ autoSendKnown: action.autoSend === true });
 
   const outcome = await draftAction(action);
 
@@ -310,6 +360,11 @@ function recordStat(stats, status) {
 chrome.alarms.onAlarm.addListener((a) => { if (a.name === POLL_ALARM) pollOnce(); });
 chrome.runtime.onInstalled.addListener(() => { setStatus("installed"); schedule(5); });
 chrome.runtime.onStartup.addListener(() => schedule(5));
+
+// The service worker is torn down when idle and revived by events. Re-arming on
+// every revival is what guarantees a heartbeat exists even if one was somehow
+// lost — the alarm is created only when absent, so this cannot stack them.
+ensureHeartbeat();
 chrome.storage.onChanged.addListener((ch) => { if (ch.enabled && ch.enabled.newValue) { setStatus("started"); schedule(3); } });
 
 /**

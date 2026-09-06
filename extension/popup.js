@@ -21,8 +21,18 @@ function render(cfg) {
   const today = s && s.day === new Date().toDateString() ? s : { sent: 0, failed: 0, skipped: 0 };
   const counts = `Today: <b>${today.sent || 0}</b> sent · ${today.skipped || 0} skipped · ${today.failed || 0} failed`;
 
+  // Automatic sending means there is nothing for a person to confirm, so the
+  // review card must not appear — showing it told people to go and click Send
+  // by hand, which is the thing they turned automatic sending on to avoid.
+  const sub = $("sub");
+  if (sub) {
+    sub.textContent = cfg.autoSendKnown
+      ? "Saves people into your CRM and sends your LinkedIn outreach for you."
+      : "Saves people into your CRM, and drafts your outreach for you to send.";
+  }
+
   const draftEl = $("draft");
-  if (cfg.draft) {
+  if (cfg.draft && !cfg.autoSendKnown) {
     draftEl.style.display = "block";
     $("draftKind").textContent = cfg.draft.kind === "invite" ? "Invite" : "Message";
     $("draftWho").textContent = cfg.draft.leadName || cfg.draft.linkedinUrl.replace(/^https?:\/\/(www\.)?linkedin\.com\/in\//, "");
@@ -62,7 +72,7 @@ function render(cfg) {
 
 function load() {
   chrome.storage.local.get(
-    ["token", "enabled", "stats", "lastStatus", "lastStatusError", "draft", "apiBase", "reading"],
+    ["token", "enabled", "stats", "lastStatus", "lastStatusError", "draft", "apiBase", "reading", "autoSendKnown"],
     render,
   );
 }
