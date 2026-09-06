@@ -208,6 +208,12 @@ async function main() {
       });
 
       let claimed = await claimActions(account, 10);
+
+      // The link in the chain nothing asserted, and the one that broke: the
+      // account's autoSend has to reach the extension on every claimed action.
+      // It read false in production for days while the UI implied otherwise.
+      ok(claimed.every((a) => a.autoSend === false), "autoSend defaults to false on every claimed action");
+
       const invite = claimed.find((a) => a.note === "Let us connect.");
       ok(invite?.type === "invite", "an invite survives account.mode = 'auto' (the precedence bug)");
       const message = claimed.find((a) => a.note === "Following up.");
@@ -257,6 +263,17 @@ async function main() {
       account = await prisma.linkedInAccount.update({ where: { id: account.id }, data: { selectedCampaignIds: [] } });
       claimed = await claimActions(account, 10);
       ok(claimed.some((a) => a.campaignId === campaign.id), "an empty selection still means 'all campaigns'");
+
+      console.log("\n— autoSend reaches the extension —");
+      await prisma.linkedInAction.updateMany({ where: { organizationId: org.id }, data: { status: "pending" } });
+      account = await prisma.linkedInAccount.update({ where: { id: account.id }, data: { autoSend: true } });
+      claimed = await claimActions(account, 10);
+      ok(claimed.length > 0 && claimed.every((a) => a.autoSend === true), "turning it on reaches every claimed action");
+
+      await prisma.linkedInAction.updateMany({ where: { organizationId: org.id }, data: { status: "pending" } });
+      account = await prisma.linkedInAccount.update({ where: { id: account.id }, data: { autoSend: false } });
+      claimed = await claimActions(account, 10);
+      ok(claimed.length > 0 && claimed.every((a) => a.autoSend === false), "turning it off reaches them too");
     }
   } finally {
     await prisma.linkedInAction.deleteMany({ where: { organizationId: org.id } });

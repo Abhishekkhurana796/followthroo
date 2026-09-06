@@ -103,6 +103,17 @@ const PRESETS: { name: string; blurb: string; nodes: BuilderNode[] }[] = [
   { name: "3-step email drip", blurb: "Three emails, spaced a few days apart.", nodes: [newSend(0), newSend(3), newSend(5)] },
   { name: "Stop on reply", blurb: "Email, then only follow up if they didn't reply.", nodes: [newSend(0), { type: "condition", on: "replied", yes: "stop", no: "continue" }, newSend(4)] },
   { name: "Multichannel touch", blurb: "Email, then a connection request, then WhatsApp.", nodes: [newSend(0), { type: "send", stepType: "linkedin_invite", templateId: "", waitDays: 2 }, { type: "send", stepType: "whatsapp", templateId: "", waitDays: 3 }] },
+  // The LinkedIn step type existed for weeks and no campaign ever used it — a
+  // dropdown option is not discoverable, a preset is. This is the shape people
+  // actually want: ask to connect, wait, then message once they have accepted.
+  {
+    name: "LinkedIn: connect, then follow up",
+    blurb: "A connection request, then a message three days later.",
+    nodes: [
+      { type: "send", stepType: "linkedin_invite", templateId: "", waitDays: 0 },
+      { type: "send", stepType: "linkedin_message", templateId: "", waitDays: 3 },
+    ],
+  },
 ];
 
 // Turn the linear builder list into the engine's node graph.

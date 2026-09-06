@@ -10,7 +10,8 @@ import {
 } from "lucide-react";
 import { api } from "@/lib/client";
 import { cn } from "@/lib/cn";
-import { Badge, Banner, DashHeader, Dialog, EmptyState, Input, Label, NoResults, Panel, Select, Skeleton, useConfirm, usePrompt } from "@/components/ui";
+import { Badge, Banner, DashHeader, Dialog, EmptyState, Input, Label, NoResults, Panel, Select, Skeleton, Textarea, useConfirm, usePrompt } from "@/components/ui";
+import { INVITE_NOTE_MAX, worstCaseNoteLength } from "@/lib/linkedin/note";
 import { tourTarget } from "@/components/dashboard/tour/target";
 import { FindLeadsPanel } from "@/components/dashboard/FindLeadsPanel";
 
@@ -66,6 +67,7 @@ export default function LeadsPage() {
   const [form, setForm] = useState({ firstName: "", email: "", company: "", tags: "", linkedinUrl: "" });
   const [busy, setBusy] = useState(false);
   const [managingGroup, setManagingGroup] = useState<Segment | null>(null);
+  const [inviteOpen, setInviteOpen] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -395,6 +397,15 @@ export default function LeadsPage() {
               {(assignees?.members ?? []).map((a) => <option key={a.userId} value={a.userId} className="text-ink">{a.isSelf ? `${a.name} (me)` : a.name}</option>)}
               <option value="__unassign" className="text-ink">Unassign (team pool)</option>
             </Select>
+            {/* The fast path. Building a campaign is the right tool for a
+                sequence; for "invite these forty" it was five steps too many,
+                and there was no other way to do it from the app at all. */}
+            <button
+              onClick={() => setInviteOpen(true)}
+              className="flex items-center gap-1 rounded-lg bg-ink-invert/15 px-2.5 py-1 hover:bg-ink-invert/25"
+            >
+              <Linkedin className="h-3.5 w-3.5" /> Connect on LinkedIn
+            </button>
             <button onClick={() => setSelected(new Set())} className="ml-auto text-ink-invert/70 hover:text-ink-invert">Clear</button>
           </div>
         )}
@@ -512,6 +523,13 @@ export default function LeadsPage() {
         )}
       </div>
 
+      <InviteDialog
+        open={inviteOpen}
+        onClose={() => setInviteOpen(false)}
+        leadIds={selectedIds()}
+        onDone={(text) => { setMsg({ kind: "success", text }); setSelected(new Set()); setInviteOpen(false); }}
+      />
+
       {/* ---- Add lead ---- */}
       <AddLeadDialog
         open={addOpen}
@@ -556,6 +574,155 @@ export default function LeadsPage() {
 /* ------------------------------------------------------------------ */
 /* Add lead — three ways in, one short form                            */
 /* ------------------------------------------------------------------ */
+
+type InvitePreview = {
+  selected: number;
+  withProfile: number;
+  noProfile: number;
+  alreadyQueued: number;
+  outOfScope: number;
+  autoSend: boolean;
+  dailyCap: number;
+  remainingToday: number;
+  minDelaySec: number;
+  maxDelaySec: number;
+};
+
+/**
+ * Queue connection requests for the selected contacts.
+ *
+ * The dialog asks the server what would happen before it happens. That ordering
+ * is the whole design: most leads in a CRM arrive from CSV or email and have no
+ * LinkedIn profile at all, so "queued 0" reported afterwards reads as a broken
+ * feature. Told beforehand — "19 of your 24 have a profile" — it reads as a fact
+ * about the data, which is what it is.
+ */
+function InviteDialog({
+  open,
+  onClose,
+  leadIds,
+  onDone,
+}: {
+  open: boolean;
+  onClose: () => void;
+  leadIds: string[];
+  onDone: (msg: string) => void;
+}) {
+  const [preview, setPreview] = useState<InvitePreview | null>(null);
+  const [note, setNote] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!open || !leadIds.length) return;
+    setPreview(null);
+    setError(null);
+    api<InvitePreview>("/api/linkedin/invite", { body: { leadIds, preview: true } })
+      .then(setPreview)
+      .catch((e) => setError((e as Error).message));
+  }, [open, leadIds]);
+
+  const noteLen = worstCaseNoteLength(note);
+  const overLimit = noteLen > INVITE_NOTE_MAX;
+  // The cap is a moving target — some of today's allowance may already be spent.
+  const willSendToday = preview ? Math.min(preview.withProfile - preview.alreadyQueued, preview.remainingToday) : 0;
+  const actionable = preview ? preview.withProfile - preview.alreadyQueued : 0;
+
+  async function queue() {
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await api<{ queued: number; noProfile: number; alreadyQueued: number }>(
+        "/api/linkedin/invite",
+        { body: { leadIds, note: note.trim() || undefined, type: "invite" } },
+      );
+      const bits = [`Queued ${res.queued} connection request${res.queued === 1 ? "" : "s"}`];
+      if (res.alreadyQueued) bits.push(`${res.alreadyQueued} already waiting`);
+      if (res.noProfile) bits.push(`${res.noProfile} without a LinkedIn profile`);
+      onDone(bits.join(" · ") + ".");
+      setNote("");
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Dialog open={open} onClose={onClose} title="Send connection requests">
+      {error && <Banner kind="error">{error}</Banner>}
+
+      {!preview ? (
+        <div className="h-24 animate-pulse rounded-xl bg-tint" />
+      ) : (
+        <div className="space-y-4">
+          <div className="rounded-xl border border-line bg-tint/40 p-3.5 text-sm">
+            <p className="font-medium">
+              {preview.withProfile} of {preview.selected} selected {preview.withProfile === 1 ? "has" : "have"} a
+              LinkedIn profile
+            </p>
+            <ul className="mt-1.5 space-y-0.5 text-xs text-ink-soft">
+              {preview.noProfile > 0 && (
+                <li>{preview.noProfile} will be skipped — no profile URL on the contact.</li>
+              )}
+              {preview.alreadyQueued > 0 && (
+                <li>{preview.alreadyQueued} already have a request waiting, so they will not be queued twice.</li>
+              )}
+              {preview.outOfScope > 0 && <li>{preview.outOfScope} belong to someone else on your team.</li>}
+            </ul>
+          </div>
+
+          <div>
+            <Label>Note (optional)</Label>
+            <Textarea
+              rows={3}
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+              placeholder="Hi {{firstName}}, saw your work at {{company}} —"
+            />
+            <p className={`mt-1 text-xs ${overLimit ? "text-danger" : noteLen > 250 ? "text-warning" : "text-ink-faint"}`}>
+              About {noteLen} of {INVITE_NOTE_MAX} characters once personalised
+              {overLimit ? " — LinkedIn will refuse this. Shorten it." : ""}
+            </p>
+          </div>
+
+          <div className="rounded-xl border border-line p-3.5 text-xs text-ink-soft">
+            {actionable > preview.remainingToday ? (
+              <p>
+                <b className="text-ink">{willSendToday} today</b>, the remaining {actionable - willSendToday} tomorrow —
+                your cap is {preview.dailyCap} a day and {preview.remainingToday} {preview.remainingToday === 1 ? "is" : "are"} left.
+              </p>
+            ) : (
+              <p>
+                All <b className="text-ink">{actionable}</b> fit inside today&apos;s remaining {preview.remainingToday}.
+              </p>
+            )}
+            <p className="mt-1.5">
+              {preview.autoSend ? (
+                <>Sending is <b className="text-ink">automatic</b> — one every {preview.minDelaySec}–{preview.maxDelaySec} seconds, in your browser.</>
+              ) : (
+                <>
+                  Automatic sending is <b className="text-ink">off</b>, so each one will open a tab for you to send by
+                  hand. <Link href="/dashboard/linkedin" className="underline">Turn it on</Link>.
+                </>
+              )}
+            </p>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <button onClick={queue} disabled={busy || overLimit || actionable === 0} className="btn btn-primary !py-2 !text-sm">
+              {busy ? "Queueing…" : actionable === 0 ? "Nothing to queue" : `Queue ${actionable}`}
+            </button>
+            <button onClick={onClose} className="btn btn-ghost !py-2 !text-sm">Cancel</button>
+            <Link href="/dashboard/campaigns" className="ml-auto text-xs text-ink-soft underline">
+              Following up afterwards? Build a sequence
+            </Link>
+          </div>
+        </div>
+      )}
+    </Dialog>
+  );
+}
 
 function AddLeadDialog({
   open, onClose, form, setForm, busy, onSubmit, onImport, onQueued,

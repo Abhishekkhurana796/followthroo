@@ -145,6 +145,10 @@ export default function LinkedInClient() {
           <SourcingView />
         </section>
 
+        {/* Whether anything is going out at all, and what is waiting. Above the
+            account deliberately: it is the state people come here to check. */}
+        <SendingPanel data={data} onChanged={mutate} setMsg={setMsg} />
+
         {/* ---- The connection that makes it work ---- */}
         <section className="border-t border-line pt-6">
           <h2 className="font-display text-base font-bold">Your LinkedIn</h2>
@@ -271,6 +275,136 @@ function Disclosure({
   );
 }
 
+/**
+ * Whether the product is sending on your behalf, and what is waiting.
+ *
+ * This was a checkbox inside the collapsed "Limits" disclosure. Two things went
+ * wrong with that and both are fixed here. The checkbox opened a confirmation
+ * modal, so clicking it appeared to do nothing and dismissing the modal sprang
+ * it back with no explanation — it read "on" to the person and `false` to the
+ * database for days. And being inside a disclosure meant the state was invisible
+ * unless you went looking, along with a queue of 58 stuck behind one draft.
+ *
+ * So: committed state only, always on screen, and the queue next to it.
+ */
+function SendingPanel({
+  data,
+  onChanged,
+  setMsg,
+}: {
+  data?: Connect;
+  onChanged: () => void;
+  setMsg: (m: { kind: "error" | "success" | "info"; text: string }) => void;
+}) {
+  const confirm = useConfirm();
+  const [busy, setBusy] = useState(false);
+  const on = !!data?.autoSend;
+  const q = data?.queue;
+
+  async function setAuto(next: boolean) {
+    if (next) {
+      const ok = await confirm({
+        title: "Send automatically?",
+        body: "Connection requests and messages will go out on their own, from your browser, without you reviewing each one. This is against LinkedIn's User Agreement and accounts do get restricted for it. You can stop it at any time.",
+        confirmLabel: "Turn it on",
+        tone: "danger",
+      });
+      if (!ok) return;
+    }
+    setBusy(true);
+    try {
+      await api("/api/linkedin/connect", { body: { action: "update", autoSend: next } });
+      setMsg({
+        kind: "success",
+        text: next ? "Sending automatically now." : "Back to drafting — you send each one.",
+      });
+      onChanged();
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function stopAll() {
+    const ok = await confirm({
+      title: "Stop everything?",
+      body: "Turns automatic sending off and cancels everything still queued. Nothing already sent is affected.",
+      confirmLabel: "Stop everything",
+      tone: "danger",
+    });
+    if (!ok) return;
+    setBusy(true);
+    try {
+      const res = await api<{ cleared: number }>("/api/linkedin/connect", { body: { action: "stop_all" } });
+      setMsg({ kind: "success", text: `Stopped. ${res.cleared} queued action${res.cleared === 1 ? "" : "s"} cancelled.` });
+      onChanged();
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <section className="rounded-2xl border border-line bg-surface p-5">
+      <div className="flex items-start justify-between gap-4">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2">
+            <h2 className="font-display text-base font-bold">Sending</h2>
+            <span
+              className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-semibold ${
+                on ? "bg-success/10 text-success" : "bg-tint text-ink-soft"
+              }`}
+            >
+              <span className={`h-1.5 w-1.5 rounded-full ${on ? "bg-success" : "bg-ink-faint"}`} />
+              {on ? "Automatic" : "You review each one"}
+            </span>
+          </div>
+          <p className="mt-1.5 text-sm text-ink-soft">
+            {on
+              ? `Invites go out on their own, one every ${data?.minDelaySec ?? 45}–${data?.maxDelaySec ?? 120} seconds, up to ${data?.dailyInviteCap ?? 20} a day.`
+              : "Each invite opens a tab with the text filled in. Nothing goes out until you press send."}
+          </p>
+        </div>
+        <button
+          onClick={() => setAuto(!on)}
+          disabled={busy}
+          className={`btn shrink-0 !py-2 !text-sm ${on ? "btn-ghost" : "btn-primary"}`}
+        >
+          {on ? "Turn off" : "Send automatically"}
+        </button>
+      </div>
+
+      {/* The counts that were hidden. 58 queued behind a stuck draft should never
+          have taken a database query to discover. */}
+      {q && (
+        <div className="mt-4 flex flex-wrap items-center gap-x-6 gap-y-2 border-t border-line pt-3 text-sm">
+          <span className={q.pending > 0 ? "font-medium" : "text-ink-soft"}>
+            <b className="font-display text-lg">{q.pending}</b> queued
+          </span>
+          <span className="text-ink-soft">
+            <b className="font-display text-lg text-ink">{q.sentToday}</b> sent today
+          </span>
+          {q.failedToday > 0 && (
+            <span className="text-danger">
+              <b className="font-display text-lg">{q.failedToday}</b> failed today
+            </span>
+          )}
+          {on && q.pending > 0 && (
+            <button onClick={stopAll} disabled={busy} className="btn btn-ghost ml-auto !py-1 !text-xs !text-danger">
+              <Square className="h-3.5 w-3.5" /> Stop everything
+            </button>
+          )}
+        </div>
+      )}
+
+      {!on && (q?.pending ?? 0) > 0 && (
+        <p className="mt-3 rounded-lg bg-tint px-3 py-2 text-xs text-ink-soft">
+          {q!.pending} waiting. With review on, each one needs a tab opened and sent by hand — turn on automatic
+          sending and they go out on their own.
+        </p>
+      )}
+    </section>
+  );
+}
+
 function BrowserHelper({
   data,
   running,
@@ -365,35 +499,6 @@ function Limits({
   const [cap, setCap] = useState<number | "">("");
   const [minD, setMinD] = useState<number | "">("");
   const [maxD, setMaxD] = useState<number | "">("");
-  const confirm = useConfirm();
-
-  async function setAuto(on: boolean) {
-    if (on) {
-      const ok = await confirm({
-        title: "Send automatically?",
-        body: "Connection requests and messages will go out on their own, from your browser, without you reviewing each one. This is against LinkedIn's User Agreement and accounts do get restricted for it. You can stop it at any time.",
-        confirmLabel: "Turn it on",
-        tone: "danger",
-      });
-      if (!ok) return;
-    }
-    await api("/api/linkedin/connect", { body: { action: "update", autoSend: on } });
-    setMsg({ kind: on ? "info" : "success", text: on ? "Sending automatically." : "Back to drafting — you send each one." });
-    onSaved();
-  }
-
-  async function stopAll() {
-    const ok = await confirm({
-      title: "Stop everything?",
-      body: "Turns automatic sending off and cancels everything still queued. Nothing already sent is affected.",
-      confirmLabel: "Stop everything",
-      tone: "danger",
-    });
-    if (!ok) return;
-    const res = await api<{ cleared: number }>("/api/linkedin/connect", { body: { action: "stop_all" } });
-    setMsg({ kind: "success", text: `Stopped. ${res.cleared} queued action${res.cleared === 1 ? "" : "s"} cancelled.` });
-    onSaved();
-  }
 
   async function save() {
     const body: Record<string, number> = {};
@@ -412,36 +517,7 @@ function Limits({
       title="Limits"
       summary={`${data?.dailyInviteCap ?? 20} actions a day, ${data?.minDelaySec ?? 45}–${data?.maxDelaySec ?? 120}s apart`}
     >
-      {/* The one control that changes what the product does to your account, so
-          it leads, states the trade in a sentence, and sits next to its undo. */}
-      <div className="rounded-xl border border-line bg-canvas p-4">
-        <label className="flex cursor-pointer items-start gap-3">
-          <input
-            type="checkbox"
-            checked={!!data?.autoSend}
-            onChange={(e) => setAuto(e.target.checked)}
-            className="mt-0.5 h-4 w-4 accent-accent"
-          />
-          <span className="min-w-0">
-            <span className="block text-sm font-medium">Send automatically</span>
-            <span className="mt-0.5 block text-xs text-ink-soft">
-              Connection requests and messages go out on their own, in your browser, at the pace below. Leave this off
-              and each one opens a tab with the text filled in for you to send.
-            </span>
-          </span>
-        </label>
-        <p className="mt-3 text-xs text-ink-soft">
-          Automated sending is against LinkedIn&apos;s User Agreement and accounts do get restricted for it. It runs in
-          your own browser on your own connection — never from our servers — but the risk is to your account.
-        </p>
-        {data?.autoSend && (
-          <button onClick={stopAll} className="btn btn-ghost mt-3 !py-1.5 !text-xs !text-danger">
-            <Square className="h-3.5 w-3.5" /> Stop everything
-          </button>
-        )}
-      </div>
-
-      <p className="mt-4 text-sm text-ink-soft">
+      <p className="text-sm text-ink-soft">
         Set once and rarely touched. These exist to keep your account in good standing, not to ration you — LinkedIn
         restricts accounts that behave like software.
       </p>

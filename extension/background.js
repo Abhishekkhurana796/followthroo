@@ -15,6 +15,15 @@
  */
 const POLL_ALARM = "ft-linkedin-poll";
 
+/**
+ * How long an unreviewed draft may hold up the queue.
+ *
+ * Matches DRAFT_STALE_MS in lib/linkedin/queue.ts, which is what the server uses
+ * to reclaim a `drafted` row. If the two disagree, one side releases the action
+ * while the other still thinks it is held, and the queue stalls again.
+ */
+const DRAFT_STALE_MS = 40 * 60 * 1000;
+
 function cfg() {
   return new Promise((r) => chrome.storage.local.get(["apiBase", "token", "enabled", "stats", "draft"], r));
 }
@@ -180,7 +189,20 @@ async function pollOnce() {
   if (!token || !apiBase) return setStatus("not configured — set App URL + token, then Save", true);
 
   // A draft is already awaiting human review — don't open another tab on top of it.
-  if (draft) return setStatus("awaiting your review — open the popup to confirm or skip");
+  //
+  // But it must not wait forever. This used to be an unconditional return, so a
+  // single draft nobody confirmed wedged the queue permanently: 58 invites sat
+  // behind one tab that had been closed days earlier, and nothing on any screen
+  // said so. The server already reclaims a stale `drafted` row after
+  // DRAFT_STALE_MS; the extension now lets go on the same schedule.
+  if (draft) {
+    const age = Date.now() - (draft.at || 0);
+    if (age < DRAFT_STALE_MS) {
+      return setStatus("awaiting your review — open the popup to confirm or skip");
+    }
+    await chrome.storage.local.remove("draft");
+    setStatus("a draft went unreviewed for 40 minutes — released it and carrying on");
+  }
 
   // Guard the most common misconfig: the wrong host has no queue endpoint behind it.
   // localhost is an optional_host_permission (the Web Store rightly questions a
@@ -225,6 +247,15 @@ async function pollOnce() {
 
   const outcome = await draftAction(action);
 
+  // With auto-send on there is no human step, so the draft/confirm handshake
+  // must not be entered at all — a "drafted" result there would pause polling
+  // waiting for a confirmation nobody is ever asked for.
+  if (outcome.status === "drafted" && action.autoSend === true) {
+    if (outcome.tabId) chrome.tabs.remove(outcome.tabId).catch(() => {});
+    outcome.status = "failed";
+    outcome.result = "auto-send is on but the action only got as far as a draft — " + (outcome.result || "no reason given");
+  }
+
   if (outcome.status === "drafted") {
     await chrome.storage.local.set({
       draft: {
@@ -234,6 +265,9 @@ async function pollOnce() {
         note: action.note,
         linkedinUrl: action.linkedinUrl,
         leadName: action.leadName || null,
+        // When it was raised, so an unreviewed draft can be released rather than
+        // blocking every action behind it indefinitely.
+        at: Date.now(),
       },
     });
     try {

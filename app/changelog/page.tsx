@@ -9,6 +9,19 @@ export const metadata = { title: "Changelog — Followthroo" };
  */
 const ENTRIES = [
   {
+    version: "0.11.1",
+    date: "Sep 2026",
+    items: [
+      "Send connection requests straight from Leads. Tick the people you want, press Connect on LinkedIn, and they are queued — no campaign to build first",
+      "It tells you what will happen before it happens: how many of the people you picked actually have a LinkedIn profile, how many are already queued, and how many fit inside today’s limit",
+      "Nobody gets invited twice. An invitation cannot be quietly recalled, so anyone with a request already waiting is skipped rather than sent a second one",
+      "Fixed: the “Send automatically” switch never saved. It was a checkbox that opened a confirmation box, so clicking it looked like nothing happened and dismissing the box silently put it back. It is now a proper switch, on the LinkedIn screen rather than hidden inside Limits",
+      "Fixed: one unreviewed draft could block the whole queue forever. Fifty-eight invites were stuck behind a single tab nobody confirmed. Drafts now release themselves after 40 minutes, and with automatic sending on they are never created at all",
+      "Queued, sent today and failed today are now on the LinkedIn screen instead of hidden behind a collapsed section",
+      "New campaign preset: LinkedIn — connect, then follow up. A connection request, then a message three days later",
+    ],
+  },
+  {
     version: "0.11.0",
     date: "Sep 2026",
     items: [
