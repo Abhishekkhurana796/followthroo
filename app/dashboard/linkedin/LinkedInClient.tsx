@@ -5,12 +5,13 @@ import Link from "next/link";
 import useSWR from "swr";
 import {
   Linkedin, ChevronDown, Clock, Copy, Check, RefreshCw, Eye, EyeOff,
-  ExternalLink, ShieldCheck, Square,
+  ExternalLink, ShieldCheck, Square, Chrome,
 } from "lucide-react";
 import { api } from "@/lib/client";
 import { Banner, DashHeader, Input, Label, useConfirm } from "@/components/ui";
 import { FindLeadsPanel } from "@/components/dashboard/FindLeadsPanel";
 import { SourcingView } from "@/components/dashboard/SourcingView";
+import { EXTENSION_STORE_URL } from "@/lib/constants";
 
 /**
  * LinkedIn — one screen, for the one thing that happens here.
@@ -476,10 +477,24 @@ function BrowserHelper({
       </div>
 
       <ol className="mt-4 space-y-1.5 text-sm text-ink-soft">
-        <li><b className="text-ink">1.</b> Install <b>Followthroo for LinkedIn</b> from the Chrome Web Store.</li>
+        <li>
+          <b className="text-ink">1.</b> Install <b>Followthroo for LinkedIn</b> from the{" "}
+          <a href={EXTENSION_STORE_URL} target="_blank" rel="noopener noreferrer" className="underline">
+            Chrome Web Store
+          </a>
+          .
+        </li>
         <li><b className="text-ink">2.</b> Click its icon → Settings → App URL <code>{appOrigin}</code>, paste the token, Connect.</li>
         <li><b className="text-ink">3.</b> Stay signed in to LinkedIn in the same browser.</li>
       </ol>
+      <a
+        href={EXTENSION_STORE_URL}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="btn btn-ghost mt-3 !py-2 !text-sm"
+      >
+        <Chrome className="h-4 w-4" /> Add to Chrome
+      </a>
       <p className="mt-3 text-xs text-ink-faint">
         <Link href="/extension-privacy" className="underline">What it can access</Link>
       </p>

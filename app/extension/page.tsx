@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import SiteShell from "@/components/site/SiteShell";
 import PageHero from "@/components/site/PageHero";
+import { EXTENSION_STORE_URL } from "@/lib/constants";
 
 export const metadata: Metadata = {
   title: "Chrome extension — Followthroo",
@@ -99,7 +100,11 @@ export default function ExtensionPage() {
             <h3 className="font-display text-base font-bold">Install it</h3>
             <ol className="mt-3 space-y-2.5 text-sm text-ink-soft">
               <li>
-                <span className="font-medium text-ink">1.</span> Add it from the Chrome Web Store.
+                <span className="font-medium text-ink">1.</span>{" "}
+                <a href={EXTENSION_STORE_URL} target="_blank" rel="noopener noreferrer" className="underline">
+                  Add it from the Chrome Web Store
+                </a>
+                .
               </li>
               <li>
                 <span className="font-medium text-ink">2.</span> Open Followthroo → Settings → LinkedIn and copy your
@@ -112,7 +117,15 @@ export default function ExtensionPage() {
             <p className="mt-4 text-xs text-ink-faint">
               Works in Chrome and Edge. You must be signed in to LinkedIn in the same browser — that is the whole point.
             </p>
-            <Link href="/sign-up" className="btn btn-primary mt-5 w-full justify-center text-sm">
+            <a
+              href={EXTENSION_STORE_URL}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="btn btn-primary mt-5 w-full justify-center text-sm"
+            >
+              Add to Chrome
+            </a>
+            <Link href="/sign-up" className="btn btn-ghost mt-2 w-full justify-center text-sm">
               Get Followthroo free
             </Link>
           </div>
