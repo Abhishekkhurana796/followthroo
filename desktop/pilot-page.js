@@ -96,7 +96,34 @@ function observe() {
   // apart. The model was picking one at random, opening something with no
   // Connect in it, and giving up. Anything sharing an ancestor with the <h1> is
   // in the top card; that is the one that matters.
-  const topCard = h1 && (h1.closest("section") || h1.closest("div.ph5") || h1.parentElement);
+  /**
+   * The container that holds BOTH the name and the profile's action buttons.
+   *
+   * Walking up from the <h1> to the nearest <section> assumed LinkedIn keeps the
+   * heading and the buttons in one element. It frequently does not, so the
+   * marker came back false for the very button it exists to identify — and the
+   * model, told to prefer marked elements, reported that no Connect had the
+   * attribute and gave up on a profile whose Connect it could see in the
+   * screenshot.
+   *
+   * So climb until the ancestor also contains a Message or More action. That is
+   * the action row by definition, whatever it is wrapped in today.
+   */
+  const topCard = (() => {
+    if (!h1) return null;
+    const hasAction = (node) =>
+      Array.from(node.querySelectorAll('button, div[role="button"], a[role="button"]')).some((b) =>
+        /^(message|more|connect|invite|follow)\b/i.test(
+          (b.getAttribute("aria-label") || b.textContent || "").trim(),
+        ),
+      );
+    let node = h1.parentElement;
+    for (let i = 0; i < 8 && node; i++) {
+      if (hasAction(node)) return node;
+      node = node.parentElement;
+    }
+    return h1.closest("section") || h1.parentElement;
+  })();
 
   /** The nearest heading above an element, as a human would describe where it is. */
   const sectionOf = (el) => {

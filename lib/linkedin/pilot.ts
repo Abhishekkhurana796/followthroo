@@ -103,16 +103,22 @@ merely because the first menu you opened had no Connect in it.
 Connect appears in one of two places, and you must check them in this order:
 
   a) ON THE PROFILE'S ACTION ROW, beside Message and More. Its label is
-     "Connect", or "Invite <name> to connect". If such an element exists and is
-     marked IN-PROFILE-ACTION-ROW, click it — do NOT open a menu first.
+     "Connect", or "Invite <name> to connect". Click it — do NOT open a menu
+     first.
 
      "Follow <name>" is NOT Connect. It appears in the same place on profiles
      that have no Connect on the card, and clicking it follows the person
      instead of asking to connect. Never choose it. If the only options are
      Follow and More, the Connect you want is inside More.
   b) INSIDE THE OVERFLOW MENU, only when there is no Connect on the action row.
-     Open the "More" / "More actions" marked IN-PROFILE-ACTION-ROW, then look
-     again in the list that follows.
+     Open the "More" / "More actions", then look again in the list that follows.
+
+IN-PROFILE-ACTION-ROW is a HINT, not a requirement. It is derived from the page
+structure and is often absent even when the element is exactly the one you want.
+NEVER refuse to act, and never answer give_up, merely because a Connect element
+lacks that marker. If you can see a Connect for this profile — in the list, or in
+the screenshot — click it. The marker only helps you choose between two
+candidates that are otherwise identical.
 
 Opening a menu when Connect was already on the card wastes a step and leaves the
 menu covering the page.
@@ -123,7 +129,11 @@ How the task normally goes:
 3. If sending is permitted, click "Send" / "Send now" / "Send invitation". If it is not permitted, answer done once the note is typed — a human will send it.
 4. Once the dialog has closed and the invitation is away, answer done.
 
-Answer done only when the goal is actually achieved. Answer give_up rather than guessing.`;
+Answer done only when the goal is actually achieved. Answer give_up rather than guessing.
+
+Only ever use an index that appears in the list. Do not answer -1 or any other
+number that is not listed — if what you need is not there, answer give_up and say
+so, and you will be shown a screenshot of the page instead.`;
 
 function userPrompt(o: PilotObservation): string {
   const lines = o.elements.map(
@@ -145,12 +155,22 @@ function userPrompt(o: PilotObservation): string {
     "",
     "Clickable elements:",
     ...(lines.length ? lines : ["  (none found)"]),
-    o.screenshot ? "\nA screenshot is attached because the element list has not been enough." : "",
+    o.screenshot
+      ? "\nA screenshot of the page is attached. Use it to work out WHICH numbered element above is the one you want — labels alone cannot tell you that a button is the prominent one on the profile card. Answer with an index from the list; the picture is for identifying it, not for describing coordinates. If you can see Connect in the picture, one of the listed elements is it."
+      : "",
   ].join("\n");
 }
 
-/** Pull the decision out, tolerating a model that wrapped it in prose or a fence. */
-function parseDecision(text: string): PilotDecision {
+/**
+ * Pull the decision out, tolerating a model that wrapped it in prose or a fence.
+ *
+ * `valid` is the set of indices the page actually offered. Models answer -1 to
+ * mean "not in this list", and that sailed through as a number, reached the
+ * page, matched nothing, and was counted as a refused suggestion — three of them
+ * ended the action. An index that does not exist is not a click; it is the model
+ * saying it cannot see what it needs, which is what the screenshot is for.
+ */
+function parseDecision(text: string, valid?: Set<number>): PilotDecision {
   const cleaned = text.replace(/```json?/gi, "").replace(/```/g, "").trim();
   const start = cleaned.indexOf("{");
   const end = cleaned.lastIndexOf("}");
@@ -162,8 +182,18 @@ function parseDecision(text: string): PilotDecision {
   if (a !== "click" && a !== "type" && a !== "done" && a !== "give_up") {
     throw new Error(`unknown action ${String(a)}`);
   }
-  if ((a === "click" || a === "type") && typeof (parsed as { index?: unknown }).index !== "number") {
-    throw new Error(`${a} without an index`);
+  if (a === "click" || a === "type") {
+    const idx = (parsed as { index?: unknown }).index;
+    if (typeof idx !== "number") throw new Error(`${a} without an index`);
+    if (valid && !valid.has(idx)) {
+      // Not a malformed reply — a considered "it is not in the list". Turned
+      // into a give_up so the caller escalates to a screenshot rather than
+      // firing a click at an element that was never there.
+      return {
+        action: "give_up",
+        reason: `chose index ${idx}, which is not on the page — the element list does not describe what is needed`,
+      };
+    }
   }
   return parsed;
 }
@@ -209,5 +239,5 @@ export async function decideNextAction(o: PilotObservation): Promise<PilotDecisi
     .map((b) => b.text)
     .join("");
 
-  return parseDecision(text);
+  return parseDecision(text, new Set(o.elements.map((e) => e.i)));
 }

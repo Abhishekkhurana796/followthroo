@@ -20,14 +20,19 @@ const { observe, act, FORBIDDEN } = require("./pilot-page");
 
 const MAX_STEPS = 8;
 /**
- * Attach a screenshot from the second step onward.
+ * Attach a screenshot to every step.
  *
- * It used to be the fourth, which meant it never happened: the model gave up at
- * step zero or one, so the fallback that was supposed to rescue a page the
- * element list could not describe was never reached. A give_up is also not
- * accepted until a screenshot has been shown at least once — see below.
+ * It began at step four, which meant it never happened — the model gave up at
+ * step zero or one, so the fallback meant to rescue a page the element list
+ * could not describe was never reached. Then step one, which still missed the
+ * first decision, the one that matters most.
+ *
+ * A label list flattens the page: two buttons both read "More", a Connect that
+ * is visually obvious sits among thirty others, and "Follow" looks like an
+ * action button because it is one. The picture disambiguates all of that, and at
+ * Gemini Flash prices a downscaled JPEG per step is not worth optimising away.
  */
-const SCREENSHOT_AFTER_STEP = 1;
+const SCREENSHOT_AFTER_STEP = 0;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
