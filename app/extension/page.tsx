@@ -34,8 +34,8 @@ const FACTS = [
     body: "Every comparable tool asks for your session cookie, then browses as you from their servers. One breach of theirs exposes every customer's account. Ours runs in your browser — there is nothing to hand over, and nothing for us to lose.",
   },
   {
-    title: "It never sends anything by itself",
-    body: "For an invite or a message, it opens the page and fills the box, then stops. You read it and press send. Automated sending is against LinkedIn's terms; a real person clicking send is the distinction that keeps accounts alive.",
+    title: "The extension only reads — it never sends",
+    body: "It has no way to send an invitation or a message; it does not even ask our servers for one. Sending is a separate Windows app you install deliberately, and it runs on your machine too. Two tools, so the one you leave installed in your browser can only ever read.",
   },
   {
     title: "It only reads what you can already see",

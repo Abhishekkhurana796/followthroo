@@ -12,7 +12,10 @@
     "typecheck": "tsc --noEmit",
     "db:generate": "prisma generate",
     "db:push": "prisma db push",
-    "db:studio": "prisma studio"
+    "db:studio": "prisma studio",
+    "desktop": "npm start --prefix desktop",
+    "desktop:dist": "npm run dist --prefix desktop",
+    "verify:linkedin": "tsx scripts/verify-linkedin-target.ts && tsx scripts/verify-desktop-runner.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.32.1",

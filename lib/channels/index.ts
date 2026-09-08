@@ -44,13 +44,30 @@ export async function safeSend(
     return { ok: false, skipped: true, reason: "quiet hours at the contact's estimated local time" };
   }
 
-  const quota = await acquire(channelName, account, orgId);
-  if (!quota.ok) {
-    return {
-      ok: false,
-      skipped: true,
-      reason: `rate-limited; retry in ${Math.ceil(quota.retryAfterMs / 1000)}s`,
-    };
+  // LinkedIn is deliberately exempt from this limiter.
+  //
+  // For email and WhatsApp, `channel.send()` actually sends, so spending quota
+  // here is spending it on a real message. LinkedIn's send() only *enqueues* a
+  // LinkedInAction — the invitation happens later, on the customer's own
+  // machine, and the daily cap that governs it is enforced where that decision
+  // is made: claimActions in lib/linkedin/queue.ts, against the account's
+  // dailyInviteCap.
+  //
+  // Charging both meant a campaign could exhaust a 20/day bucket on twenty rows
+  // that were merely queued, and every further step came back "rate-limited"
+  // for a send that had not happened. Worse, the two paths disagreed: bulk
+  // enqueue from the Leads screen goes through enqueueManyLinkedIn and never
+  // touched this limiter at all, so the same twenty leads counted once or twice
+  // depending on which screen you started from. One cap, in one place.
+  if (channelName !== "linkedin") {
+    const quota = await acquire(channelName, account, orgId);
+    if (!quota.ok) {
+      return {
+        ok: false,
+        skipped: true,
+        reason: `rate-limited; retry in ${Math.ceil(quota.retryAfterMs / 1000)}s`,
+      };
+    }
   }
 
   // orgId goes to the adapter too: per-tenant credentials must be looked up scoped to

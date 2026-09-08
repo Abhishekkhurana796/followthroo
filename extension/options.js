@@ -156,7 +156,11 @@ $("run").addEventListener("click", async () => {
 
 (async function init() {
   const { apiBase, token } = await store();
-  $("apiBase").value = apiBase || "https://www.followthroo.com";
+  // The product host, not the marketing one. This defaulted to
+  // www.followthroo.com, which background.js explicitly rejects — so a fresh
+  // install that pressed Connect on the prefilled value got a permanent error
+  // telling it to use the address it should have been given in the first place.
+  $("apiBase").value = apiBase || "https://app.followthroo.com";
   $("token").value = token || "";
   loadConfig();
 })();

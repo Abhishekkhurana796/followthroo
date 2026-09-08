@@ -5,13 +5,13 @@ import Link from "next/link";
 import useSWR from "swr";
 import {
   Linkedin, ChevronDown, Clock, Copy, Check, RefreshCw, Eye, EyeOff,
-  ExternalLink, ShieldCheck, Square, Chrome,
+  ExternalLink, ShieldCheck, Square, Chrome, Download, Monitor,
 } from "lucide-react";
 import { api } from "@/lib/client";
 import { Banner, DashHeader, Input, Label, useConfirm } from "@/components/ui";
 import { FindLeadsPanel } from "@/components/dashboard/FindLeadsPanel";
 import { SourcingView } from "@/components/dashboard/SourcingView";
-import { EXTENSION_STORE_URL } from "@/lib/constants";
+import { EXTENSION_STORE_URL, DESKTOP_APP_URL } from "@/lib/constants";
 
 /**
  * LinkedIn — one screen, for the one thing that happens here.
@@ -149,6 +149,11 @@ export default function LinkedInClient() {
         {/* Whether anything is going out at all, and what is waiting. Above the
             account deliberately: it is the state people come here to check. */}
         <SendingPanel data={data} onChanged={mutate} setMsg={setMsg} />
+
+        {/* Where to actually get the thing the panel above keeps referring to.
+            "Press Start in the desktop app" is a useless sentence to somebody
+            who does not have it. */}
+        <DesktopApp />
 
         {/* ---- The connection that makes it work ---- */}
         <section className="border-t border-line pt-6">
@@ -306,7 +311,7 @@ function SendingPanel({
     if (next) {
       const ok = await confirm({
         title: "Send automatically?",
-        body: "Connection requests and messages will go out on their own, from your browser, without you reviewing each one. This is against LinkedIn's User Agreement and accounts do get restricted for it. You can stop it at any time.",
+        body: "Connection requests and messages will go out on their own, from the desktop app on your own computer, without you reviewing each one. This is against LinkedIn's User Agreement and accounts do get restricted for it. You can stop it at any time.",
         confirmLabel: "Turn it on",
         tone: "danger",
       });
@@ -360,8 +365,8 @@ function SendingPanel({
           </div>
           <p className="mt-1.5 text-sm text-ink-soft">
             {on
-              ? `Invites go out on their own, one every ${data?.minDelaySec ?? 45}–${data?.maxDelaySec ?? 120} seconds, up to ${data?.dailyInviteCap ?? 20} a day.`
-              : "Each invite opens a tab with the text filled in. Nothing goes out until you press send."}
+              ? `Open the desktop app and press Start. Invites go out one every ${data?.minDelaySec ?? 45}–${data?.maxDelaySec ?? 120} seconds, up to ${data?.dailyInviteCap ?? 20} a day.`
+              : "Nothing goes out. The desktop app will refuse to start until you turn this on."}
           </p>
         </div>
         <button
@@ -398,10 +403,63 @@ function SendingPanel({
 
       {!on && (q?.pending ?? 0) > 0 && (
         <p className="mt-3 rounded-lg bg-tint px-3 py-2 text-xs text-ink-soft">
-          {q!.pending} waiting. With review on, each one needs a tab opened and sent by hand — turn on automatic
-          sending and they go out on their own.
+          {q!.pending} waiting, and nothing is sending them. Turn on automatic sending, then press Start in the
+          desktop app.
         </p>
       )}
+      {on && (q?.pending ?? 0) > 0 && (
+        <p className="mt-3 rounded-lg bg-tint px-3 py-2 text-xs text-ink-soft">
+          {q!.pending} waiting. They go out when the desktop app is running on your computer — this switch permits
+          sending, it does not do the sending.
+        </p>
+      )}
+    </section>
+  );
+}
+
+/**
+ * Getting the Windows app.
+ *
+ * Deliberately shows nothing clickable when DESKTOP_APP_URL is unset. A
+ * download button that 404s, for the one component that does the sending, is
+ * indistinguishable from the product being broken — so an unconfigured
+ * deployment says so plainly instead.
+ */
+function DesktopApp() {
+  const published = !!DESKTOP_APP_URL;
+  return (
+    <section className="rounded-2xl border border-line bg-surface p-5">
+      <div className="flex items-start gap-3">
+        <span className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-tint">
+          <Monitor className="h-4.5 w-4.5 text-brand-ink" />
+        </span>
+        <div className="min-w-0 flex-1">
+          <h2 className="font-display text-base font-bold">The desktop app</h2>
+          <p className="mt-1.5 text-sm text-ink-soft">
+            Invitations are sent from your own computer, so LinkedIn sees your normal browser and your
+            normal connection. Install it once, paste the pairing token below, and press Start when you
+            can leave the machine alone for half an hour.
+          </p>
+
+          {published ? (
+            <>
+              <a href={DESKTOP_APP_URL} className="btn btn-primary mt-4 !py-2.5 !text-sm">
+                <Download className="h-4 w-4" /> Download for Windows
+              </a>
+              <p className="mt-2.5 text-xs text-ink-faint">
+                Windows 10 or 11, and Google Chrome installed. Windows may warn that the publisher
+                isn&apos;t recognised — choose <b>More info → Run anyway</b>.
+              </p>
+            </>
+          ) : (
+            <p className="mt-4 rounded-lg bg-tint px-3 py-2 text-xs text-ink-soft">
+              No download has been published for this deployment yet. Set{" "}
+              <code>NEXT_PUBLIC_DESKTOP_APP_URL</code> to the installer&apos;s address, or ask whoever
+              runs your Followthroo for the file.
+            </p>
+          )}
+        </div>
+      </div>
     </section>
   );
 }
@@ -424,13 +482,13 @@ function BrowserHelper({
   async function rotate() {
     const ok = await confirm({
       title: "Rotate the pairing token?",
-      body: "The current token stops working immediately. Paste the new one into the extension before it can read again.",
+      body: "The current token stops working immediately, for both the Chrome extension and the desktop app. Paste the new one into each before either can work again.",
       confirmLabel: "Rotate",
       tone: "danger",
     });
     if (!ok) return;
     await api("/api/linkedin/connect", { body: { action: "rotate" } });
-    setMsg({ kind: "success", text: "Token rotated. Paste the new one into the extension." });
+    setMsg({ kind: "success", text: "Token rotated. Paste the new one into the extension and the desktop app." });
     onChange();
   }
 
@@ -442,7 +500,8 @@ function BrowserHelper({
     >
       <p className="text-sm text-ink-soft">
         LinkedIn&apos;s API cannot read search results, so reading happens in your own logged-in tab through a small
-        Chrome extension. Nothing about your login reaches us.
+        Chrome extension. Nothing about your login reaches us. <b className="text-ink">Sending is separate</b> — the
+        extension only reads; invitations go out from the desktop app, using this same pairing token.
       </p>
 
       <div className="mt-4">

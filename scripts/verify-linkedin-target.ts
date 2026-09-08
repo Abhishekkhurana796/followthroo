@@ -1,5 +1,5 @@
 /**
- * Verification: the extension acts on the person you chose, and nobody else.
+ * Verification: the desktop app acts on the person you chose, and nobody else.
  *
  *   npx tsx scripts/verify-linkedin-target.ts
  *
@@ -11,9 +11,9 @@
  * as the person you meant. An invitation cannot be quietly recalled, so sending
  * one to the wrong person is worse than sending nothing at all.
  *
- * This drives the real fillLinkedInAction out of extension/background.js — not
- * a copy of it — against a fixture whose wrong-person buttons come FIRST in DOM
- * order, so a naive querySelectorAll finds them first.
+ * This drives the real fillLinkedInAction out of desktop/page-actions.js — the
+ * same module the desktop app hands to Playwright at runtime, not a copy — so a
+ * selector that passes here is the selector that ships.
  *
  * No network, no database, no LinkedIn account: every request is fulfilled from
  * the local fixture, which is also what lets us claim to be at a given /in/ URL
@@ -22,6 +22,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { chromium } from "@playwright/test";
+import { fillLinkedInAction } from "../desktop/page-actions";
 
 const ROOT = join(__dirname, "..");
 const FIXTURE = join(ROOT, "scripts", "linkedin-fixtures", "profile-with-sidebar.html");
@@ -38,23 +39,9 @@ const ok = (c: boolean, m: string) => {
   }
 };
 
-/** Pull the shipped function out of the extension by brace-matching its body. */
-function extractFillLinkedInAction(): string {
-  const src = readFileSync(join(ROOT, "extension", "background.js"), "utf8");
-  const start = src.indexOf("async function fillLinkedInAction");
-  if (start < 0) throw new Error("fillLinkedInAction not found in extension/background.js");
-  let depth = 0;
-  for (let i = src.indexOf("{", start); i < src.length; i++) {
-    if (src[i] === "{") depth++;
-    else if (src[i] === "}" && --depth === 0) {
-      return src.slice(start, i + 1).replace(/^async function fillLinkedInAction/, "async function");
-    }
-  }
-  throw new Error("unbalanced braces while extracting fillLinkedInAction");
-}
+type Outcome = { status: string; result?: string; kind?: string; fatal?: string };
 
 async function main() {
-  const fnSrc = extractFillLinkedInAction();
   const html = readFileSync(FIXTURE, "utf8");
   const browser = await chromium.launch();
 
@@ -66,14 +53,21 @@ async function main() {
       route.fulfill({ status: 200, contentType: "text/html; charset=utf-8", body: html }),
     );
 
-    const run = async (url: string, action: Record<string, unknown>) => {
+    const run = async (url: string, action: Record<string, unknown>, withBanner = false) => {
       const page = await ctx.newPage();
       await page.goto(url);
-      const out = await page.evaluate<{ status: string; result?: string }, [string, Record<string, unknown>]>(
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        ([src, act]) => (window as any).eval(`(${src})`)(act),
-        [fnSrc, action],
-      );
+      if (withBanner) {
+        // The do-not-touch bar the desktop run pins to every page. It sits
+        // outside <main> with pointer-events:none, but "outside main" is a
+        // claim worth testing rather than trusting.
+        await page.evaluate(() => {
+          const bar = document.createElement("div");
+          bar.setAttribute("data-followthroo-overlay", "1");
+          bar.innerHTML = '<button aria-label="Connect">Connect</button>';
+          document.body.prepend(bar);
+        });
+      }
+      const out = (await page.evaluate(fillLinkedInAction, action)) as Outcome;
       const invited = await page.evaluate(() => (window as never as { __invited?: string }).__invited ?? null);
       const sentIn = await page.evaluate(() => (window as never as { __sentIn?: string }).__sentIn ?? null);
       // Read from what the fixture recorded at send time: the dialog and the
@@ -149,6 +143,30 @@ async function main() {
       const r = await run(RIGHT, { type: "invite", linkedinUrl: RIGHT, note: "Hi Anirudh —", autoSend: false });
       ok(r.invited === "right", `drafting also opens the right person's dialog (invited: ${r.invited})`);
       ok(r.status === "drafted", `nothing is sent without the switch (status: ${r.status})`);
+    }
+
+    // 6. LinkedIn has run out of invitations for the week. Every remaining
+    //    action would hit the same wall, so this must come back marked fatal —
+    //    otherwise the run keeps knocking on a door that is being held shut.
+    {
+      const r = await run(RIGHT + "?limitwall", {
+        type: "invite",
+        linkedinUrl: RIGHT,
+        note: "Hi Anirudh —",
+        autoSend: true,
+      });
+      ok(r.status === "failed", `a limit wall is not a send (status: ${r.status})`);
+      ok(r.fatal === "limit", `it is marked fatal so the run stops (fatal: ${r.fatal})`);
+      ok(/weekly invitation limit/i.test(r.result || ""), `the reason names the limit: ${r.result}`);
+    }
+
+    // 7. Our own do-not-touch banner carries the word "Connect". It is pinned to
+    //    every page of a run, so if the selectors could reach it, every single
+    //    invitation would click our own overlay instead of LinkedIn's button.
+    {
+      const r = await run(RIGHT, { type: "invite", linkedinUrl: RIGHT, note: "Hi Anirudh —", autoSend: true }, true);
+      ok(r.invited === "right", `the overlay is never mistaken for the profile's button (invited: ${r.invited})`);
+      ok(r.status === "sent", `the invitation still goes through with the banner up (status: ${r.status})`);
     }
   } finally {
     await browser.close();

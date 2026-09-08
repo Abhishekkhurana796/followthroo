@@ -61,6 +61,17 @@
       const modal = document.createElement("div");
       modal.className = "artdeco-modal";
       modal.setAttribute("role", "dialog");
+      // What LinkedIn puts up once the account is out of invitations for the
+      // week: a wall where the compose form should be. Every remaining action
+      // in the run would meet the same wall, so the run has to stop rather than
+      // keep knocking.
+      if (q.has("limitwall")) {
+        modal.innerHTML =
+          "<h2>You've reached the weekly invitation limit</h2>" +
+          "<p>Try again next week.</p><button aria-label='Got it'>Got it</button>";
+        document.body.appendChild(modal);
+        return;
+      }
       modal.innerHTML =
         '<h2>Add a note to your invitation?</h2>' +
         '<button id="addNote" aria-label="Add a note">Add a note</button>' +

@@ -42,6 +42,12 @@ export async function GET(req: NextRequest) {
       minDelaySec: account.minDelaySec,
       maxDelaySec: account.maxDelaySec,
       mode: account.mode,
+      // Read-only here on purpose. The desktop app shows this so someone can
+      // see why a run refused to start, but the switch itself stays in the web
+      // app behind its confirmation — a client that could turn on automatic
+      // sending for itself is a client that can arm the risky mode without the
+      // person who owns the account ever seeing the warning.
+      autoSend: account.autoSend,
       selectedCampaignIds: account.selectedCampaignIds,
       campaignSettings: account.campaignSettings,
       queue,

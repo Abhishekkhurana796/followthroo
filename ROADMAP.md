@@ -19,7 +19,7 @@
 | 1 | **Scaffold + CRM/DB** | Next.js App Router app, Tailwind v4, Postgres schema, lead CRUD, CSV import | ☑ | [docs/crm-data-model.md](docs/crm-data-model.md) |
 | 2 | **Email channel** | Nodemailer + DKIM, queue + throttle, bounce webhook | ◐ needs SMTP creds | [docs/channels.md](docs/channels.md) |
 | 3 | **Templates + sequencing** | Handlebars engine + `{{x\|fallback}}`, spam check, sequences via BullMQ | ☑ | [docs/templates-and-variables.md](docs/templates-and-variables.md) |
-| 4 | **LinkedIn channel** | Interface + guards in place; API/browser driver NOT implemented (opt-in) | ◐ driver TODO | [docs/channels.md](docs/channels.md) |
+| 4 | **LinkedIn channel** | Queue + caps server-side; sourcing via Chrome extension; invitations sent by the `desktop/` Windows app (Electron + Playwright) | ☑ driver shipped 2026-09-07 | [docs/channels.md](docs/channels.md), [desktop/README.md](desktop/README.md) |
 | 5 | **WhatsApp channel** | Twilio send + status webhook + opt-out | ◐ needs Twilio creds | [docs/channels.md](docs/channels.md) |
 | 6 | **Social comments** | Interface stub only | ☐ | [docs/channels.md](docs/channels.md) |
 | 7 | **AI agent** | Claude (`claude-opus-4-8`) tool-loop over safe send path | ◐ needs API key | [docs/ai-agent.md](docs/ai-agent.md) |

@@ -1,10 +1,12 @@
 # channels.md — Per-Channel Features & Official Limits
 
-**Last updated:** 2026-08-11
+**Last updated:** 2026-09-07
 **Status:** draft
 
 > Every channel module implements a uniform `send(lead, rendered)` interface and goes
-> through `lib/ratelimit`. Consolidated numbers live in [rate-limits.md](rate-limits.md).
+> through `lib/ratelimit` — except LinkedIn, whose `send()` only enqueues, so its cap is
+> enforced at claim time instead. Consolidated numbers live in
+> [rate-limits.md](rate-limits.md).
 
 ---
 
@@ -157,38 +159,57 @@ export interface Channel {
 
 ---
 
-## LinkedIn — companion Chrome extension, human-assisted (Phase 5 — updated)
+## LinkedIn — desktop app sends, extension sources (Phase 5 — rewritten 2026-09-07)
 
 LinkedIn does **not** grant connection-invite or DM access through its developer program,
 and its User Agreement (§8.2) prohibits bots or automated methods for connections/messages
-outright. So this is deliberately **not** autonomous: a companion Chrome extension drafts
-each action from the user's own logged-in LinkedIn session, in their browser, but a human
-reviews and clicks Send themselves — the extension never does.
+outright. There is no API path here at any price: `w_member_social`, the scope our OAuth
+flow requests, only posts to your own feed. An invitation therefore requires a real browser
+holding a real LinkedIn session, and the only open question is whose browser.
+
+**It is the customer's own.** `desktop/` is an Electron app they install on Windows. It
+drives Chrome with Playwright, on their machine and their IP, signed into the LinkedIn
+account they already use. We never receive a `li_at` cookie, so there is nothing to encrypt,
+nothing to rotate, and no datacenter IP for LinkedIn to correlate against a home session.
+See `desktop/README.md` for why this beat the cloud-browser-plus-residential-proxy model
+that Expandi and HeyReach run.
 
 **Flow:**
 1. A campaign `send` node with `channel: "linkedin"` → `lib/channels/linkedin.ts` enqueues a
-   `LinkedInAction` (it no longer no-ops).
-2. The extension (`extension/`, MV3) polls `GET /api/linkedin/queue` (auth: per-member
-   `LinkedInAccount.extToken`), claims one action, opens the profile in a **foregrounded**
-   tab, and fills the invite note / message box via injected DOM automation — then stops.
-   It reports `status: "drafted"` back so the queue/cap accounting sees it as in-flight.
-3. The human reviews what's filled, sends it themselves in that tab, then confirms **"I
-   sent it"** (or **Skip**) in the extension popup — only that confirmation
-   `POST /api/linkedin/queue`s the terminal outcome, recorded as a `Message` +
-   `ActivityLog` + `ConversationEvent` (visible in reports/timeline). Polling stays paused
-   on one drafted action at a time until the human resolves it, then waits a randomized
-   `min–maxDelaySec` before drafting the next.
+   `LinkedInAction`. Bulk enqueue from the Leads screen goes through `enqueueManyLinkedIn`.
+2. The desktop app polls `GET /api/linkedin/queue?limit=1` (auth: per-member
+   `LinkedInAccount.extToken` — the same pairing token the extension uses), claims one
+   action, navigates to the profile, and runs `desktop/page-actions.js` in the page: find
+   the profile's own Connect, add the note, click Send, and confirm the dialog closed.
+3. It `POST`s the terminal outcome, recorded by `completeAction` as a `Message` +
+   `ActivityLog` + `ConversationEvent`. Then it waits a randomized `min–maxDelaySec` and
+   claims the next.
 
-**Caps + safety:** daily invite cap enforced server-side in `lib/linkedin/queue.ts`
-(`claimActions`, now counting `drafted` toward the cap too); the extension drafts one
-action per tick (default 45–120s apart); stale in-progress claims are auto-reclaimed after
-15 min, stale drafted ones (human never came back) after 40 min. Config + token live at
-`/dashboard/settings/linkedin`.
+**One claimer.** The extension (`extension/`, MV3) still does sourcing and no longer asks
+for invite actions at all. `claimActions` marks a row `in_progress` with a read followed by
+a write, so two clients polling one queue can each hold the same action and each send it —
+and an invitation cannot be recalled. Any third client replaces the desktop app rather than
+running beside it.
 
-**⚠️ ToS:** drafting from a personal LinkedIn account is still automation-adjacent even
-with a human sending — keep caps conservative (≤ ~20 invites/day), warm up new accounts,
-don't leave large batches queued unattended. The official "Sign in with LinkedIn (OIDC)" +
-"Share on LinkedIn" APIs cover identity and posting — see the next section, which is now built.
+**Caps + safety:** the daily invite cap is enforced twice on purpose — server-side in
+`claimActions` against `LinkedInAccount.dailyInviteCap`, and client-side in `desktop/runner.js`
+against `MAX_PER_DAY`, with the day's tally persisted so pressing Start twice does not send
+forty. Stale `in_progress` claims are reclaimed after 15 min. A run also stops early on
+LinkedIn's own weekly-limit or verification dialog (first occurrence, marked `fatal`), on
+three consecutive failures, on a sign-in wall, and when automatic sending is switched off in
+the web app. Config + token live on `/dashboard/linkedin`.
+
+**Note:** `safeSend` in `lib/channels/index.ts` deliberately skips the generic
+`lib/ratelimit.ts` day-window for LinkedIn. That limiter is charged before `channel.send()`,
+but LinkedIn's `send()` only *enqueues* — so charging it meant a campaign could exhaust
+20/day on rows that were merely queued, while bulk enqueue bypassed the limiter entirely and
+counted nothing. One cap, at claim time.
+
+**⚠️ ToS:** automated sending from a personal LinkedIn account is against the User
+Agreement and the risk is to the customer's account. The web app gates it behind a switch
+that says so, per-action, so turning it off stops the very next invitation. Keep caps
+conservative (≤ ~20 invites/day), warm up new accounts. The official "Sign in with LinkedIn
+(OIDC)" + "Share on LinkedIn" APIs cover identity and posting — see the next section.
 
 ---
 

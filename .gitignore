@@ -54,3 +54,11 @@ yarn-error.log*
 
 # Chrome Web Store upload artifact — built by scripts/package-extension.ts
 followthroo-linkedin-*.zip
+
+# desktop app — its own dependency tree, its build output, and the browser
+# profile a local run signs into. The profile holds a live LinkedIn session:
+# committing it would put one person's login in everybody's checkout.
+desktop/node_modules/
+desktop/dist/
+desktop/linkedin-profile/
+verify-runner.log

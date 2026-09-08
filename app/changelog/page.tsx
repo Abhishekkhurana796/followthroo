@@ -9,6 +9,21 @@ export const metadata = { title: "Changelog — Followthroo" };
  */
 const ENTRIES = [
   {
+    version: "0.12.0",
+    date: "Sep 2026",
+    items: [
+      "LinkedIn invitations now go out from a Windows app you install, instead of the Chrome extension. The extension could open the profile and fill the box, but getting it to reliably press Send was a fight we kept losing — Chrome shuts a background extension down when it looks idle, which is most of a run spent waiting between invites",
+      "The app opens a Chrome window and works through your queue on its own, one invite every 45–120 seconds, up to 20 a day. You press Start and walk away",
+      "It tells you, loudly, not to use the computer while it runs — in the app and on a red bar across the top of every page it visits. Clicking or typing in that window while it works will break the run",
+      "It stops early rather than pushing through. Twenty sent, LinkedIn saying you have hit the weekly limit, three failures in a row, or a sign-in prompt all end the run and say which it was",
+      "There is a Test run that does everything except press Send, so you can watch it work once before trusting it with real invitations",
+      "Pressing Start twice in one afternoon does not send forty. The day's count is remembered",
+      "Your LinkedIn login stays on your computer — the app keeps its own browser profile that you sign into once. We never receive your password or session",
+      "The Chrome extension is still needed, and still does finding people. It no longer sends, so the two can never both grab the same person and invite them twice",
+      "Fixed: campaign invitations could be marked “rate-limited” and dropped before they were ever queued. Two separate daily limits were counting the same 20 invites, and one of them counted queueing as sending. Inviting from the Leads screen skipped that counter entirely, so the same people counted once or twice depending on which screen you started from",
+    ],
+  },
+  {
     version: "0.11.4",
     date: "Sep 2026",
     items: [

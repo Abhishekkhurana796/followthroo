@@ -85,6 +85,21 @@ sequence. A premium Next.js UI sits on top.
   in a campaign, beside Email and WhatsApp, because a channel is a property of a
   step and not a place you visit. If you are about to add a "send" affordance to
   the LinkedIn screen, add it to the campaign builder instead.
+- **LinkedIn invitations are sent by the desktop app, not the extension.**
+  Decided 2026-09-07. LinkedIn's API cannot send an invitation or a DM to a
+  non-connection — `w_member_social` only posts to your own feed — so it takes a
+  real browser with a real session. `desktop/` is an Electron app that drives
+  Chrome with Playwright on the customer's own machine and IP; the server side is
+  unchanged (same `extToken`, same `/api/linkedin/queue`, same `claimActions`).
+  The Chrome extension still does **sourcing** and no longer claims invite
+  actions at all. That is not a preference: `claimActions` marks a row
+  `in_progress` with a read then a write, so two clients on one queue can each
+  hold the same action and each send it, and an invitation cannot be recalled.
+  **One claimer, always.** If you add a third client, it takes the queue from the
+  desktop app — it does not poll alongside it.
+  The DOM logic lives once, in `desktop/page-actions.js`, shared by the app and
+  both verification scripts. Do not copy it; a selector fix has to land in the
+  code that ships.
 - **The user never needs to understand the integration.** A lead is a lead whether it
   came from IndiaMART, Meta Ads or a CSV; the source is metadata, never a destination.
 - **Never take payment for a domain.** The reseller storefront charges the customer and
@@ -113,6 +128,7 @@ sequence. A premium Next.js UI sits on top.
 | [docs/information-architecture.md](docs/information-architecture.md) | Product IA, navigation, and the core screens |
 | [docs/channels.md](docs/channels.md) | Per-channel features + official limits |
 | [docs/linkedin-sourcing-ux.md](docs/linkedin-sourcing-ux.md) | How LinkedIn sourcing is presented: why the URL is the input and there is no scraper picker |
+| [desktop/README.md](desktop/README.md) | The Windows app that sends LinkedIn invitations: why it is not a server, what stops a run, how to build and sign it |
 | [docs/phantombuster.md](docs/phantombuster.md) | The 35 PhantomBuster LinkedIn automations: inputs, outputs and limits, as the reference spec for our own scrapers |
 | [docs/rate-limits.md](docs/rate-limits.md) | Consolidated quotas + throttling strategy |
 | [docs/pricing.md](docs/pricing.md) | Recurring costs (infra + AI/comms COGS) + pricing tier margin analysis |
