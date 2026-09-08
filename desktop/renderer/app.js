@@ -245,6 +245,8 @@ window.ft.onEvent((evt) => {
       if (evt.failed) parts.push(`${evt.failed} failed`);
       if (evt.skipped) parts.push(`${evt.skipped} skipped`);
       log(`Finished — ${parts.join(", ")}.`, evt.sent ? "sent" : undefined);
+      // Where to find the record of what happened, for when it did not work.
+      if (evt.logFile) log(`Details saved to ${evt.logFile}`);
       // The run's own account of why it ended is the authoritative one. Keep it.
       if (evt.stoppedBecause) {
         el.now.textContent = evt.stoppedBecause;

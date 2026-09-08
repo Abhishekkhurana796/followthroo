@@ -24,6 +24,15 @@ const SCREENSHOT_AFTER_STEP = 3;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+/** The page in one line, for a failure message somebody has to act on. */
+function describe(seen) {
+  if (!seen || !seen.elements) return "nothing";
+  return seen.elements
+    .slice(0, 14)
+    .map((e) => (e.inTopCard ? `*${e.label}*` : e.label))
+    .join(" | ");
+}
+
 async function askServer(apiBase, token, observation) {
   const res = await fetch(`${apiBase}/api/linkedin/assist`, {
     method: "POST",
@@ -105,14 +114,19 @@ async function pilotAction({ page, action, apiBase, token, onStep = () => {} }) 
       return { status: "failed", result: `could not reach the assistant: ${String((e && e.message) || e)}` };
     }
 
-    onStep({ step, decision });
+    // The elements go into the log too. A decision without the page it was made
+    // from is not diagnosable — which is the whole reason this log exists.
+    onStep({ step, decision, saw: seen.elements, personName: seen.personName });
 
     if (decision.action === "give_up") {
       const why = String(decision.reason || "").toLowerCase();
       if (/already connected/.test(why)) {
         return { status: "skipped", result: "already connected — no invitation to send" };
       }
-      return { status: "failed", result: `gave up: ${decision.reason}` };
+      // Carry what was on screen. "Connect button not found" on its own cannot
+      // be acted on by anyone who was not watching; the list of what was
+      // actually there is what turns a report into a fix.
+      return { status: "failed", result: `gave up: ${decision.reason}. Saw: ${describe(seen)}` };
     }
 
     if (decision.action === "done") {
@@ -169,10 +183,22 @@ async function pilotAction({ page, action, apiBase, token, onStep = () => {} }) 
 
     // Let the click land — a dialog opening, a menu expanding.
     await sleep(1400 + Math.random() * 900);
+    const before = seen.elements.length;
     seen = await page.evaluate(observe);
+
+    // A click that revealed nothing is the single most useful thing to feed
+    // back. It is what happens when the wrong "More" is opened — a page has
+    // several — and without being told, the model concludes there is no Connect
+    // anywhere and gives up on a profile it could have handled.
+    if (outcome.ok && seen.elements.length === before) {
+      history.push("that revealed nothing new — it was probably the wrong element, try another");
+    }
   }
 
-  return { status: "failed", result: `did not finish within ${MAX_STEPS} steps` };
+  return {
+    status: "failed",
+    result: `did not finish within ${MAX_STEPS} steps. Last seen: ${describe(seen)}`,
+  };
 }
 
 module.exports = { pilotAction, MAX_STEPS };

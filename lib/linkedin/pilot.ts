@@ -32,6 +32,11 @@ export interface PilotElement {
   disabled?: boolean;
   inDialog?: boolean;
   inAside?: boolean;
+  /** In the profile's own top card — the action row, not a "see more" elsewhere. */
+  inTopCard?: boolean;
+  /** Nearest heading above it, so identical labels can be told apart. */
+  section?: string | null;
+  y?: number;
 }
 
 export interface PilotObservation {
@@ -86,8 +91,29 @@ Rules that matter more than completing the task:
 - If the goal is an invitation and the person is ALREADY a connection (a 1st-degree badge, a "Remove Connection" option, or no Connect anywhere), answer give_up with reason "already connected". Do not message them instead.
 - If you cannot find a way to do the goal, answer give_up. A wrong click is far worse than stopping.
 
+A page has SEVERAL buttons labelled "More". Only the one marked
+IN-PROFILE-ACTION-ROW opens the profile's overflow menu; the others expand an
+About or Experience section and contain nothing useful. Always prefer the one in
+the action row.
+
+If a click revealed nothing — the element list came back the same — you picked
+the wrong one. Try a different candidate before giving up. Do not answer give_up
+merely because the first menu you opened had no Connect in it.
+
+Connect appears in one of two places, and you must check them in this order:
+
+  a) ON THE PROFILE'S ACTION ROW, beside Message and More. Its label is
+     "Connect", or "Invite <name> to connect". If such an element exists and is
+     marked IN-PROFILE-ACTION-ROW, click it — do NOT open a menu first.
+  b) INSIDE THE OVERFLOW MENU, only when there is no Connect on the action row.
+     Open the "More" / "More actions" marked IN-PROFILE-ACTION-ROW, then look
+     again in the list that follows.
+
+Opening a menu when Connect was already on the card wastes a step and leaves the
+menu covering the page.
+
 How the task normally goes:
-1. Click Connect. It may be on the card, or behind a "More actions" / "…" overflow menu — open that menu first if you do not see Connect.
+1. Click Connect, per (a) then (b) above.
 2. A dialog opens. If a note is provided, click "Add a note", then type it into the textarea.
 3. If sending is permitted, click "Send" / "Send now" / "Send invitation". If it is not permitted, answer done once the note is typed — a human will send it.
 4. Once the dialog has closed and the invitation is away, answer done.
@@ -99,7 +125,8 @@ function userPrompt(o: PilotObservation): string {
     (e) =>
       `${e.i}. <${e.tag}${e.role ? ` role=${e.role}` : ""}${e.disabled ? " disabled" : ""}${
         e.inDialog ? " in-dialog" : ""
-      }${e.inAside ? " IN-SIDEBAR-DO-NOT-USE" : ""}> ${e.label}`,
+      }${e.inTopCard ? " IN-PROFILE-ACTION-ROW" : ""}${e.inAside ? " IN-SIDEBAR-DO-NOT-USE" : ""}> ${e.label}` +
+      (e.section ? `   [under: ${e.section}]` : ""),
   );
 
   return [

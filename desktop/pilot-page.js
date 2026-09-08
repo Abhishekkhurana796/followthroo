@@ -61,6 +61,21 @@ function observe() {
 
   const nodes = Array.from(document.querySelectorAll(CLICKABLE)).filter(visible);
 
+  // Where the profile's own action row lives. A LinkedIn page has several
+  // buttons labelled exactly "More" — the profile overflow menu, and a
+  // "…see more" in About or Experience — and a label alone cannot tell them
+  // apart. The model was picking one at random, opening something with no
+  // Connect in it, and giving up. Anything sharing an ancestor with the <h1> is
+  // in the top card; that is the one that matters.
+  const topCard = h1 && (h1.closest("section") || h1.closest("div.ph5") || h1.parentElement);
+
+  /** The nearest heading above an element, as a human would describe where it is. */
+  const sectionOf = (el) => {
+    const sec = el.closest("section, [data-view-name]");
+    const head = sec && sec.querySelector("h1, h2, h3");
+    return head ? (head.textContent || "").replace(/\s+/g, " ").trim().slice(0, 60) : null;
+  };
+
   const elements = [];
   nodes.forEach((el, idx) => {
     const l = label(el);
@@ -68,6 +83,7 @@ function observe() {
     // Stamped so `act` resolves the very element that was described, rather than
     // re-running a query that may have shifted underneath us.
     el.setAttribute("data-ft-idx", String(idx));
+    const r = el.getBoundingClientRect();
     elements.push({
       i: idx,
       tag: el.tagName.toLowerCase(),
@@ -76,6 +92,10 @@ function observe() {
       disabled: el.hasAttribute("disabled") || el.getAttribute("aria-disabled") === "true",
       inDialog: !!el.closest('[role="dialog"], .artdeco-modal'),
       inAside: !!el.closest("aside"),
+      // The three that disambiguate two identical "More" buttons.
+      inTopCard: !!(topCard && topCard.contains(el)),
+      section: sectionOf(el),
+      y: Math.round(r.top + window.scrollY),
     });
   });
 

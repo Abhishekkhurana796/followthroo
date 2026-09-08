@@ -18,6 +18,7 @@
  *      account gets restricted.
  */
 const path = require("node:path");
+const fs = require("node:fs");
 const { chromium } = require("playwright-core");
 const { fillLinkedInAction } = require("./page-actions");
 const { pilotAction } = require("./pilot");
@@ -85,6 +86,37 @@ function bannerInitScript() {
   } else {
     install();
   }
+}
+
+/**
+ * A record of what the run actually saw and chose.
+ *
+ * LinkedIn's markup cannot be reproduced here — no fixture matches a real
+ * profile, and the pages that fail belong to somebody else's account. Several
+ * rounds of this were spent inferring the DOM from a one-line error, so the run
+ * now writes down every observation and every decision. One file, sent along
+ * with a report, replaces the guessing.
+ *
+ * Element labels and the note are in here. Both are already visible to whoever
+ * is running it, and the file stays on their machine.
+ */
+function makeLog(userDataPath) {
+  const dir = path.join(userDataPath, "logs");
+  const file = path.join(dir, `run-${new Date().toISOString().replace(/[:.]/g, "-")}.jsonl`);
+  let broken = false;
+  return {
+    file,
+    write(entry) {
+      if (broken) return;
+      try {
+        fs.mkdirSync(dir, { recursive: true });
+        fs.appendFileSync(file, JSON.stringify({ at: new Date().toISOString(), ...entry }) + "\n");
+      } catch {
+        // Logging must never take down a run that is otherwise working.
+        broken = true;
+      }
+    },
+  };
 }
 
 /** Small fetch wrapper that never throws a bare network error at the caller. */
@@ -220,6 +252,8 @@ async function runBatch({
   const emit = (type, payload = {}) => onEvent({ type, ...payload });
 
   const cap = Math.max(0, Math.min(limit, MAX_PER_DAY));
+  const log = makeLog(userDataPath);
+  log.write({ event: "run-start", cap, dryRun, apiBase });
 
   /**
    * A ceiling on tries, not just on sends.
@@ -346,12 +380,14 @@ async function runBatch({
           action: { ...action, autoSend },
           apiBase,
           token,
-          onStep: (s) =>
+          onStep: (s) => {
+            log.write({ event: "step", who, url: action.linkedinUrl, ...s });
             emit("status", {
               message: s.refused
                 ? `Ignored an unsafe suggestion: ${s.refused}`
                 : `Working on ${who}: ${s.decision?.reason || s.decision?.action || "thinking"}`,
-            }),
+            });
+          },
         });
 
         // Only when no model is configured at all. The selector path still
@@ -390,6 +426,7 @@ async function runBatch({
       else if (outcome.status === "failed") summary.failed++;
       else summary.skipped++;
 
+      log.write({ event: "action-done", who, url: action.linkedinUrl, status: outcome.status, result: outcome.result });
       emit("action-done", {
         who,
         status: outcome.status,
@@ -444,7 +481,8 @@ async function runBatch({
     await context.close().catch(() => {});
   }
 
-  emit("done", summary);
+  log.write({ event: "run-end", ...summary });
+  emit("done", { ...summary, logFile: log.file });
   return summary;
 }
 
