@@ -70,11 +70,17 @@ sequence. A premium Next.js UI sits on top.
   existing screen — a tab, a dialog, a sub-nav row, a panel on the lead record —
   unless they serve one of the five questions in `docs/information-architecture.md`.
   The rail went from 18 rows to 11 for a reason; don't grow it back.
-  **Exception, decided 2026-09-03, narrowed 2026-09-05: LinkedIn has a row, for
-  sourcing.** It was first built inside the Add Lead dialog, correctly per this
-  rule, and failed the only test that matters: the person who commissioned it
-  could not find it. A destination with a URL beat a good argument about nav
-  hygiene.
+  **Superseded 2026-09-08: LinkedIn no longer has its own row — it lives under
+  Channels.** It had one from 2026-09-03, because it was first built inside the
+  Add Lead dialog, correctly per this rule, and failed the only test that
+  matters: the person who commissioned it could not find it. A destination with
+  a URL beat a good argument about nav hygiene.
+  `/dashboard/channels` keeps that win — it is still a destination with a URL,
+  one click from the rail — while fixing what the row could not: Email lived in
+  Settings, LinkedIn on the rail, WhatsApp and SMS behind Settings → Business
+  channels. Four things of one kind in three places, and no screen answering
+  "what can I actually send through today?". The hub links out to where each is
+  really configured; nothing moved and nothing is duplicated.
   The original justification was "35 distinct jobs", and that turned into a
   catalogue of 32 read-only cards — 19 of them greyed-out roadmap — under a
   heading claiming 35. A roadmap is not product surface; it is back in

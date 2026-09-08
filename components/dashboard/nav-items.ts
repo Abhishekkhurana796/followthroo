@@ -1,6 +1,6 @@
 import {
   LayoutDashboard, Users, Rocket, FileText, Inbox,
-  ListChecks, BarChart3, Settings, GitBranch, Linkedin,
+  ListChecks, BarChart3, Settings, GitBranch, Radio,
   type LucideIcon,
 } from "lucide-react";
 import type { TourTargetId } from "./tour/target";
@@ -34,6 +34,20 @@ export type NavGroup = { title?: string; items: NavItem[] };
  *     billing with Inbox.
  *   - **Calendar** was a `soon: true` stub. A row that cannot be clicked is a
  *     promise, and the rail is not where promises go.
+ *
+ * Restructured 2026-09-08, still ten rows:
+ *
+ *   - **LinkedIn folded into Channels.** It had its own row from 2026-09-03
+ *     because the person who commissioned it could not find it inside a dialog.
+ *     Channels answers that just as well while putting it beside Email,
+ *     WhatsApp and SMS — four things of one kind that were living in three
+ *     different places. It is still a destination with a URL.
+ *   - **Tasks moved to Automate.** A task is work the system generated for you
+ *     to do; Communicate is now what it says, which is the Inbox.
+ *
+ * Sequences is deliberately absent. In this product a sequence *is* a campaign
+ * — CampaignsClient calls them that — and two rows leading to one screen is
+ * exactly what this file exists to prevent.
  */
 export const NAV_GROUPS: NavGroup[] = [
   { items: [{ label: "Home", href: "/dashboard", icon: LayoutDashboard }] },
@@ -45,19 +59,20 @@ export const NAV_GROUPS: NavGroup[] = [
     ],
   },
   {
-    title: "Communicate",
-    items: [
-      { label: "Inbox", href: "/dashboard/inbox", icon: Inbox },
-      { label: "Tasks", href: "/dashboard/tasks", icon: ListChecks },
-    ],
+    title: "Connect",
+    items: [{ label: "Channels", href: "/dashboard/channels", icon: Radio }],
   },
   {
     title: "Automate",
     items: [
       { label: "Campaigns", href: "/dashboard/campaigns", icon: Rocket },
-      { label: "LinkedIn", href: "/dashboard/linkedin", icon: Linkedin },
       { label: "Templates", href: "/dashboard/templates", icon: FileText },
+      { label: "Tasks", href: "/dashboard/tasks", icon: ListChecks },
     ],
+  },
+  {
+    title: "Communicate",
+    items: [{ label: "Inbox", href: "/dashboard/inbox", icon: Inbox }],
   },
   {
     title: "Analyze",
