@@ -150,12 +150,17 @@ el.signinBtn.addEventListener("click", async () => {
 });
 
 let collapsed = false;
-el.collapse.addEventListener("click", async () => {
-  collapsed = !collapsed;
-  const res = await window.ft.togglePanel(collapsed);
+async function setCollapsed(next) {
+  const res = await window.ft.togglePanel(next);
   collapsed = res.collapsed;
+  // The body class is what leaves a strip behind rather than nothing at all —
+  // the reopen button is the only thing still rendered, and it is the only way
+  // back.
+  document.body.classList.toggle("collapsed", collapsed);
   el.collapse.textContent = collapsed ? "Show this panel" : "Hide this panel";
-});
+}
+el.collapse.addEventListener("click", () => setCollapsed(!collapsed));
+document.getElementById("reopen").addEventListener("click", () => setCollapsed(false));
 
 async function load() {
   const s = await window.ft.getSettings();

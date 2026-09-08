@@ -1,0 +1,3 @@
+{"at":"2026-09-08T18:47:02.156Z","event":"run-start","cap":20,"dryRun":false,"apiBase":"http://127.0.0.1:53852"}
+{"at":"2026-09-08T18:47:12.389Z","event":"action-done","who":"Lead 1","url":"https://www.linkedin.com/in/anirudh-bisht/?limitwall","status":"failed","result":"[no AI — could not reach the assistant: not found] LinkedIn says this account has hit its weekly invitation limit"}
+{"at":"2026-09-08T18:47:12.397Z","event":"run-end","sent":0,"failed":1,"skipped":0,"attempted":1,"stoppedBecause":"[no AI — could not reach the assistant: not found] LinkedIn says this account has hit its weekly invitation limit"}

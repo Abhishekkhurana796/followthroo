@@ -27,7 +27,21 @@ function observe() {
 
   const norm = (s) => (s || "").toLowerCase().replace(/[^a-z0-9 ]+/g, " ").replace(/\s+/g, " ").trim();
   const h1 = document.querySelector("main h1, h1");
-  const personName = norm((h1?.textContent || "").split("\n")[0]);
+
+  /**
+   * Who this page belongs to. Never empty when the URL says /in/<slug>.
+   *
+   * It came back empty on a real profile, and every name-based check hangs off
+   * it — so the guard that exists to stop us acting on the wrong person was
+   * silently inert, and "Follow Priyashi Negi" was clicked as though it were
+   * Connect. The slug is always present and is enough to compare against.
+   */
+  const slugName = norm(
+    decodeURIComponent((location.pathname.split("/in/")[1] || "").split(/[?#/]/)[0] || "").replace(/-/g, " "),
+  )
+    .replace(/\b[0-9a-f]{6,}\b/g, "")
+    .trim();
+  const personName = norm((h1?.textContent || "").split("\n")[0]) || slugName;
 
   const label = (el) => {
     const text = (
@@ -59,7 +73,22 @@ function observe() {
     return s.visibility !== "hidden" && s.display !== "none";
   };
 
-  const nodes = Array.from(document.querySelectorAll(CLICKABLE)).filter(visible);
+  /**
+   * LinkedIn's own furniture, which is not what we are here for.
+   *
+   * The global navbar comes first in the document, so an unfiltered list opened
+   * with "Skip to search", "Skip to main content", "Home, 1 new notification",
+   * "Me", "For Business" and two nav "More" buttons — and the profile's own
+   * action row was buried below all of it. The model reported no Connect button
+   * on a page that plainly had one.
+   */
+  const chrome = (el) =>
+    !!el.closest('header, nav, footer, [role="banner"], [role="navigation"], .global-nav, #global-nav') ||
+    /^skip to |^close jump menu/i.test((el.textContent || "").trim());
+
+  const nodes = Array.from(document.querySelectorAll(CLICKABLE))
+    .filter(visible)
+    .filter((el) => !chrome(el));
 
   // Where the profile's own action row lives. A LinkedIn page has several
   // buttons labelled exactly "More" — the profile overflow menu, and a
@@ -99,9 +128,19 @@ function observe() {
     });
   });
 
+  // The profile's own controls first, then everything else in document order.
+  // The list is what the model reads top-down, and burying Connect under thirty
+  // unrelated buttons is how it concludes there is not one.
+  elements.sort((a, b) => {
+    const rank = (e) => (e.inDialog ? 0 : e.inTopCard ? 1 : e.inAside ? 3 : 2);
+    return rank(a) - rank(b) || a.y - b.y;
+  });
+
   return {
     personName,
     url: location.href,
+    /** Has the profile actually rendered, or are we looking at a shell? */
+    profileReady: !!(h1 && personName && elements.some((e) => e.inTopCard)),
     signedOut:
       /\/(login|checkpoint|authwall)/.test(location.pathname) ||
       !!document.querySelector('input[name="session_key"]'),
@@ -137,7 +176,7 @@ function observe() {
  * profiles for you", and their labels carry their own names, so a label naming
  * somebody else is disqualifying on its face.
  */
-function act({ decision, expectedName, forbiddenSource }) {
+function act({ decision, expectedName, forbiddenSource, goal }) {
   const FORBIDDEN_RE = new RegExp(forbiddenSource, "i");
   const el = document.querySelector(`[data-ft-idx="${decision.index}"]`);
   if (!el) return { ok: false, error: `element ${decision.index} is no longer on the page` };
@@ -153,8 +192,23 @@ function act({ decision, expectedName, forbiddenSource }) {
   // Somebody else's button. The check is deliberately narrow — it only fires
   // when the label names a person AND that person is not the one we are on.
   const norm = (s) => (s || "").toLowerCase().replace(/[^a-z0-9 ]+/g, " ").replace(/\s+/g, " ").trim();
-  const named = /^(invite|message|follow|connect with)\s+(.+?)\s+(to connect|to follow)?$/i.exec(label);
-  if (named && expectedName) {
+  // Following is not connecting. "Follow <name>" sits exactly where Connect sits
+  // on a profile that has no Connect on its card, and it was clicked as though
+  // it were one — which follows somebody on their real account instead of asking
+  // to connect, and leaves the button reading "Following, click to unfollow".
+  if (goal === "invite" && /^follow\b/i.test(label)) {
+    return { ok: false, error: `refused: "${label}" follows them, it does not connect` };
+  }
+
+  const named = /^(invite|message|follow|connect with)\s+(.+?)(\s+to (connect|follow))?$/i.exec(label);
+  if (named) {
+    // Fails closed. expectedName came back empty on a real profile and this
+    // check simply did not run, so a button naming somebody was allowed through
+    // unexamined. If we cannot say whose page this is, we cannot say the button
+    // is theirs either.
+    if (!expectedName) {
+      return { ok: false, error: `refused: "${label}" names a person and this profile could not be identified` };
+    }
     const who = norm(named[2]);
     if (who && who.length > 2 && !norm(label).includes(expectedName) && !expectedName.includes(who)) {
       return { ok: false, error: `refused: "${label}" is not ${expectedName}` };

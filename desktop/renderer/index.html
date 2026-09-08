@@ -40,6 +40,19 @@
       .link { background: none; border: 0; color: var(--brand-ink); font: inherit; font-size: 11px;
         cursor: pointer; padding: 0; text-decoration: underline; }
 
+      /* Collapsed, the panel is a 44px strip holding nothing but the control
+         that brings it back. Hiding the toggle along with everything else is
+         what made this a one-way door. */
+      #reopen { display: none; }
+      body.collapsed { width: 44px; padding: 10px 6px; overflow: hidden; }
+      body.collapsed > *:not(#reopen) { display: none !important; }
+      body.collapsed #reopen {
+        display: block; width: 32px; height: 32px; border-radius: 9px;
+        border: 1px solid var(--line); background: var(--surface); color: var(--ink);
+        font-size: 15px; line-height: 1; cursor: pointer; padding: 0;
+      }
+      body.collapsed #reopen:hover { background: var(--tint); }
+
       .head { display: flex; align-items: center; gap: 10px; margin-bottom: 4px; }
       .mark {
         width: 26px; height: 26px; border-radius: 8px; background: var(--brand);
@@ -138,6 +151,8 @@
     </style>
   </head>
   <body>
+    <button id="reopen" title="Show the panel">&#9654;</button>
+
     <div class="head">
       <span class="mark">F</span>
       <h1>Followthroo for LinkedIn</h1>

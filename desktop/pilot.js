@@ -19,8 +19,15 @@
 const { observe, act, FORBIDDEN } = require("./pilot-page");
 
 const MAX_STEPS = 8;
-/** Ask for a screenshot once the element list alone has not got us there. */
-const SCREENSHOT_AFTER_STEP = 3;
+/**
+ * Attach a screenshot from the second step onward.
+ *
+ * It used to be the fourth, which meant it never happened: the model gave up at
+ * step zero or one, so the fallback that was supposed to rescue a page the
+ * element list could not describe was never reached. A give_up is also not
+ * accepted until a screenshot has been shown at least once — see below.
+ */
+const SCREENSHOT_AFTER_STEP = 1;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -58,11 +65,18 @@ async function pilotAction({ page, action, apiBase, token, onStep = () => {} }) 
   const autoSend = action.autoSend === true;
   const history = [];
 
-  // Let the profile settle. Everything after this is driven by what is actually
-  // on the page, so this is the only fixed wait in the whole flow.
-  await sleep(2500 + Math.random() * 2000);
-
+  // Wait for the profile to actually be there, not merely for time to pass.
+  //
+  // LinkedIn serves the navbar immediately and hydrates the profile card after.
+  // A fixed sleep meant sometimes observing a page that had a complete global
+  // nav and no action row yet — and the model, shown a list of "Skip to main
+  // content" and "For Business", correctly reported no Connect button.
+  await sleep(1500 + Math.random() * 1000);
   let seen = await page.evaluate(observe);
+  for (let i = 0; i < 12 && !seen.profileReady && !seen.signedOut; i++) {
+    await sleep(1000);
+    seen = await page.evaluate(observe);
+  }
 
   if (seen.signedOut) {
     return { status: "failed", result: "not logged in to LinkedIn in this browser", fatal: "login" };
@@ -85,15 +99,20 @@ async function pilotAction({ page, action, apiBase, token, onStep = () => {} }) 
     return { status: "skipped", result: "already connected — no invitation to send" };
   }
 
+  let sawScreenshot = false;
+  let forceScreenshot = false;
+
   for (let step = 0; step < MAX_STEPS; step++) {
     if (seen.limitWall) {
       return { status: "failed", result: seen.limitWall, fatal: "limit" };
     }
 
-    const screenshot =
-      step >= SCREENSHOT_AFTER_STEP
-        ? (await page.screenshot({ type: "jpeg", quality: 55 })).toString("base64")
-        : null;
+    const wantShot = forceScreenshot || step >= SCREENSHOT_AFTER_STEP;
+    const screenshot = wantShot
+      ? (await page.screenshot({ type: "jpeg", quality: 55, fullPage: false })).toString("base64")
+      : null;
+    if (screenshot) sawScreenshot = true;
+    forceScreenshot = false;
 
     let decision;
     try {
@@ -122,6 +141,16 @@ async function pilotAction({ page, action, apiBase, token, onStep = () => {} }) 
       const why = String(decision.reason || "").toLowerCase();
       if (/already connected/.test(why)) {
         return { status: "skipped", result: "already connected — no invitation to send" };
+      }
+      // Giving up before ever seeing the page is not a judgement, it is a guess.
+      // The screenshot exists precisely for the pages the element list fails to
+      // describe, so it has to be shown before "there is no Connect" is believed.
+      if (!sawScreenshot) {
+        history.push(`said "${decision.reason}" from the element list alone — look at the page itself`);
+        forceScreenshot = true;
+        await sleep(600);
+        seen = await page.evaluate(observe);
+        continue;
       }
       // Carry what was on screen. "Connect button not found" on its own cannot
       // be acted on by anyone who was not watching; the list of what was
@@ -167,6 +196,7 @@ async function pilotAction({ page, action, apiBase, token, onStep = () => {} }) 
       decision,
       expectedName: seen.personName,
       forbiddenSource: FORBIDDEN.source,
+      goal,
     });
 
     if (!outcome.ok) {

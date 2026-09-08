@@ -1,0 +1,5 @@
+{"at":"2026-09-08T18:47:57.876Z","event":"run-start","cap":3,"dryRun":true,"apiBase":"http://127.0.0.1:60273"}
+{"at":"2026-09-08T18:48:10.389Z","event":"action-done","who":"Lead 1","url":"https://www.linkedin.com/in/anirudh-bisht/","status":"drafted","result":"[no AI — could not reach the assistant: not found] invitation drafted — review it and click Send yourself"}
+{"at":"2026-09-08T18:48:18.994Z","event":"action-done","who":"Lead 2","url":"https://www.linkedin.com/in/anirudh-bisht/","status":"drafted","result":"[no AI — could not reach the assistant: not found] invitation drafted — review it and click Send yourself"}
+{"at":"2026-09-08T18:48:27.270Z","event":"action-done","who":"Lead 3","url":"https://www.linkedin.com/in/anirudh-bisht/","status":"drafted","result":"[no AI — could not reach the assistant: not found] invitation drafted — review it and click Send yourself"}
+{"at":"2026-09-08T18:48:27.283Z","event":"run-end","sent":0,"failed":0,"skipped":3,"attempted":3,"stoppedBecause":"Test run finished — 3 people opened, nothing sent."}

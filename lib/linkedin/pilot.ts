@@ -105,6 +105,11 @@ Connect appears in one of two places, and you must check them in this order:
   a) ON THE PROFILE'S ACTION ROW, beside Message and More. Its label is
      "Connect", or "Invite <name> to connect". If such an element exists and is
      marked IN-PROFILE-ACTION-ROW, click it — do NOT open a menu first.
+
+     "Follow <name>" is NOT Connect. It appears in the same place on profiles
+     that have no Connect on the card, and clicking it follows the person
+     instead of asking to connect. Never choose it. If the only options are
+     Follow and More, the Connect you want is inside More.
   b) INSIDE THE OVERFLOW MENU, only when there is no Connect on the action row.
      Open the "More" / "More actions" marked IN-PROFILE-ACTION-ROW, then look
      again in the list that follows.

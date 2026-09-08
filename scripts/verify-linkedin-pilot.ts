@@ -91,7 +91,7 @@ async function main() {
       const page = await openPage(RIGHT + "?cardconnect");
       const expectedName = (await page.evaluate(observe)).personName;
       const run = (decision: Decision) =>
-        page.evaluate(act, { decision, expectedName, forbiddenSource: FORBIDDEN.source });
+        page.evaluate(act, { decision, expectedName, forbiddenSource: FORBIDDEN.source, goal: "invite" });
 
       // A stranger's Connect, from the "People also viewed" rail.
       const strangerIdx = await indexOf(page, /Wrong Person One/i);
@@ -114,6 +114,41 @@ async function main() {
       await page.close();
     }
 
+    console.log("\n1b. Follow is not Connect, and an unidentified profile is not a free pass");
+    {
+      // The variant that has a Connect on the card, so the fail-closed check
+      // below has a real Connect to be refused on.
+      const page = await openPage(RIGHT + "?cardconnect");
+      const expectedName = (await page.evaluate(observe)).personName;
+      const run = (decision: Decision, name = expectedName) =>
+        page.evaluate(act, { decision, expectedName: name, forbiddenSource: FORBIDDEN.source, goal: "invite" });
+
+      // What actually happened on a real profile: the model reported "Connect
+      // button is available directly on the profile" and clicked
+      // "Follow <name>". It followed her on her real account. Nothing stopped
+      // it — Follow is not destructive, and the name check was inert because
+      // personName had come back empty.
+      await page.evaluate(() => {
+        const b = document.createElement("button");
+        b.setAttribute("aria-label", "Follow Anirudh Bisht");
+        b.addEventListener("click", () => {
+          (window as never as { __followed?: boolean }).__followed = true;
+        });
+        document.querySelector("main section")?.appendChild(b);
+      });
+      const followIdx = await indexOf(page, /^Follow Anirudh Bisht/i);
+      const follow = await run({ action: "click", index: followIdx });
+      ok(follow.ok === false, `Follow is refused for an invite (${follow.error ?? "ALLOWED"})`);
+      const followed = await page.evaluate(() => (window as never as { __followed?: boolean }).__followed ?? false);
+      ok(followed === false, `and nobody was followed (followed: ${followed})`);
+
+      // The name check must fail closed rather than open.
+      const connectIdx = await indexOf(page, /Invite Anirudh Bisht to connect/i);
+      const unknown = await run({ action: "click", index: connectIdx }, "");
+      ok(unknown.ok === false, `a named button is refused when the profile is unidentified (${unknown.error ?? "ALLOWED"})`);
+      await page.close();
+    }
+
     console.log("\n2. destructive actions are refused whatever the model says");
     {
       const page = await openPage(RIGHT + "?connected");
@@ -124,6 +159,7 @@ async function main() {
         decision: { action: "click", index: moreIdx },
         expectedName,
         forbiddenSource: FORBIDDEN.source,
+        goal: "invite",
       });
       await page.waitForTimeout(400);
 
@@ -133,6 +169,7 @@ async function main() {
           decision: { action: "click", index: idx },
           expectedName,
           forbiddenSource: FORBIDDEN.source,
+          goal: "invite",
         });
         ok(res.ok === false, `${name} is refused (${res.error ?? "ALLOWED"})`);
       }

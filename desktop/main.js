@@ -26,9 +26,16 @@ const { runBatch, MAX_PER_DAY } = require("./runner");
 let win = null;
 /** The hosted web app. Null until the window exists. */
 let webView = null;
-/** Panel width in px; 0 when collapsed. */
-let panelWidth = 400;
+/**
+ * Panel width in px. Collapsing narrows it to a strip rather than to nothing.
+ *
+ * Zero looked tidier and was a trap: the only control that brings the panel back
+ * lives inside the panel, so hiding it hid the way to unhide it and the app had
+ * to be restarted. A strip keeps the toggle on screen.
+ */
 const PANEL_WIDTH = 400;
+const PANEL_COLLAPSED = 44;
+let panelWidth = PANEL_WIDTH;
 /** True while a batch is in flight. Guards against two runs on one queue. */
 let running = false;
 let stopRequested = false;
@@ -389,9 +396,9 @@ ipcMain.handle("auth:status", async () => {
 
 /** Collapse the panel to give the web app the whole window, and back. */
 ipcMain.handle("panel:toggle", (_e, collapsed) => {
-  panelWidth = collapsed ? 0 : PANEL_WIDTH;
+  panelWidth = collapsed ? PANEL_COLLAPSED : PANEL_WIDTH;
   layout();
-  return { collapsed: panelWidth === 0 };
+  return { collapsed: panelWidth === PANEL_COLLAPSED };
 });
 
 ipcMain.handle("open:external", (_e, url) => {

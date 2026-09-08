@@ -65,14 +65,19 @@ function bannerInitScript() {
     const bar = document.createElement("div");
     bar.setAttribute("data-followthroo-overlay", "1");
     bar.style.cssText = [
-      "position:fixed", "inset:0 0 auto 0", "z-index:2147483647",
+      "position:fixed",
+      "inset:0 0 auto 0",
+      "z-index:2147483647",
       "pointer-events:none",
-      "background:#b91c1c", "color:#fff",
+      "background:#b91c1c",
+      "color:#fff",
       "font:600 13px/1.45 -apple-system,Segoe UI,Roboto,sans-serif",
-      "padding:9px 14px", "text-align:center",
+      "padding:9px 14px",
+      "text-align:center",
       "box-shadow:0 2px 10px rgba(0,0,0,.28)",
     ].join(";");
-    bar.textContent = "Followthroo is working in this window — please leave it alone. Carry on using the rest of your computer.";
+    bar.textContent =
+      "Followthroo is working in this window — please leave it alone. Carry on using the rest of your computer.";
     (document.body || document.documentElement).appendChild(bar);
   };
   // Expose an updater so the run can show progress without re-injecting.
@@ -102,7 +107,10 @@ function bannerInitScript() {
  */
 function makeLog(userDataPath) {
   const dir = path.join(userDataPath, "logs");
-  const file = path.join(dir, `run-${new Date().toISOString().replace(/[:.]/g, "-")}.jsonl`);
+  const file = path.join(
+    dir,
+    `run-${new Date().toISOString().replace(/[:.]/g, "-")}.jsonl`,
+  );
   let broken = false;
   return {
     file,
@@ -110,7 +118,10 @@ function makeLog(userDataPath) {
       if (broken) return;
       try {
         fs.mkdirSync(dir, { recursive: true });
-        fs.appendFileSync(file, JSON.stringify({ at: new Date().toISOString(), ...entry }) + "\n");
+        fs.appendFileSync(
+          file,
+          JSON.stringify({ at: new Date().toISOString(), ...entry }) + "\n",
+        );
       } catch {
         // Logging must never take down a run that is otherwise working.
         broken = true;
@@ -134,7 +145,10 @@ async function api(apiBase, pathname, { method = "GET", token, body } = {}) {
     body: body ? JSON.stringify(body) : undefined,
   });
   const json = await res.json().catch(() => ({}));
-  if (res.status === 401) throw new Error("Your pairing token was rejected. Copy a fresh one from Followthroo → LinkedIn.");
+  if (res.status === 401)
+    throw new Error(
+      "Your pairing token was rejected. Copy a fresh one from Followthroo → LinkedIn.",
+    );
   if (!res.ok || json.ok === false) {
     throw new Error(json.error || `Server returned ${res.status}`);
   }
@@ -197,30 +211,46 @@ const SIGNED_OUT = /\/(login|uas\/login|checkpoint|authwall)/;
  * through — including through a 2FA prompt, which is the slowest and most
  * common reason a first run takes minutes.
  */
-async function waitForSignIn(context, { onEvent, shouldStop, timeoutMs = 5 * 60 * 1000 }) {
+async function waitForSignIn(
+  context,
+  { onEvent, shouldStop, timeoutMs = 5 * 60 * 1000 },
+) {
   const page = context.pages()[0] || (await context.newPage());
-  await page.goto("https://www.linkedin.com/feed/", { waitUntil: "domcontentloaded" }).catch(() => {});
+  await page
+    .goto("https://www.linkedin.com/feed/", { waitUntil: "domcontentloaded" })
+    .catch(() => {});
   await sleep(2500);
   if (!SIGNED_OUT.test(page.url())) return { signedIn: true, page };
 
   onEvent({
     type: "needs-signin",
-    message: "Sign in to LinkedIn in the window that just opened. The run starts by itself once you're through.",
+    message:
+      "Sign in to LinkedIn in the window that just opened. The run starts by itself once you're through.",
   });
 
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    if (shouldStop()) return { signedIn: false, page, reason: "You stopped the run." };
+    if (shouldStop())
+      return { signedIn: false, page, reason: "You stopped the run." };
     await sleep(2000);
     // A closed tab is the person answering "not now".
-    if (page.isClosed()) return { signedIn: false, page, reason: "The sign-in window was closed." };
+    if (page.isClosed())
+      return {
+        signedIn: false,
+        page,
+        reason: "The sign-in window was closed.",
+      };
     if (!SIGNED_OUT.test(page.url())) {
       onEvent({ type: "status", message: "Signed in. Starting…" });
       await sleep(1500);
       return { signedIn: true, page };
     }
   }
-  return { signedIn: false, page, reason: "Gave up waiting for sign-in. Press Start when you're ready." };
+  return {
+    signedIn: false,
+    page,
+    reason: "Gave up waiting for sign-in. Press Start when you're ready.",
+  };
 }
 
 /**
@@ -248,7 +278,13 @@ async function runBatch({
    */
   launch = openBrowser,
 }) {
-  const summary = { sent: 0, failed: 0, skipped: 0, attempted: 0, stoppedBecause: null };
+  const summary = {
+    sent: 0,
+    failed: 0,
+    skipped: 0,
+    attempted: 0,
+    stoppedBecause: null,
+  };
   const emit = (type, payload = {}) => onEvent({ type, ...payload });
 
   const cap = Math.max(0, Math.min(limit, MAX_PER_DAY));
@@ -267,6 +303,9 @@ async function runBatch({
    */
   const maxAttempts = cap * 3 + 10;
 
+  /** How many times one person is retried before the run accepts defeat. */
+  const MAX_ATTEMPTS_PER_LEAD = 3;
+
   /**
    * What "cap" counts.
    *
@@ -284,7 +323,9 @@ async function runBatch({
     context = await launch({ userDataPath });
   } catch (e) {
     // The most common cause by far, and the least obvious from the raw error.
-    const hint = /executable doesn't exist|Failed to launch/i.test(String(e && e.message))
+    const hint = /executable doesn't exist|Failed to launch/i.test(
+      String(e && e.message),
+    )
       ? "Google Chrome could not be started. Install Chrome, then try again."
       : String((e && e.message) || e);
     summary.stoppedBecause = hint;
@@ -296,7 +337,10 @@ async function runBatch({
     await context.addInitScript(bannerInitScript);
 
     emit("status", { message: "Checking your LinkedIn session…" });
-    const { signedIn, page, reason } = await waitForSignIn(context, { onEvent, shouldStop });
+    const { signedIn, page, reason } = await waitForSignIn(context, {
+      onEvent,
+      shouldStop,
+    });
     if (!signedIn) {
       summary.stoppedBecause = reason;
       emit("fatal", { message: reason });
@@ -363,50 +407,96 @@ async function runBatch({
       });
 
       let outcome;
-      try {
-        await page.goto(action.linkedinUrl, { waitUntil: "domcontentloaded" });
-        await page
-          .evaluate(
-            (text) => window.__ftBanner && window.__ftBanner(text),
-            `Followthroo is working in this window — leave it alone. Sending ${progress() + 1} of ${cap}.`,
-          )
-          .catch(() => {});
-
-        // The model drives. It reads whatever is actually on the page, which is
-        // what LinkedIn kept changing out from under a selector — Connect on the
-        // card, Connect in an overflow menu, Connect renamed.
-        outcome = await pilotAction({
-          page,
-          action: { ...action, autoSend },
-          apiBase,
-          token,
-          onStep: (s) => {
-            log.write({ event: "step", who, url: action.linkedinUrl, ...s });
-            emit("status", {
-              message: s.refused
-                ? `Ignored an unsafe suggestion: ${s.refused}`
-                : `Working on ${who}: ${s.decision?.reason || s.decision?.action || "thinking"}`,
-            });
-          },
-        });
-
-        // Only when no model is configured at all. The selector path still
-        // works for the common layouts and is better than refusing to run, but
-        // it is a floor, not the plan.
-        if (/could not reach the assistant|No model is configured/i.test(outcome.result || "")) {
-          const why = outcome.result;
-          emit("status", { message: "No assistant available — falling back to the built-in rules." });
-          outcome = await page.evaluate(fillLinkedInAction, { ...action, autoSend });
-          // Say which path produced this. Without it, a fallback failure reads
-          // as "the AI could not do it" when the AI was never asked — and the
-          // real problem (an endpoint that is not deployed, a missing key) is
-          // invisible in the one place anybody looks.
-          outcome.result = `[no AI — ${why}] ${outcome.result}`;
-        } else {
-          outcome.result = `[AI] ${outcome.result}`;
+      // Stay on this person until it works.
+      //
+      // A failure is usually the page rather than the person — it rendered
+      // slowly, the menu did not open, the model chose wrong once. Moving
+      // straight on burns the queue on transient problems and produces a run
+      // reporting twenty failures that were mostly one retryable thing.
+      //
+      // The retry stays inside this iteration, on the action already claimed:
+      // going back to the top of the loop would claim somebody *else* and
+      // abandon the person it was meant to be retrying.
+      //
+      // Bounded, because some profiles genuinely cannot be connected to, and a
+      // run that never advances is worse than one that gives up — it would sit
+      // on a single follow-only profile until the day's allowance expired.
+      for (let attempt = 1; attempt <= MAX_ATTEMPTS_PER_LEAD; attempt++) {
+        if (attempt > 1) {
+          log.write({
+            event: "retry",
+            who,
+            attempt,
+            previous: outcome?.result,
+          });
+          emit("status", {
+            message: `${who}: ${outcome?.result || "did not work"} — trying again (${attempt} of ${MAX_ATTEMPTS_PER_LEAD})`,
+          });
+          await sleep(4000);
         }
-      } catch (e) {
-        outcome = { status: "failed", result: String((e && e.message) || e) };
+        try {
+          await page.goto(action.linkedinUrl, {
+            waitUntil: "domcontentloaded",
+          });
+          await page
+            .evaluate(
+              (text) => window.__ftBanner && window.__ftBanner(text),
+              `Followthroo is working in this window — leave it alone. Sending ${progress() + 1} of ${cap}.`,
+            )
+            .catch(() => {});
+
+          // The model drives. It reads whatever is actually on the page, which is
+          // what LinkedIn kept changing out from under a selector — Connect on the
+          // card, Connect in an overflow menu, Connect renamed.
+          outcome = await pilotAction({
+            page,
+            action: { ...action, autoSend },
+            apiBase,
+            token,
+            onStep: (s) => {
+              log.write({ event: "step", who, url: action.linkedinUrl, ...s });
+              emit("status", {
+                message: s.refused
+                  ? `Ignored an unsafe suggestion: ${s.refused}`
+                  : `Working on ${who}: ${s.decision?.reason || s.decision?.action || "thinking"}`,
+              });
+            },
+          });
+
+          // Only when no model is configured at all. The selector path still
+          // works for the common layouts and is better than refusing to run, but
+          // it is a floor, not the plan.
+          if (
+            /could not reach the assistant|No model is configured/i.test(
+              outcome.result || "",
+            )
+          ) {
+            const why = outcome.result;
+            emit("status", {
+              message:
+                "No assistant available — falling back to the built-in rules.",
+            });
+            outcome = await page.evaluate(fillLinkedInAction, {
+              ...action,
+              autoSend,
+            });
+            // Say which path produced this. Without it, a fallback failure reads
+            // as "the AI could not do it" when the AI was never asked — and the
+            // real problem (an endpoint that is not deployed, a missing key) is
+            // invisible in the one place anybody looks.
+            outcome.result = `[no AI — ${why}] ${outcome.result}`;
+          } else {
+            outcome.result = `[AI] ${outcome.result}`;
+          }
+        } catch (e) {
+          outcome = { status: "failed", result: String((e && e.message) || e) };
+        }
+
+        // Anything but a plain failure is final. "skipped" is a decision about
+        // this person — already connected, no invitation to send — and retrying it
+        // would only reach the same conclusion three times. A fatal stops the
+        // whole run, so retrying is worse than pointless.
+        if (outcome.status !== "failed" || outcome.fatal) break;
       }
 
       // A dry run reports nothing to the server: the point is to watch what it
@@ -415,7 +505,11 @@ async function runBatch({
         await api(apiBase, "/api/linkedin/queue", {
           method: "POST",
           token,
-          body: { actionId: action.id, status: outcome.status, result: outcome.result },
+          body: {
+            actionId: action.id,
+            status: outcome.status,
+            result: outcome.result,
+          },
         }).catch(() => {
           // Best effort. The server reclaims a stale in_progress row after 15
           // minutes, so a dropped report costs a retry, not a lost action.
@@ -426,7 +520,13 @@ async function runBatch({
       else if (outcome.status === "failed") summary.failed++;
       else summary.skipped++;
 
-      log.write({ event: "action-done", who, url: action.linkedinUrl, status: outcome.status, result: outcome.result });
+      log.write({
+        event: "action-done",
+        who,
+        url: action.linkedinUrl,
+        status: outcome.status,
+        result: outcome.result,
+      });
       emit("action-done", {
         who,
         status: outcome.status,
@@ -443,7 +543,8 @@ async function runBatch({
         break;
       }
 
-      consecutiveFailures = outcome.status === "failed" ? consecutiveFailures + 1 : 0;
+      consecutiveFailures =
+        outcome.status === "failed" ? consecutiveFailures + 1 : 0;
       if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
         summary.stoppedBecause = `Stopped after ${MAX_CONSECUTIVE_FAILURES} failures in a row — something has changed on LinkedIn, or this account is being throttled.`;
         emit("fatal", { message: summary.stoppedBecause });
@@ -462,7 +563,8 @@ async function runBatch({
       // Twenty invitations fired back to back look nothing like a person and
       // are exactly what gets an account flagged.
       const waitSec = Math.round(
-        pacing.minDelaySec + Math.random() * Math.max(0, pacing.maxDelaySec - pacing.minDelaySec),
+        pacing.minDelaySec +
+          Math.random() * Math.max(0, pacing.maxDelaySec - pacing.minDelaySec),
       );
       emit("waiting", { seconds: waitSec, sent: progress(), cap });
       for (let i = waitSec; i > 0; i--) {
@@ -486,4 +588,11 @@ async function runBatch({
   return summary;
 }
 
-module.exports = { runBatch, MAX_PER_DAY, MAX_CONSECUTIVE_FAILURES, profileDir, openBrowser, waitForSignIn };
+module.exports = {
+  runBatch,
+  MAX_PER_DAY,
+  MAX_CONSECUTIVE_FAILURES,
+  profileDir,
+  openBrowser,
+  waitForSignIn,
+};
