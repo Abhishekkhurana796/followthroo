@@ -151,20 +151,92 @@ async function fillLinkedInAction(action) {
    */
   const CONNECT_RE = /^(Connect|Invite)\b/i;
 
-  async function findConnect() {
-    const direct = btnByLabel(CONNECT_RE);
-    if (direct) return direct;
+  const norm = (s) => (s || "").toLowerCase().replace(/[^a-z0-9 ]+/g, " ").replace(/\s+/g, " ").trim();
 
+  /**
+   * The profile owner's name, from the <h1>.
+   *
+   * This is what makes targeting reliable. LinkedIn writes the person's name
+   * into the button — "Invite Sofia Haltrup to connect" — so matching on the
+   * name identifies the right button wherever it happens to sit in the DOM,
+   * and simultaneously rules out the Connect buttons belonging to strangers in
+   * "More profiles for you", whose labels carry *their* names.
+   *
+   * Anchoring to structure instead was the mistake: `scope()` walks up from the
+   * <h1> to a section, and when LinkedIn's markup does not put the action row
+   * inside that same element the visible Connect button becomes invisible to
+   * the search. Which is exactly what happened — it opened the overflow menu
+   * looking for a button that was on screen the whole time.
+   */
+  const profileName = () => {
+    const h1 = document.querySelector("main h1, h1");
+    // First line only: the heading can carry a verified badge or pronouns.
+    return norm((h1?.textContent || "").split("\n")[0]);
+  };
+
+  /** Clickables anywhere in the page that we are permitted to consider. */
+  const candidates = () => {
+    const main = document.querySelector("main") || document.body;
+    return Array.from(main.querySelectorAll(CLICKABLE)).filter(
+      (b) => !b.closest("aside") && !b.closest("[data-followthroo-overlay]"),
+    );
+  };
+
+  const isConnectLabel = (l) => /invite\b[\s\S]*\bto connect\b/i.test(l) || CONNECT_RE.test(l);
+
+  async function findConnect() {
+    const name = profileName();
+
+    // 1. By name. The strongest signal, and immune to how the page is nested.
+    if (name) {
+      const byName = candidates().find((b) => {
+        const l = label(b);
+        return /invite\b[\s\S]*\bto connect\b/i.test(l) && norm(l).includes(name);
+      });
+      if (byName) return byName;
+    }
+
+    // 2. Within the profile's own card, by label. Covers a button whose
+    //    accessible name omits the person (rarer, but it happens).
+    const scoped = btnByLabel(CONNECT_RE);
+    if (scoped) return scoped;
+
+    // 3. Behind the overflow menu, which is where LinkedIn puts it on plenty of
+    //    profiles.
     const menu = await openMoreMenu();
     if (!menu) return null;
-    return Array.from(menu.querySelectorAll(CLICKABLE)).find((b) => {
+    const inMenu = Array.from(menu.querySelectorAll(CLICKABLE)).find((b) => {
       if (b.closest("aside") || b.closest("[data-followthroo-overlay]")) return false;
       const l = label(b);
       // "Connect" must not match "Remove Connection", and the menu also offers
       // Follow / Save to PDF / Report, which a looser match would happily click.
-      return CONNECT_RE.test(l) && !/remove connection/i.test(l);
+      return isConnectLabel(l) && !/remove connection/i.test(l);
     });
+
+    // Leave the page as we found it. An overflow menu hanging open is how the
+    // last failure looked to the person watching: something clearly happened,
+    // and then nothing.
+    if (!inMenu) {
+      document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+      document.querySelector("main")?.click?.();
+    }
+    return inMenu;
   }
+
+  /**
+   * What we could see, for when we could not see Connect.
+   *
+   * A failure that says only "could not find a Connect button" is unactionable
+   * — the next person has to reproduce it against a live profile to learn
+   * anything. Listing the buttons that were actually on the page turns one
+   * report into a fix.
+   */
+  const visibleActions = () =>
+    candidates()
+      .map((b) => label(b))
+      .filter((l) => l && l.length < 60)
+      .slice(0, 12)
+      .join(" | ");
 
   /**
    * LinkedIn's own ceiling, hit mid-run.
@@ -327,7 +399,9 @@ async function fillLinkedInAction(action) {
     // looking like an empty queue.
     return {
       status: "failed",
-      result: "could not find a Connect button, and this profile is not shown as a connection — LinkedIn may have changed its layout",
+      result:
+        "could not find a Connect button, and this profile is not shown as a connection — LinkedIn may have changed its layout. Buttons seen: " +
+        (visibleActions() || "none"),
     };
   } catch (e) {
     return { status: "failed", result: String((e && e.message) || e) };

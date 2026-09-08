@@ -222,6 +222,24 @@ async function main() {
       ok(r.note === "Hi Anirudh —", "the note still reaches the dialog");
     }
 
+    // 8b. Connect is on the card, and the overflow menu holds only Send profile,
+    //     Save to PDF, Follow, Report, About. This is what a real profile looked
+    //     like when it failed: the button was visible the whole time, and the app
+    //     opened the menu hunting for it, because the search was anchored to
+    //     whatever element scope() walked up to from the <h1> rather than to the
+    //     person. The menu must not even be opened.
+    {
+      const r = await runMenu(RIGHT + "?cardconnect", {
+        type: "invite",
+        linkedinUrl: RIGHT,
+        note: "Hi Anirudh —",
+        autoSend: true,
+      });
+      ok(r.invited === "right", `uses the Connect that is already on the card (invited: ${r.invited})`);
+      ok(r.menuOpened !== true, `and does not open the overflow menu at all (opened: ${r.menuOpened})`);
+      ok(r.status === "sent", `reports it sent (status: ${r.status} — ${r.result})`);
+    }
+
     // 9. Already a connection. An explicit invite has nothing to do — and must
     //    NOT quietly become a direct message carrying a connection-request note.
     {

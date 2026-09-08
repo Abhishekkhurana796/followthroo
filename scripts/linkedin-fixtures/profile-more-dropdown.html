@@ -22,6 +22,13 @@
   loose match picks the wrong item — "Remove Connection" in particular contains
   the word "Connection" and must never be clicked.
 
+  ?cardconnect — the shape seen in the wild: Connect IS on the card, and the
+                overflow menu holds only Send profile / Save to PDF / Follow /
+                Report / About. The card's Connect must be clicked and the menu
+                must never be opened. Structure-anchored searching failed this
+                exactly: the visible button was outside the element scope()
+                picked, so it opened the menu looking for something already on
+                screen.
   ?connected  — renders a 1st-degree profile: no Connect anywhere, a distance
                 badge, and Remove Connection in the menu.
   ?nomenu     — no Connect and no evidence of connection: a selector miss, which
@@ -41,6 +48,7 @@
     <span class="dist-value" id="dist"></span>
     <div class="text-body-medium">Marketing Manager at Welco Agencies</div>
     <button aria-label="Message Anirudh Bisht" data-who="right-msg">Message</button>
+    <button id="cardConnect" aria-label="Invite Anirudh Bisht to connect" data-who="right" style="display:none">Connect</button>
     <div class="artdeco-dropdown">
       <button id="moreBtn" aria-label="More actions" aria-expanded="false">More</button>
     </div>
@@ -59,6 +67,9 @@
   const q = new URLSearchParams(location.search);
   const connected = q.has("connected");
   const noMenu = q.has("nomenu");
+  const cardConnect = q.has("cardconnect");
+  if (cardConnect) document.getElementById("cardConnect").style.display = "";
+  else document.getElementById("cardConnect").remove();
 
   if (connected) document.getElementById("dist").textContent = "· 1st";
 
@@ -84,7 +95,7 @@
     items.push(["Follow Anirudh Bisht", "follow"]);
     items.push(["Save to PDF", "pdf"]);
     if (connected) items.push(["Remove Connection", "remove"]);
-    if (!connected && !noMenu) items.push(["Invite Anirudh Bisht to connect", "right"]);
+    if (!connected && !noMenu && !cardConnect) items.push(["Invite Anirudh Bisht to connect", "right"]);
     items.push(["Report or block", "report"]);
 
     for (const [aria, who] of items) {
