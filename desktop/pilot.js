@@ -64,9 +64,11 @@ async function askServer(apiBase, token, observation) {
  * Returns the same shape the selector path did — { status, result, fatal? } —
  * so the runner does not care which one produced it.
  */
-async function pilotAction({ page, action, apiBase, token, onStep = () => {} }) {
+async function pilotAction({ page, action, apiBase, token, onStep = () => {}, useNote = true }) {
   const goal = action.type === "message" ? "message" : "invite";
-  const note = action.note || null;
+  // No note left in today's budget means no note on this one. An invitation
+  // without one still arrives.
+  const note = useNote ? action.note || null : null;
   const autoSend = action.autoSend === true;
   const history = [];
 
@@ -126,6 +128,7 @@ async function pilotAction({ page, action, apiBase, token, onStep = () => {} }) 
         personName: seen.personName,
         note,
         autoSend,
+        useNote: !!(useNote && action.note),
         url: seen.url,
         step,
         history,
@@ -147,6 +150,21 @@ async function pilotAction({ page, action, apiBase, token, onStep = () => {} }) 
       if (/already connected/.test(why)) {
         return { status: "skipped", result: "already connected — no invitation to send" };
       }
+      // "No Connect button" is not a conclusion until the overflow menu has been
+      // opened. On a follow-primary profile Connect is only in that menu, and
+      // the model kept reading its absence from the card as "already connected"
+      // — on 2nd-degree people, who are exactly the ones worth inviting.
+      const openedMenu = history.some((h) => /clicked "(more|more actions)/i.test(h));
+      if (goal === "invite" && !openedMenu && !/already connected/.test(why)) {
+        history.push(
+          "gave up without opening the profile's More menu — Connect is often only in there, so open it and look",
+        );
+        forceScreenshot = true;
+        await sleep(600);
+        seen = await page.evaluate(observe);
+        continue;
+      }
+
       // Giving up before ever seeing the page is not a judgement, it is a guess.
       // The screenshot exists precisely for the pages the element list fails to
       // describe, so it has to be shown before "there is no Connect" is believed.
@@ -191,7 +209,13 @@ async function pilotAction({ page, action, apiBase, token, onStep = () => {} }) 
       if (!autoSend) {
         return { status: "drafted", result: "filled in and left for you to send", kind: goal };
       }
-      return { status: "sent", result: goal === "invite" ? "invitation sent" : "message sent", kind: goal };
+      return {
+        status: "sent",
+        result: goal === "invite" ? "invitation sent" : "message sent",
+        kind: goal,
+        // Only a note that was actually typed spends the day's allowance.
+        noteUsed: history.some((h) => /^typed/.test(h)),
+      };
     }
 
     // `act` is passed by reference so Playwright serializes its source into the

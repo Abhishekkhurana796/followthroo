@@ -17,7 +17,20 @@ const DEFAULTS = {
   /** Reset each calendar day; see `dayKey` below. */
   sentToday: 0,
   sentOn: "",
+  /** Personalised notes used today; LinkedIn allows very few. */
+  notesToday: 0,
 };
+
+/**
+ * How many invitations a day may carry a note.
+ *
+ * LinkedIn caps personalised connection notes at a handful per day on a free
+ * account — spending them on the first few invitations means every later one
+ * silently fails or goes without. So the note is a budgeted resource: the first
+ * few get one, the rest go without, and an invitation without a note is still an
+ * invitation.
+ */
+const NOTE_DAILY_LIMIT = 3;
 
 function file(userDataPath) {
   return path.join(userDataPath, "settings.json");
@@ -34,6 +47,7 @@ function read(userDataPath) {
     // A count from yesterday must not eat into today's allowance.
     if (merged.sentOn !== dayKey()) {
       merged.sentToday = 0;
+      merged.notesToday = 0;
       merged.sentOn = dayKey();
     }
     return merged;
@@ -72,4 +86,17 @@ function normaliseApiBase(input) {
   return { ok: true, value };
 }
 
-module.exports = { read, write, countSend, normaliseApiBase, DEFAULTS };
+/** Record that an invitation carried a note. */
+function countNote(userDataPath) {
+  const cur = read(userDataPath);
+  return write(userDataPath, { notesToday: (cur.notesToday || 0) + 1, sentOn: dayKey() });
+}
+
+/** Is there a note left in today's budget? */
+function noteAllowed(userDataPath) {
+  return (read(userDataPath).notesToday || 0) < NOTE_DAILY_LIMIT;
+}
+
+module.exports = {
+  read, write, countSend, countNote, noteAllowed, normaliseApiBase, DEFAULTS, NOTE_DAILY_LIMIT,
+};

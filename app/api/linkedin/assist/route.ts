@@ -28,6 +28,7 @@ const Body = z.object({
   personName: z.string().max(200),
   note: z.string().max(4000).nullable(),
   autoSend: z.boolean(),
+  useNote: z.boolean().optional(),
   url: z.string().max(500),
   step: z.number().int().min(0).max(20),
   history: z.array(z.string().max(300)).max(20),

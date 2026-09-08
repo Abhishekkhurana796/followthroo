@@ -265,6 +265,18 @@ async function runBatch({
   apiBase,
   token,
   userDataPath,
+  /**
+   * Is a personalised note still within today's allowance?
+   *
+   * LinkedIn permits only a few notes a day. Spending them on whoever happens to
+   * be first in the queue means every later invitation goes without one anyway —
+   * so the budget is checked per action, and an invitation without a note is
+   * still an invitation. Injected so the runner need not know where the count
+   * is kept.
+   */
+  noteAllowed = () => true,
+  /** Called when an invitation actually carried a note. */
+  onNoteUsed = () => {},
   limit = MAX_PER_DAY,
   dryRun = false,
   onEvent = () => {},
@@ -453,6 +465,10 @@ async function runBatch({
             action: { ...action, autoSend },
             apiBase,
             token,
+            // Checked per action rather than once per run: the allowance is
+            // spent as the run goes, so the fourth invitation of the day should
+            // go without a note even though the first three carried one.
+            useNote: noteAllowed(),
             onStep: (s) => {
               log.write({ event: "step", who, url: action.linkedinUrl, ...s });
               emit("status", {
@@ -520,12 +536,18 @@ async function runBatch({
       else if (outcome.status === "failed") summary.failed++;
       else summary.skipped++;
 
+      // Spend the allowance only on a note that was actually typed and sent.
+      // Charging for an attempt would exhaust three notes on three failures and
+      // leave the ones that worked without any.
+      if (outcome.status === "sent" && outcome.noteUsed) onNoteUsed();
+
       log.write({
         event: "action-done",
         who,
         url: action.linkedinUrl,
         status: outcome.status,
         result: outcome.result,
+        noteUsed: !!outcome.noteUsed,
       });
       emit("action-done", {
         who,

@@ -82,9 +82,20 @@ function observe() {
    * action row was buried below all of it. The model reported no Connect button
    * on a page that plainly had one.
    */
-  const chrome = (el) =>
-    !!el.closest('header, nav, footer, [role="banner"], [role="navigation"], .global-nav, #global-nav') ||
-    /^skip to |^close jump menu/i.test((el.textContent || "").trim());
+  const chrome = (el) => {
+    if (el.closest('header, nav, footer, [role="banner"], [role="navigation"], .global-nav, #global-nav')) {
+      return true;
+    }
+    const t = (el.getAttribute("aria-label") || el.textContent || "").trim();
+    // The activity feed further down a profile contributes a control menu, a
+    // reaction button and a repost button per post, which crowded the list with
+    // a dozen "Open control menu for post by …" entries and pushed the action
+    // row out of sight. None of it can send an invitation.
+    return (
+      /^skip to |^close jump menu/i.test(t) ||
+      /^open control menu for post|^reaction button|^open reactions menu|^repost|^…\s*more$|^see more$/i.test(t)
+    );
+  };
 
   const nodes = Array.from(document.querySelectorAll(CLICKABLE))
     .filter(visible)

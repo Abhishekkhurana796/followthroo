@@ -360,6 +360,8 @@ ipcMain.handle("run:start", async (_e, { dryRun = false } = {}) => {
       userDataPath,
       limit: dryRun ? MAX_PER_DAY : remaining,
       dryRun,
+      noteAllowed: () => store.noteAllowed(userDataPath),
+      onNoteUsed: () => store.countNote(userDataPath),
       shouldStop: () => stopRequested,
       onEvent: (evt) => {
         if (evt.type === "action-done" && evt.status === "sent" && !dryRun) {

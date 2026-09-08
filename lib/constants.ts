@@ -17,7 +17,7 @@ export const EXTENSION_STORE_URL =
  * build, so "download the latest" quietly handed people the bug they had just
  * reported.
  */
-export const DESKTOP_APP_VERSION = "1.5.0";
+export const DESKTOP_APP_VERSION = "1.6.0";
 
 /** Where the versioned installers live. Without it, downloads are unavailable. */
 const DESKTOP_BLOB_BASE = process.env.NEXT_PUBLIC_DESKTOP_BLOB_BASE ?? "";

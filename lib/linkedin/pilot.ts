@@ -47,6 +47,15 @@ export interface PilotObservation {
   note: string | null;
   /** True when the run is allowed to actually send. */
   autoSend: boolean;
+  /**
+   * Whether this invitation may carry a note.
+   *
+   * LinkedIn allows only a few personalised notes a day, so the client budgets
+   * them and decides. The model is told the answer rather than asked for it —
+   * it cannot know how many have been spent today, and guessing would burn the
+   * allowance on whoever happened to come first.
+   */
+  useNote?: boolean;
   url: string;
   step: number;
   /** What has already been done this attempt, newest last. */
@@ -88,7 +97,13 @@ Rules that matter more than completing the task:
 
 - NEVER choose an element whose label names a person other than the profile owner. The page shows "People also viewed" and "More profiles for you", each with their own Connect buttons. Inviting the wrong person cannot be undone.
 - NEVER choose: Remove Connection, Unfollow, Report, Block, Withdraw, Delete, Unsubscribe, or anything else destructive or irreversible.
-- If the goal is an invitation and the person is ALREADY a connection (a 1st-degree badge, a "Remove Connection" option, or no Connect anywhere), answer give_up with reason "already connected". Do not message them instead.
+- If the goal is an invitation and the person is ALREADY a connection, answer give_up with reason "already connected". Do not message them instead. There are exactly two pieces of evidence for that: a **1st**-degree badge next to their name, or a "Remove Connection" option. Nothing else counts.
+
+  **2nd and 3rd degree mean they are NOT connected to you.** They are precisely the people worth inviting. Never treat "2nd" as already connected.
+
+  The absence of a Connect button is NOT evidence of a connection either. On many profiles Connect simply is not on the card — it is inside the overflow menu, and you have not looked yet.
+
+- Before you may answer give_up for want of a Connect button, you MUST have opened the profile's own "More" / "More actions" menu and read what appeared. If your history does not show that you opened it, open it now instead of giving up.
 - If you cannot find a way to do the goal, answer give_up. A wrong click is far worse than stopping.
 
 A page has SEVERAL buttons labelled "More". Only the one marked
@@ -125,9 +140,17 @@ menu covering the page.
 
 How the task normally goes:
 1. Click Connect, per (a) then (b) above.
-2. A dialog opens. If a note is provided, click "Add a note", then type it into the textarea.
-3. If sending is permitted, click "Send" / "Send now" / "Send invitation". If it is not permitted, answer done once the note is typed — a human will send it.
+2. A dialog opens asking whether to add a note. It usually offers "Add a note"
+   and "Send without a note". Which one you take is NOT your decision — the
+   prompt states "Add a note: yes" or "Add a note: no" and you must follow it:
+     - no  → click "Send without a note". Do not open the note editor.
+     - yes → click "Add a note", then type the note into the textarea, then send.
+3. If sending is permitted, click "Send" / "Send now" / "Send invitation". If it
+   is not permitted, answer done once the dialog is filled — a human will send it.
 4. Once the dialog has closed and the invitation is away, answer done.
+
+An invitation without a note is still an invitation. Never answer give_up because
+no note could be added.
 
 Answer done only when the goal is actually achieved. Answer give_up rather than guessing.
 
@@ -150,6 +173,7 @@ function userPrompt(o: PilotObservation): string {
     `URL: ${o.url}`,
     `Note to include: ${o.note ? JSON.stringify(o.note) : "(none)"}`,
     `Allowed to actually send: ${o.autoSend ? "yes" : "no — stop once the text is entered"}`,
+    `Add a note: ${o.useNote ? "yes" : 'no — click "Send without a note"'}`,
     `Step ${o.step}.`,
     o.history.length ? `Already done:\n${o.history.map((h) => `  - ${h}`).join("\n")}` : "Nothing done yet.",
     "",
