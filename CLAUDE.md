@@ -100,6 +100,17 @@ sequence. A premium Next.js UI sits on top.
   The DOM logic lives once, in `desktop/page-actions.js`, shared by the app and
   both verification scripts. Do not copy it; a selector fix has to land in the
   code that ships.
+  **An explicit invite never becomes a message.** "Already connected" and "I
+  could not find the Connect button" look identical on the page, so messaging on
+  the absence of a button meant every selector miss DM'd somebody a
+  connection-request note. Falling back to a message requires positive evidence
+  of a connection (1st-degree badge, or "Remove Connection"), and only for
+  `type: "auto"`. No evidence means `failed`, which is what stops a run after
+  three and surfaces a LinkedIn markup change.
+  **The desktop app embeds the hosted web app in a `WebContentsView` with no
+  preload.** The panel's preload can start browser automation; giving remote
+  content that reach is the one genuinely dangerous mistake available in
+  `desktop/main.js`.
 - **The user never needs to understand the integration.** A lead is a lead whether it
   came from IndiaMART, Meta Ads or a CSV; the source is metadata, never a destination.
 - **Never take payment for a domain.** The reseller storefront charges the customer and

@@ -25,12 +25,20 @@
         --mono: "JetBrains Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
       }
       * { box-sizing: border-box; }
+      /* The panel occupies a fixed left strip; the hosted web app is a
+         WebContentsView laid over everything to the right of it, so anything
+         wider than this would simply be hidden behind the app. */
       body {
         margin: 0; padding: 18px 18px 22px;
+        width: 400px;
         font: 14px/1.5 var(--sans);
         color: var(--ink); background: var(--canvas);
         user-select: none;
       }
+      .signin { margin: 0 0 12px; padding: 13px 14px; border-radius: 14px; background: var(--tint); }
+      .signin p { margin: 0 0 10px; font-size: 12px; color: var(--ink-soft); line-height: 1.5; }
+      .link { background: none; border: 0; color: var(--brand-ink); font: inherit; font-size: 11px;
+        cursor: pointer; padding: 0; text-decoration: underline; }
 
       .head { display: flex; align-items: center; gap: 10px; margin-bottom: 4px; }
       .mark {
@@ -112,6 +120,19 @@
       .log .s-sent { color: var(--ok); font-weight: 600; }
       .log .s-failed { color: var(--warn); font-weight: 600; }
 
+      /* Who is queued. The panel's most important content when nothing is
+         running: pressing Start is irreversible, so the names have to be on
+         screen before the button is. */
+      .who { max-height: 210px; overflow-y: auto; margin: 0; padding: 0; list-style: none; user-select: text; }
+      .who li { padding: 8px 0; border-bottom: 1px solid var(--line); display: flex; gap: 10px; align-items: baseline; }
+      .who li:last-child { border-bottom: 0; }
+      .who .n { font: 600 10px/1.6 var(--mono); color: var(--ink-soft); opacity: 0.6; flex: 0 0 22px; }
+      .who .name { font-size: 12.5px; font-weight: 600; }
+      .who .meta { font-size: 11px; color: var(--ink-soft); }
+      .who .kind { font: 600 9.5px/1 var(--mono); text-transform: uppercase; letter-spacing: 0.1em;
+        color: var(--brand-ink); background: var(--tint); border-radius: 999px; padding: 3px 7px; margin-left: auto; flex: 0 0 auto; }
+      .empty { font-size: 12px; color: var(--ink-soft); padding: 6px 0; }
+
       .foot { margin: 14px 0 0; font-size: 10.5px; color: var(--ink-soft); line-height: 1.55; text-align: center; }
       a { color: var(--brand-ink); }
     </style>
@@ -122,13 +143,21 @@
       <h1>Followthroo for LinkedIn</h1>
       <span class="dot" id="dot" title="Status"></span>
     </div>
-    <p class="sub">Sends your LinkedIn invitations from this computer, at a human pace.</p>
+    <p class="sub">Sends your LinkedIn invitations from this computer, at a human pace. Keep working while it runs.</p>
+
+    <!-- Shown until the embedded web app has a session. Sign-in happens in the
+         real browser because Google refuses embedded ones. -->
+    <div class="signin" id="signin" style="display: none">
+      <p><b>Sign in to Followthroo</b> to see your leads and pick up your pairing token automatically.</p>
+      <button class="primary" id="signinBtn" style="width: 100%">Sign in</button>
+    </div>
 
     <div class="warn" id="warn">
-      <strong>Don't use this computer while invites go out</strong>
+      <strong>Leave the Chrome window alone</strong>
       <span id="warnDetail">
-        A Chrome window is driving itself. Clicking, typing or closing tabs in it will
-        break the run. You can leave this panel open and walk away.
+        A Chrome window is driving itself. Clicking, typing or closing tabs <em>in that
+        window</em> will break the run &mdash; but the rest of your computer is yours.
+        Carry on working; you can even cover it up.
       </span>
     </div>
 
@@ -137,6 +166,12 @@
       <div class="count"><span id="sent">0</span><small> / <span id="cap">20</span></small></div>
       <div class="bar"><i id="bar"></i></div>
       <p class="now" id="now">Ready when you are.</p>
+    </div>
+
+    <div class="panel">
+      <p class="eyebrow">Next up <span id="whoCount"></span></p>
+      <ul class="who" id="who"><li class="empty">Checking…</li></ul>
+      <p class="hint" id="whoNote"></p>
     </div>
 
     <div class="row" style="margin-bottom: 12px">
@@ -175,6 +210,7 @@
     <p class="foot">
       Runs in your own browser, on your own connection. Your LinkedIn password and
       session never leave this computer.
+      <br /><button class="link" id="collapse">Hide this panel</button>
     </p>
 
     <script src="app.js"></script>

@@ -3,7 +3,7 @@ import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { ok, fail } from "@/lib/http";
 import { requireExtAuth } from "@/lib/linkedin/auth";
-import { claimActions, completeAction } from "@/lib/linkedin/queue";
+import { claimActions, completeAction, peekActions } from "@/lib/linkedin/queue";
 import { corsPreflight, withCors } from "@/lib/linkedin/cors";
 
 export const runtime = "nodejs";
@@ -21,6 +21,22 @@ export async function GET(req: NextRequest) {
     where: { id: account.id },
     data: { lastSeenAt: new Date(), status: "connected" },
   });
+
+  // `peek` is a look, not a claim. The desktop app asks for this before a run so
+  // it can show exactly who is about to be contacted; it must not consume the
+  // queue, or opening the app would quietly mark people in_progress and the list
+  // you were shown would be the list you could no longer choose not to send.
+  if (req.nextUrl.searchParams.get("peek")) {
+    const upto = Math.min(Math.max(Number(req.nextUrl.searchParams.get("limit") ?? 20), 1), 50);
+    return withCors(
+      ok({
+        pacing: { minDelaySec: account.minDelaySec, maxDelaySec: account.maxDelaySec },
+        autoSend: account.autoSend,
+        dailyInviteCap: account.dailyInviteCap,
+        people: await peekActions(account, upto),
+      })
+    );
+  }
 
   const limit = Math.min(Math.max(Number(req.nextUrl.searchParams.get("limit") ?? 3), 1), 10);
   const actions = await claimActions(account, limit);

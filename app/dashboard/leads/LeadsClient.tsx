@@ -575,17 +575,37 @@ export default function LeadsPage() {
 /* Add lead — three ways in, one short form                            */
 /* ------------------------------------------------------------------ */
 
+type InvitePerson = {
+  id: string;
+  firstName: string | null;
+  lastName: string | null;
+  company: string | null;
+  title: string | null;
+  linkedinUrl: string | null;
+  status: "will_queue" | "no_profile" | "already_queued" | "opted_out";
+};
+
 type InvitePreview = {
   selected: number;
   withProfile: number;
   noProfile: number;
   alreadyQueued: number;
+  optedOut: number;
   outOfScope: number;
   autoSend: boolean;
   dailyCap: number;
   remainingToday: number;
   minDelaySec: number;
   maxDelaySec: number;
+  people: InvitePerson[];
+  peopleTruncated: boolean;
+};
+
+const PERSON_NOTE: Record<InvitePerson["status"], string | null> = {
+  will_queue: null,
+  no_profile: "no LinkedIn profile",
+  already_queued: "already waiting",
+  opted_out: "opted out",
 };
 
 /**
@@ -668,9 +688,44 @@ function InviteDialog({
               {preview.alreadyQueued > 0 && (
                 <li>{preview.alreadyQueued} already have a request waiting, so they will not be queued twice.</li>
               )}
+              {preview.optedOut > 0 && <li>{preview.optedOut} opted out and will never be contacted.</li>}
               {preview.outOfScope > 0 && <li>{preview.outOfScope} belong to someone else on your team.</li>}
             </ul>
           </div>
+
+          {/* The people themselves. A count cannot tell you whether the right
+              contacts were picked, selection persists across pages so the rows
+              are not all on screen, and an invitation cannot be recalled once
+              it has gone. */}
+          {preview.people.length > 0 && (
+            <div className="max-h-56 overflow-y-auto rounded-xl border border-line">
+              <ul className="divide-y divide-line">
+                {preview.people.map((p) => {
+                  const note = PERSON_NOTE[p.status];
+                  const name = [p.firstName, p.lastName].filter(Boolean).join(" ") || p.linkedinUrl || "Unnamed contact";
+                  return (
+                    <li
+                      key={p.id}
+                      className={`flex items-baseline gap-2 px-3 py-2 text-sm ${note ? "opacity-55" : ""}`}
+                    >
+                      <span className="min-w-0 flex-1 truncate">
+                        <span className="font-medium">{name}</span>
+                        {(p.title || p.company) && (
+                          <span className="text-ink-soft"> · {[p.title, p.company].filter(Boolean).join(" · ")}</span>
+                        )}
+                      </span>
+                      {note && <span className="shrink-0 text-xs text-ink-faint">{note}</span>}
+                    </li>
+                  );
+                })}
+              </ul>
+              {preview.peopleTruncated && (
+                <p className="border-t border-line px-3 py-2 text-xs text-ink-faint">
+                  Showing the first {preview.people.length}. The rest are queued the same way.
+                </p>
+              )}
+            </div>
+          )}
 
           <div>
             <Label>Note (optional)</Label>
@@ -699,11 +754,15 @@ function InviteDialog({
             )}
             <p className="mt-1.5">
               {preview.autoSend ? (
-                <>Sending is <b className="text-ink">automatic</b> — one every {preview.minDelaySec}–{preview.maxDelaySec} seconds, in your browser.</>
+                <>
+                  Sending is <b className="text-ink">automatic</b> — one every {preview.minDelaySec}–
+                  {preview.maxDelaySec} seconds, from the desktop app on your computer. They go out when it is
+                  running.
+                </>
               ) : (
                 <>
-                  Automatic sending is <b className="text-ink">off</b>, so each one will open a tab for you to send by
-                  hand. <Link href="/dashboard/linkedin" className="underline">Turn it on</Link>.
+                  Automatic sending is <b className="text-ink">off</b>, so nothing will go out and the desktop app
+                  will refuse to start. <Link href="/dashboard/linkedin" className="underline">Turn it on</Link>.
                 </>
               )}
             </p>

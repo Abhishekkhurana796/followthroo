@@ -42,9 +42,21 @@ async function fillLinkedInAction(action) {
     if (el.closest("[data-followthroo-overlay]")) return false; // our own do-not-touch banner
     return scope().contains(el) || (document.querySelector("main")?.contains(el) && !el.closest("aside"));
   };
+  /**
+   * Everything LinkedIn treats as a button.
+   *
+   * `div[role="button"]` is the one that matters and the one that was missing.
+   * The Connect action is not a <button> when it lives in the overflow menu —
+   * it is a div with a role, inside .artdeco-dropdown__content. Searching only
+   * `button, a[role="button"]` therefore found nothing after opening the menu,
+   * which is exactly the reported symptom: the three dots open and nothing else
+   * happens.
+   */
+  const CLICKABLE =
+    'button, a[role="button"], div[role="button"], [role="menuitem"], .artdeco-dropdown__item';
   const all = (sel) => Array.from(scope().querySelectorAll(sel));
   const label = (b) => ((b.getAttribute("aria-label") || b.textContent || "").trim());
-  const btnByLabel = (re) => all('button, a[role="button"]').find((b) => re.test(label(b)) && inScope(b));
+  const btnByLabel = (re) => all(CLICKABLE).find((b) => re.test(label(b)) && inScope(b));
 
   // Bail early if LinkedIn bounced us to a login/checkpoint page.
   if (/\/(login|checkpoint|authwall)/.test(location.pathname) || document.querySelector('input[name="session_key"]')) {
@@ -82,6 +94,77 @@ async function fillLinkedInAction(action) {
 
   /** The modal LinkedIn opens for an invitation, if one is open. */
   const openModal = () => document.querySelector('.artdeco-modal[role="dialog"], div[role="dialog"]');
+
+  /**
+   * Positive evidence that this person is ALREADY a connection.
+   *
+   * Without this, "already connected" and "I could not find the Connect button"
+   * are the same observation — no Connect on the page — and the old code
+   * resolved both by sending a message. So a selector miss quietly sent a DM to
+   * someone who was supposed to get a connection request. Requiring evidence is
+   * what lets the two be told apart and handled differently.
+   */
+  const isFirstDegree = () => {
+    const badge = scope().querySelector(".dist-value, .distance-badge, .pv-member-badge");
+    if (badge && /1st/i.test(badge.textContent || "")) return true;
+    // "Remove Connection" only ever appears for someone you are connected to.
+    return all(CLICKABLE).some((b) => /remove connection/i.test(label(b)));
+  };
+
+  /**
+   * Open the overflow ("More") menu and return the container that appeared.
+   *
+   * LinkedIn renders the open dropdown outside the profile card — often at
+   * document level — so the profile-scoped helpers do not reach it and a
+   * document-wide search is required here. It is still filtered against the
+   * sidebar and our own banner by the caller.
+   */
+  async function openMoreMenu() {
+    const more = btnByLabel(/^More\b/i) || btnByLabel(/more actions/i);
+    if (!more) return null;
+    const before = new Set(document.querySelectorAll('.artdeco-dropdown__content, [role="menu"]'));
+    more.click();
+
+    // Wait for the menu rather than guessing at a fixed delay — the old fixed
+    // 1200ms was both too long when it worked and too short when the page was
+    // busy.
+    for (let i = 0; i < 20; i++) {
+      await sleep(150);
+      const menus = Array.from(document.querySelectorAll('.artdeco-dropdown__content, [role="menu"]'));
+      const appeared = menus.find((m) => !before.has(m) && m.offsetParent !== null);
+      if (appeared) return appeared;
+      if (more.getAttribute("aria-expanded") === "true" && menus.length) {
+        return menus[menus.length - 1];
+      }
+    }
+    return null;
+  }
+
+  /**
+   * The Connect control for THIS profile, wherever LinkedIn is hiding it today:
+   * on the top card, or behind the overflow menu.
+   *
+   * The same pattern is used in both places — /^(Connect|Invite)\b/ — because in
+   * the menu the accessible name is "Invite <Name> to connect". The old retry
+   * narrowed to /^Connect\b/ and so could not match the very thing it had just
+   * opened the menu to find.
+   */
+  const CONNECT_RE = /^(Connect|Invite)\b/i;
+
+  async function findConnect() {
+    const direct = btnByLabel(CONNECT_RE);
+    if (direct) return direct;
+
+    const menu = await openMoreMenu();
+    if (!menu) return null;
+    return Array.from(menu.querySelectorAll(CLICKABLE)).find((b) => {
+      if (b.closest("aside") || b.closest("[data-followthroo-overlay]")) return false;
+      const l = label(b);
+      // "Connect" must not match "Remove Connection", and the menu also offers
+      // Follow / Save to PDF / Report, which a looser match would happily click.
+      return CONNECT_RE.test(l) && !/remove connection/i.test(l);
+    });
+  }
 
   /**
    * LinkedIn's own ceiling, hit mid-run.
@@ -129,7 +212,17 @@ async function fillLinkedInAction(action) {
       msgBoxes().at(-1);
     if (!box) return { status: "failed", result: "message box not found" };
     box.focus();
-    document.execCommand("insertText", false, raw || "Hi!");
+    const text = raw || "Hi!";
+    // execCommand is the only focus-dependent step in this whole file, and it
+    // returns false rather than throwing when the document does not have focus
+    // — which is the normal state while someone carries on using their computer
+    // in another window. The fallback writes the text directly, the same way the
+    // invite note is set below.
+    const typed = document.execCommand("insertText", false, text);
+    if (!typed || !(box.textContent || "").trim()) {
+      box.textContent = text;
+      box.dispatchEvent(new InputEvent("input", { bubbles: true, data: text, inputType: "insertText" }));
+    }
     if (!autoSend) {
       return { status: "drafted", result: "message drafted — review it and click Send yourself", kind: "message" };
     }
@@ -161,12 +254,8 @@ async function fillLinkedInAction(action) {
   }
 
   async function fillInvite() {
-    let connect = btnByLabel(/^(Connect|Invite)\b/i);
-    if (!connect) {
-      const more = btnByLabel(/^More\b/i);
-      if (more) { more.click(); await sleep(1200); connect = btnByLabel(/^Connect\b/i); }
-    }
-    if (!connect) return null; // not invitable from here
+    const connect = await findConnect();
+    if (!connect) return null; // not invitable from here — the caller decides why
     connect.click();
     await sleep(2200);
 
@@ -213,10 +302,33 @@ async function fillLinkedInAction(action) {
   try {
     if (pending) return { status: "skipped", result: "invite already pending" };
     if (action.type === "message") return await fillMessage();
+
     const invited = await fillInvite();
     if (invited) return invited;
-    if (messageBtn) return await fillMessage(); // already connected → message instead
-    return { status: "skipped", result: "no Connect or Message action available" };
+
+    // No Connect anywhere — on the card or behind the overflow menu. Two very
+    // different situations look identical at this point, so decide on evidence
+    // rather than on the absence of a button.
+    const connected = isFirstDegree();
+
+    if (connected) {
+      // An explicit invite has nothing to do here. Messaging them instead would
+      // send a connection-request note as a direct message to someone already
+      // connected — not what was asked for, and not recallable.
+      if (action.type === "invite") {
+        return { status: "skipped", result: "already connected — no invitation to send" };
+      }
+      return await fillMessage(); // "auto" means: invite if you can, otherwise message
+    }
+
+    // Not connected, and yet no Connect button. That is a selector miss, which
+    // means LinkedIn changed its markup — reported as failed so three in a row
+    // stop the run, instead of quietly skipping twenty people in a row and
+    // looking like an empty queue.
+    return {
+      status: "failed",
+      result: "could not find a Connect button, and this profile is not shown as a connection — LinkedIn may have changed its layout",
+    };
   } catch (e) {
     return { status: "failed", result: String((e && e.message) || e) };
   }

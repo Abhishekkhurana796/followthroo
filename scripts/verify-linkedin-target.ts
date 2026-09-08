@@ -26,6 +26,8 @@ import { fillLinkedInAction } from "../desktop/page-actions";
 
 const ROOT = join(__dirname, "..");
 const FIXTURE = join(ROOT, "scripts", "linkedin-fixtures", "profile-with-sidebar.html");
+/** Connect hidden behind the overflow menu — the shape that broke in the wild. */
+const DROPDOWN_FIXTURE = join(ROOT, "scripts", "linkedin-fixtures", "profile-more-dropdown.html");
 
 let pass = 0,
   fail = 0;
@@ -132,10 +134,16 @@ async function main() {
         autoSend: true,
       });
       ok(r.invited === null, `no stranger is invited when the profile itself offers no Connect (invited: ${r.invited})`);
-      // Falling back to a message is the existing, intended behaviour for someone
-      // you cannot invite (usually because you are already connected). What must
-      // never happen is that the fallback lands on one of the strangers.
-      ok(r.sentIn === "right", `it falls back to messaging that same person (sent in: ${r.sentIn})`);
+      // This used to assert the opposite — that it "falls back to messaging that
+      // same person". That fallback was written for someone you cannot invite
+      // because you are already connected, but this fixture shows no evidence of
+      // a connection: no 1st-degree badge, no Remove Connection. It is a
+      // selector miss, and the two were indistinguishable, so every selector
+      // miss sent a direct message to somebody who was meant to receive a
+      // connection request. Failing is now the correct answer, and three in a
+      // row stop the run.
+      ok(r.sentIn === null, `nothing is messaged when there is no sign they are connected (sent in: ${r.sentIn})`);
+      ok(r.status === "failed", `the miss is reported rather than papered over (status: ${r.status})`);
     }
 
     // 5. Auto-send off still means a human clicks Send — but on the right person.
@@ -167,6 +175,94 @@ async function main() {
       const r = await run(RIGHT, { type: "invite", linkedinUrl: RIGHT, note: "Hi Anirudh —", autoSend: true }, true);
       ok(r.invited === "right", `the overlay is never mistaken for the profile's button (invited: ${r.invited})`);
       ok(r.status === "sent", `the invitation still goes through with the banner up (status: ${r.status})`);
+    }
+    // ---- Connect behind the overflow menu ----------------------------------
+    //
+    // The reported failure: "it opens the 3 dots but waits for me to click the
+    // connection request button." Nothing above catches it, because the older
+    // fixture has no overflow menu at all — "More" appears in it only as the
+    // heading "More profiles for you". Every assertion passed against a DOM
+    // shape LinkedIn had already moved away from.
+    const dropdownHtml = readFileSync(DROPDOWN_FIXTURE, "utf8");
+    const dctx = await browser.newContext();
+    await dctx.route("**/*", (route) =>
+      route.fulfill({ status: 200, contentType: "text/html; charset=utf-8", body: dropdownHtml }),
+    );
+
+    const runMenu = async (url: string, action: Record<string, unknown>) => {
+      const page = await dctx.newPage();
+      await page.goto(url);
+      const out = (await page.evaluate(fillLinkedInAction, action)) as Outcome;
+      const read = async (k: string) =>
+        page.evaluate((key) => (window as never as Record<string, unknown>)[key] ?? null, k);
+      const res = {
+        ...out,
+        invited: await read("__invited"),
+        menuOpened: await read("__menuOpened"),
+        clickedInMenu: await read("__clickedInMenu"),
+        sentIn: await read("__sentIn"),
+        note: await read("__note"),
+      };
+      await page.close();
+      return res;
+    };
+
+    // 8. The whole point: Connect is only reachable through the More menu.
+    {
+      const r = await runMenu(RIGHT, {
+        type: "invite",
+        linkedinUrl: RIGHT,
+        note: "Hi Anirudh —",
+        autoSend: true,
+      });
+      ok(r.menuOpened === true, "opens the overflow menu when there is no Connect on the card");
+      ok(r.clickedInMenu === "right", `clicks Connect inside the menu, not Follow or Report (clicked: ${r.clickedInMenu})`);
+      ok(r.invited === "right", `invites the profile's owner (invited: ${r.invited})`);
+      ok(r.status === "sent", `and reports it sent (status: ${r.status} — ${r.result})`);
+      ok(r.note === "Hi Anirudh —", "the note still reaches the dialog");
+    }
+
+    // 9. Already a connection. An explicit invite has nothing to do — and must
+    //    NOT quietly become a direct message carrying a connection-request note.
+    {
+      const r = await runMenu(RIGHT + "?connected", {
+        type: "invite",
+        linkedinUrl: RIGHT,
+        note: "Hi Anirudh —",
+        autoSend: true,
+      });
+      ok(r.status === "skipped", `an explicit invite to an existing connection is skipped (status: ${r.status})`);
+      ok(r.sentIn === null, "and nothing is messaged to them");
+      ok(r.clickedInMenu !== "remove", `"Remove Connection" is never clicked (clicked: ${r.clickedInMenu})`);
+    }
+
+    // 10. Same profile, but the campaign said "auto" — invite if you can,
+    //     otherwise message. Messaging is correct here.
+    {
+      const r = await runMenu(RIGHT + "?connected", {
+        type: "auto",
+        linkedinUrl: RIGHT,
+        note: "Good to be connected.",
+        autoSend: true,
+      });
+      ok(r.sentIn === "right", `auto falls back to messaging an existing connection (sent in: ${r.sentIn})`);
+      ok(r.status === "sent", `and reports sent (status: ${r.status})`);
+    }
+
+    // 11. No Connect, and no evidence they are a connection either. That is a
+    //     selector miss — LinkedIn changed something. It must fail loudly, so
+    //     three in a row stop the run, rather than messaging a stranger or
+    //     skipping twenty people silently.
+    {
+      const r = await runMenu(RIGHT + "?nomenu", {
+        type: "invite",
+        linkedinUrl: RIGHT,
+        note: "Hi Anirudh —",
+        autoSend: true,
+      });
+      ok(r.status === "failed", `a selector miss is reported as failed, not skipped (status: ${r.status})`);
+      ok(r.sentIn === null, "and absolutely nothing is sent to them");
+      ok(/changed its layout/i.test(r.result || ""), `the reason points at the real cause: ${r.result}`);
     }
   } finally {
     await browser.close();

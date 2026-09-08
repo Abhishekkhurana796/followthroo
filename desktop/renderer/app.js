@@ -12,6 +12,8 @@ const el = {
   now: $("now"), start: $("start"), stop: $("stop"), dry: $("dry"), log: $("log"),
   apiBase: $("apiBase"), token: $("token"), save: $("save"),
   settingsErr: $("settingsErr"), settings: $("settings"),
+  who: $("who"), whoCount: $("whoCount"), whoNote: $("whoNote"),
+  signin: $("signin"), signinBtn: $("signinBtn"), collapse: $("collapse"),
 };
 
 let cap = 20;
@@ -51,6 +53,110 @@ function setRunning(on) {
   el.dot.className = `dot${on ? " on" : ""}`;
 }
 
+/**
+ * Show exactly who is queued.
+ *
+ * Start is irreversible — an invitation cannot be recalled — so the names belong
+ * on screen before the button is pressed, not in a log afterwards. The Start
+ * label counts them too, so "Send 14 invitations" is what you agree to rather
+ * than a generic "Start sending".
+ */
+async function loadQueue() {
+  const res = await window.ft.peekQueue();
+
+  if (!res.ok) {
+    el.who.innerHTML = "";
+    const li = document.createElement("li");
+    li.className = "empty";
+    li.textContent = res.error;
+    el.who.appendChild(li);
+    el.whoCount.textContent = "";
+    el.whoNote.textContent = "";
+    el.start.disabled = true;
+    el.start.textContent = "Start sending";
+    return;
+  }
+
+  const people = res.people || [];
+  el.who.innerHTML = "";
+  el.whoCount.textContent = people.length ? `· ${people.length}` : "";
+
+  if (!people.length) {
+    const li = document.createElement("li");
+    li.className = "empty";
+    li.textContent =
+      "Nothing queued. Pick people in Followthroo → Leads and press “Connect on LinkedIn”.";
+    el.who.appendChild(li);
+    el.whoNote.textContent = "";
+    el.start.disabled = true;
+    el.start.textContent = "Nothing to send";
+    return;
+  }
+
+  people.forEach((p, i) => {
+    const li = document.createElement("li");
+
+    const n = document.createElement("span");
+    n.className = "n";
+    n.textContent = String(i + 1);
+
+    const body = document.createElement("div");
+    const name = document.createElement("div");
+    name.className = "name";
+    name.textContent = p.leadName || p.linkedinUrl;
+    const meta = document.createElement("div");
+    meta.className = "meta";
+    meta.textContent = [p.title, p.company].filter(Boolean).join(" · ") || p.linkedinUrl;
+    body.append(name, meta);
+
+    const kind = document.createElement("span");
+    kind.className = "kind";
+    kind.textContent = p.type === "message" ? "Message" : "Invite";
+
+    li.append(n, body, kind);
+    el.who.appendChild(li);
+  });
+
+  const mins = Math.round((people.length * ((res.pacing?.minDelaySec ?? 45) + (res.pacing?.maxDelaySec ?? 120))) / 2 / 60);
+  el.whoNote.textContent = res.autoSend
+    ? `About ${mins} minute${mins === 1 ? "" : "s"}, paced ${res.pacing?.minDelaySec ?? 45}–${res.pacing?.maxDelaySec ?? 120} seconds apart.`
+    : "Automatic sending is off in Followthroo, so a run will refuse to start.";
+
+  el.start.disabled = false;
+  el.start.textContent = `Send ${people.length} ${people.length === 1 ? "invitation" : "invitations"}`;
+}
+
+/**
+ * Sign-in state drives what the panel offers.
+ *
+ * Signed in, the token arrives by itself and Settings is a fallback nobody needs
+ * to open. Signed out, asking someone to paste a pairing token they cannot reach
+ * is a dead end, so the only thing offered is the way out of it.
+ */
+async function refreshAuth() {
+  const { signedIn } = await window.ft.authStatus();
+  el.signin.style.display = signedIn ? "none" : "block";
+  return signedIn;
+}
+
+el.signinBtn.addEventListener("click", async () => {
+  el.signinBtn.disabled = true;
+  el.signinBtn.textContent = "Opening your browser…";
+  await window.ft.signIn();
+  setTimeout(() => {
+    el.signinBtn.disabled = false;
+    el.signinBtn.textContent = "Sign in";
+  }, 4000);
+});
+
+let collapsed = false;
+el.collapse.addEventListener("click", async () => {
+  collapsed = !collapsed;
+  const res = await window.ft.togglePanel(collapsed);
+  collapsed = res.collapsed;
+  el.collapse.textContent = collapsed ? "Show this panel" : "Hide this panel";
+});
+
 async function load() {
   const s = await window.ft.getSettings();
   cap = s.maxPerDay;
@@ -65,6 +171,8 @@ async function load() {
     el.settings.open = true;
     el.now.textContent = "Paste your pairing token to get started.";
   }
+  refreshAuth();
+  loadQueue();
 }
 
 el.save.addEventListener("click", async () => {
@@ -72,8 +180,9 @@ el.save.addEventListener("click", async () => {
   const res = await window.ft.saveSettings({ apiBase: el.apiBase.value, token: el.token.value });
   if (!res.ok) { el.settingsErr.textContent = res.error; return; }
   el.apiBase.value = res.settings.apiBase;
-  el.now.textContent = "Saved. Press Start when you're ready to step away.";
+  el.now.textContent = "Saved. Press Start when you're ready.";
   log("Settings saved.");
+  loadQueue();
 });
 
 async function begin(dryRun) {
@@ -143,14 +252,31 @@ window.ft.onEvent((evt) => {
       }
       break;
     }
+    case "paired":
+      // The token arrived from the signed-in session; nobody had to paste it.
+      load();
+      log("Paired with your Followthroo account.");
+      break;
+    case "signed-in":
+      refreshAuth();
+      load();
+      log("Signed in.");
+      break;
+    case "signin-failed":
+      el.now.textContent = evt.message;
+      el.dot.className = "dot err";
+      log(evt.message, "failed");
+      break;
     case "idle":
       setRunning(false);
       el.warn.classList.remove("show");
       // Only overwrite a neutral message. A run that ended on a reason — a
       // limit, a rejected token, a wall — must keep saying so; replacing that
       // with "Done" is how someone concludes it worked.
-      if (!ended) el.now.textContent = "Done. You can use your computer again.";
+      if (!ended) el.now.textContent = "Done.";
       ended = false;
+      // The queue moved — whatever went out is no longer waiting.
+      loadQueue();
       break;
   }
 });

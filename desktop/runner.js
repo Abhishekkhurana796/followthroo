@@ -41,12 +41,17 @@ const DEFAULT_PACING = { minDelaySec: 45, maxDelaySec: 120 };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /**
- * The do-not-touch banner, injected into every page the run opens.
+ * The leave-this-window-alone banner, injected into every page the run opens.
  *
  * The warning has to live where the person's hands are. A notice in the control
  * panel is not read by someone who has already alt-tabbed into the Chrome
  * window to check something — so it is pinned to the top of the automated
  * window itself, on every page, for as long as the run lasts.
+ *
+ * It says "this window", not "this computer". Every click the run makes is a DOM
+ * click dispatched into the page, which needs neither focus nor visibility, so
+ * the rest of the machine stays usable. Overstating it would only teach people
+ * to ignore the banner.
  *
  * pointer-events:none, and marked with data-followthroo-overlay, so it can
  * neither swallow a click nor be mistaken for page furniture by the selector
@@ -65,7 +70,7 @@ function bannerInitScript() {
       "padding:9px 14px", "text-align:center",
       "box-shadow:0 2px 10px rgba(0,0,0,.28)",
     ].join(";");
-    bar.textContent = "Followthroo is sending invites — please don't touch this window.";
+    bar.textContent = "Followthroo is working in this window — please leave it alone. Carry on using the rest of your computer.";
     (document.body || document.documentElement).appendChild(bar);
   };
   // Expose an updater so the run can show progress without re-injecting.
@@ -118,7 +123,20 @@ async function openBrowser({ userDataPath, headless = false }) {
     headless,
     channel: "chrome",
     viewport: null,
-    args: ["--start-maximized", "--disable-blink-features=AutomationControlled"],
+    args: [
+      "--disable-blink-features=AutomationControlled",
+      // The run must survive being ignored.
+      //
+      // All the pacing between actions is setTimeout running inside the page,
+      // and Chrome throttles timers in background or covered windows to roughly
+      // one a minute — so the moment someone puts another window on top, a
+      // two-second wait becomes a minute and the run appears to hang. Since the
+      // whole point is that they can carry on working, these three are what make
+      // that true rather than merely claimed.
+      "--disable-background-timer-throttling",
+      "--disable-backgrounding-occluded-windows",
+      "--disable-renderer-backgrounding",
+    ],
     // A run is paced in minutes, not milliseconds. The default 30s ceiling on
     // navigation is the only timeout worth keeping tight — everything else here
     // deliberately waits on a human-speed page.
@@ -311,7 +329,7 @@ async function runBatch({
         await page
           .evaluate(
             (text) => window.__ftBanner && window.__ftBanner(text),
-            `Followthroo is sending invites — please don't touch this window. ${progress() + 1} of ${cap}`,
+            `Followthroo is working in this window — leave it alone. Sending ${progress() + 1} of ${cap}.`,
           )
           .catch(() => {});
         outcome = await page.evaluate(fillLinkedInAction, { ...action, autoSend });
@@ -379,7 +397,7 @@ async function runBatch({
         await page
           .evaluate(
             (text) => window.__ftBanner && window.__ftBanner(text),
-            `Followthroo is sending invites — please don't touch this window. ${progress()} of ${cap} · next in ${i}s`,
+            `Followthroo is working in this window — leave it alone. ${progress()} of ${cap} sent · next in ${i}s`,
           )
           .catch(() => {});
         emit("tick", { remaining: i });

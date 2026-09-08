@@ -29,23 +29,59 @@ export interface EnqueueManyResult {
  * and it reads as a bug.
  */
 export async function previewEnqueue(organizationId: string, leadIds: string[]) {
-  const [withProfile, alreadyQueued] = await Promise.all([
-    prisma.lead.count({
-      where: { id: { in: leadIds }, organizationId, linkedinUrl: { not: null } },
+  const [leads, inFlight] = await Promise.all([
+    prisma.lead.findMany({
+      where: { id: { in: leadIds }, organizationId },
+      select: {
+        id: true, firstName: true, lastName: true, company: true,
+        title: true, linkedinUrl: true, optedOut: true,
+      },
+      orderBy: { createdAt: "asc" },
     }),
-    prisma.linkedInAction.count({
+    prisma.linkedInAction.findMany({
       where: {
         organizationId,
         leadId: { in: leadIds },
         status: { in: ["pending", "in_progress", "drafted"] },
       },
+      select: { leadId: true },
     }),
   ]);
+
+  const busy = new Set(inFlight.map((a) => a.leadId));
+
+  // Named, not just counted. "19 of 24 have a LinkedIn profile" does not tell
+  // anyone whether the right 19 were picked, and an invitation cannot be
+  // recalled once it goes — so the people themselves belong on screen before
+  // the button is pressed. Capped, because a selection can be thousands and
+  // nobody reads past the first screenful anyway.
+  const people = leads.slice(0, 200).map((l) => ({
+    id: l.id,
+    firstName: l.firstName,
+    lastName: l.lastName,
+    company: l.company,
+    title: l.title,
+    linkedinUrl: l.linkedinUrl,
+    status: l.optedOut
+      ? ("opted_out" as const)
+      : !l.linkedinUrl
+        ? ("no_profile" as const)
+        : busy.has(l.id)
+          ? ("already_queued" as const)
+          : ("will_queue" as const),
+  }));
+
+  const optedOut = leads.filter((l) => l.optedOut).length;
+  const withProfile = leads.filter((l) => l.linkedinUrl && !l.optedOut).length;
+
   return {
     selected: leadIds.length,
     withProfile,
-    noProfile: leadIds.length - withProfile,
-    alreadyQueued,
+    noProfile: leadIds.length - withProfile - optedOut,
+    alreadyQueued: leads.filter((l) => l.linkedinUrl && !l.optedOut && busy.has(l.id)).length,
+    optedOut,
+    people,
+    peopleTruncated: leads.length > people.length,
   };
 }
 
@@ -64,9 +100,13 @@ export async function enqueueManyLinkedIn(input: {
     throw new Error(`A connection note cannot be longer than ${INVITE_NOTE_MAX} characters.`);
   }
 
-  // Only contacts with a profile can be actioned at all.
+  // Only contacts with a profile can be actioned at all — and never anyone who
+  // opted out. That check was missing entirely, so an opted-out contact could be
+  // queued for a connection request like anybody else. Consent is a hard rule in
+  // CLAUDE.md, the suppression list exists for exactly this, and an invitation
+  // cannot be taken back once sent.
   const leads = await prisma.lead.findMany({
-    where: { id: { in: leadIds }, organizationId, linkedinUrl: { not: null } },
+    where: { id: { in: leadIds }, organizationId, linkedinUrl: { not: null }, optedOut: false },
     select: { id: true, linkedinUrl: true },
   });
 

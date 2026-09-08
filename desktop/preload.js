@@ -11,6 +11,10 @@ const { contextBridge, ipcRenderer } = require("electron");
 
 contextBridge.exposeInMainWorld("ft", {
   getSettings: () => ipcRenderer.invoke("settings:get"),
+  peekQueue: () => ipcRenderer.invoke("queue:peek"),
+  signIn: () => ipcRenderer.invoke("auth:signin"),
+  authStatus: () => ipcRenderer.invoke("auth:status"),
+  togglePanel: (collapsed) => ipcRenderer.invoke("panel:toggle", collapsed),
   saveSettings: (patch) => ipcRenderer.invoke("settings:save", patch),
   start: (opts) => ipcRenderer.invoke("run:start", opts),
   stop: () => ipcRenderer.invoke("run:stop"),

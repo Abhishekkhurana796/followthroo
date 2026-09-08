@@ -3,7 +3,7 @@
 Sends a customer's queued LinkedIn invitations from their own computer, on their
 own IP, using their own logged-in LinkedIn session.
 
-**Last updated:** 2026-09-07
+**Last updated:** 2026-09-08
 **Status:** draft
 
 ---
@@ -65,12 +65,45 @@ Playwright serializes it by source. It used to live in `extension/background.js`
 and be extracted by brace-matching; it is now a module three callers share, so a
 selector fix lands once and the tests exercise the code that ships.
 
-## Two windows, on purpose
+## What is in the window
 
-The control panel is small and stays the customer's. The window the run opens is
-a real Chrome that drives itself, with a red do-not-touch bar pinned to the top of
-every page it visits. Keeping them separate is what makes "don't touch that
-window" a sentence someone can actually follow.
+One app window, split in two. The left 400px is the sending panel: local HTML,
+our preload, and the only place `ft.*` exists. Everything right of it is a
+`WebContentsView` showing the real hosted web app — leads, campaigns, inbox —
+because the dashboard is 18 server components talking to Prisma and there is no
+version of it to bundle.
+
+That split is a security boundary, not a layout choice. The panel's preload can
+launch browser automation against the user's LinkedIn; attaching it to remote
+content would hand that reach to anything the page loads. **The web view gets no
+preload at all.** If you ever find yourself adding one, stop.
+
+A third window appears during a run: the Chrome that Playwright drives. That one
+is the one to leave alone, and a red bar across the top of every page it visits
+says so.
+
+## You can keep using the computer
+
+Every interaction is a DOM `.click()` dispatched inside `page.evaluate` —
+synthesized events, not OS input. They need neither window focus nor a visible
+window, so the mouse and keyboard stay the user's.
+
+Three things make that true rather than merely claimed, and all three are load-
+bearing:
+
+- `--disable-background-timer-throttling`,
+  `--disable-backgrounding-occluded-windows`, `--disable-renderer-backgrounding`
+  in `openBrowser`. All pacing is `setTimeout` *inside the page*, and Chrome
+  throttles covered windows to roughly one timer a minute — so without these,
+  putting a window on top turns a 2s wait into 60s and the run appears to hang.
+- `document.execCommand("insertText")` is the one focus-dependent call, on the
+  message path. It returns false rather than throwing when the document lacks
+  focus, so there is a fallback that writes the text directly.
+- No `--start-maximized`. Opening over whatever they are doing contradicts the
+  point.
+
+Say "leave this window alone", never "don't use your computer". A warning people
+learn to ignore is worse than no warning.
 
 The banner is `pointer-events: none` and carries `data-followthroo-overlay`, which
 `page-actions.js` explicitly excludes from its button search — otherwise a banner
@@ -90,9 +123,16 @@ gets restricted, so the run gives up early and says why:
   occurrence rather than the third.
 - **Three failures in a row.** Usually means LinkedIn changed its markup or the
   account is being throttled.
-- **Not signed in.** The window is already open on the login page; they sign in
-  and press Start again. The session persists in the app's own browser profile
-  folder from then on.
+- **Not signed in to LinkedIn.** The window is open on the login page and the run
+  waits there, up to five minutes, including through 2FA. It cannot close the
+  window and ask them to press Start again: the profile directory is locked by the
+  Chrome that has it open.
+- **Already a connection.** An explicit `invite` is skipped. Only `auto` falls back
+  to messaging, and only on positive evidence of a connection — a 1st-degree badge
+  or a "Remove Connection" item. Without that evidence, no Connect means a selector
+  miss, which is reported as **failed**, so three in a row stop the run. Before this
+  distinction existed, every selector miss sent a direct message carrying a
+  connection-request note to somebody who should have received an invitation.
 - **Automatic sending is off.** The run refuses rather than filling boxes nobody
   will click Send on — that was the old extension's failure mode, and it looked
   identical to working. The switch stays in the web app, behind its confirmation.

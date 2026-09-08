@@ -9,6 +9,21 @@ export const metadata = { title: "Changelog — Followthroo" };
  */
 const ENTRIES = [
   {
+    version: "0.13.0",
+    date: "Sep 2026",
+    items: [
+      "Fixed the reason connection requests were not going out. LinkedIn moved Connect into the “…” menu on most profiles, and the app opened that menu and then stopped — it was looking for a button, and the thing in the menu is not a button. It also only looked for the word “Connect”, when what is written there is “Invite <name> to connect”",
+      "Worse, when it could not find Connect it sent the person a message instead — with your connection-request note as the message. That was meant for people you are already connected to, but “already connected” and “I could not find the button” looked identical to it. Now it tells them apart, and if it genuinely cannot find Connect it stops and says so rather than sending something you did not ask for",
+      "If someone is already a connection, a connection request is simply skipped. It no longer turns into a direct message unless the campaign step actually asked for one",
+      "You can see exactly who is about to be invited. The app lists them by name, job and company before you start, and the button now says “Send 14 invitations” rather than “Start sending”. The same list appears in Leads before you queue anyone",
+      "You can use your computer while invites go out. That was always true — the app drives a separate window and never touches your mouse or keyboard — but Chrome slows down windows you are not looking at, which would have stalled a run. Fixed, and the warning now says to leave that one window alone rather than to leave the computer",
+      "Fixed: someone who opted out could still be queued for a connection request. They are now excluded everywhere, and shown as opted out in the preview",
+      "The desktop app now has the whole of Followthroo in it — leads, campaigns, inbox — beside the sending panel, instead of only the sending panel",
+      "Sign in with Google, Zoho or your password from the desktop app. Google refuses to work inside apps like this one, so sign-in opens your normal browser and hands you back",
+      "You no longer paste a pairing token. Once you are signed in the app picks it up by itself",
+    ],
+  },
+  {
     version: "0.12.0",
     date: "Sep 2026",
     items: [
