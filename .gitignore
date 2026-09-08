@@ -62,3 +62,6 @@ desktop/node_modules/
 desktop/dist/
 desktop/linkedin-profile/
 verify-runner.log
+
+# dev server output, written by `npm run dev > dev.log`
+dev.log
