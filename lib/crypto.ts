@@ -143,7 +143,22 @@ export function decryptField(stored: string, aad: string): string {
   const decipher = createDecipheriv(ALGO, key, Buffer.from(ivB64, "base64url"));
   decipher.setAAD(Buffer.from(aad, "utf8"));
   decipher.setAuthTag(Buffer.from(tagB64, "base64url"));
-  return Buffer.concat([decipher.update(Buffer.from(ctB64, "base64url")), decipher.final()]).toString("utf8");
+  try {
+    return Buffer.concat([decipher.update(Buffer.from(ctB64, "base64url")), decipher.final()]).toString("utf8");
+  } catch {
+    // Node's own message here is "Unsupported state or unable to authenticate
+    // data", which names neither the key nor the row and sends people looking at
+    // their auth config. The key id matched, so what actually happened is one of
+    // two things, and both are worth saying out loud: the key material behind
+    // this id is not the one that encrypted the row (the usual cause — a local
+    // .env pointed at someone else's database, with its own "v1"), or the row
+    // moved between columns or tenants, which the AAD deliberately prevents.
+    throw new Error(
+      `Could not decrypt ${aad} with key "${keyId}". The id matches, so the key material differs from the one ` +
+        `that encrypted this row — check that ENCRYPTION_KEYS belongs to the database in DATABASE_URL. ` +
+        `(A local key called "${keyId}" is not the same key as a production one with the same name.)`
+    );
+  }
 }
 
 export function encryptNullable(plain: string | null | undefined, aad: string): string | null {
