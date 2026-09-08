@@ -26,6 +26,8 @@ import { pilotAction } from "../desktop/pilot";
 
 const ROOT = join(__dirname, "..");
 const FIXTURE = readFileSync(join(ROOT, "scripts", "linkedin-fixtures", "profile-more-dropdown.html"), "utf8");
+/** The markup that defeated every structural selector: Connect as a bare span. */
+const SPAN_FIXTURE = readFileSync(join(ROOT, "scripts", "linkedin-fixtures", "profile-span-connect.html"), "utf8");
 const RIGHT = "https://www.linkedin.com/in/anirudh-bisht/";
 
 let pass = 0,
@@ -147,6 +149,59 @@ async function main() {
       const unknown = await run({ action: "click", index: connectIdx }, "");
       ok(unknown.ok === false, `a named button is refused when the profile is unidentified (${unknown.error ?? "ALLOWED"})`);
       await page.close();
+    }
+
+    console.log("\n1c. an unlabelled <span> Connect is seen, and clicked by its words");
+    {
+      const sctx = await browser.newContext();
+      await sctx.route("**/*", (route) =>
+        route.fulfill({ status: 200, contentType: "text/html; charset=utf-8", body: SPAN_FIXTURE }),
+      );
+      const openSpan = async (url: string) => {
+        const p = await sctx.newPage();
+        await p.goto(url);
+        return p;
+      };
+
+      // The regression that matters. This element used to be absent from the
+      // list entirely — no role, no aria-label, hashed classes — so every "there
+      // is no Connect button" was a true statement about the data, on a page
+      // that plainly had one.
+      const page = await openSpan(RIGHT);
+      const seen = await page.evaluate(observe);
+      const found = seen.elements.filter((e) => /^Connect$/i.test(e.label));
+      ok(found.length > 0, `the span Connect is in the element list at all (found ${found.length})`);
+      ok(found.some((e) => e.inTopCard), "and the profile's own one is marked as in the action row");
+
+      // Named by its visible words, which is how the model will name it after
+      // reading the screenshot.
+      const byLabel = await page.evaluate(act, {
+        decision: { action: "click", label: "Connect" },
+        expectedName: seen.personName,
+        forbiddenSource: FORBIDDEN.source,
+        goal: "invite",
+      });
+      ok(byLabel.ok === true, `clicking by label works (${byLabel.error ?? byLabel.did})`);
+      const invited = await page.evaluate(() => (window as never as { __invited?: string }).__invited ?? null);
+      ok(invited === "right", `and it reached the profile owner, not a stranger (invited: ${invited})`);
+      await page.close();
+
+      // Two identical "Connect" spans, neither in the action row, neither
+      // carrying a name. Text cannot tell them apart, and the name check has
+      // nothing to read, so nothing may be clicked.
+      const amb = await openSpan(RIGHT + "?ambiguous");
+      const ambSeen = await amb.evaluate(observe);
+      const ambRes = await amb.evaluate(act, {
+        decision: { action: "click", label: "Connect" },
+        expectedName: ambSeen.personName,
+        forbiddenSource: FORBIDDEN.source,
+        goal: "invite",
+      });
+      ok(ambRes.ok === false, `ambiguous text is refused, not guessed (${ambRes.error ?? "ALLOWED"})`);
+      const ambInvited = await amb.evaluate(() => (window as never as { __invited?: string }).__invited ?? null);
+      ok(ambInvited === null, `and nobody was invited (invited: ${ambInvited})`);
+      await amb.close();
+      await sctx.close();
     }
 
     console.log("\n2. destructive actions are refused whatever the model says");

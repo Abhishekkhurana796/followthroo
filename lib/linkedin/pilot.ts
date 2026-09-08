@@ -66,8 +66,17 @@ export interface PilotObservation {
 }
 
 export type PilotDecision =
-  | { action: "click"; index: number; reason: string }
-  | { action: "type"; index: number; text: string; reason: string }
+  /**
+   * `label` is the words visible on the control, for the many LinkedIn controls
+   * that are an unlabelled <span> and so cannot appear in the numbered list at
+   * all. An index is preferred when one fits; `label` rescues a control the list
+   * cannot describe.
+   *
+   * Deliberately not called `text`: on a `type` action `text` is what to type,
+   * and one field meaning two things is how the note ends up in the button.
+   */
+  | { action: "click"; index?: number; label?: string; reason: string }
+  | { action: "type"; index?: number; label?: string; text: string; reason: string }
   | { action: "done"; reason: string }
   | { action: "give_up"; reason: string };
 
@@ -87,11 +96,22 @@ const SYSTEM = `You are operating one LinkedIn profile page on behalf of its own
 
 You will be given the profile owner's name and a numbered list of every clickable element on the page, with its accessible label. Choose ONE next action.
 
+LOOK AT THE SCREENSHOT FIRST. It is the truth about the page; the list below it
+is a partial description. Many LinkedIn controls — Connect among them — are
+unlabelled spans that cannot appear in the list at all, so a control being absent
+from the list means nothing about whether it is on the page.
+
 Reply with ONLY a JSON object, no prose, no code fence:
   {"action":"click","index":<n>,"reason":"<short>"}
+  {"action":"click","label":"<exact words on the control>","reason":"<short>"}
   {"action":"type","index":<n>,"text":"<text>","reason":"<short>"}
   {"action":"done","reason":"<short>"}
   {"action":"give_up","reason":"<short>"}
+
+Use an index when the control you want is clearly in the list. When you can SEE a
+control in the screenshot that is not in the list — this is common — answer with
+"label" set to its exact visible words, e.g. {"action":"click","label":"Connect"}.
+Never invent an index for something that is not listed.
 
 Rules that matter more than completing the task:
 
@@ -208,8 +228,12 @@ function parseDecision(text: string, valid?: Set<number>): PilotDecision {
   }
   if (a === "click" || a === "type") {
     const idx = (parsed as { index?: unknown }).index;
-    if (typeof idx !== "number") throw new Error(`${a} without an index`);
-    if (valid && !valid.has(idx)) {
+    const lbl = (parsed as { label?: unknown }).label;
+    const hasLabel = typeof lbl === "string" && lbl.trim().length > 0 && lbl.length <= 80;
+    if (typeof idx !== "number" && !hasLabel) throw new Error(`${a} without an index or a label`);
+    // A label is resolved on the page by its visible words, so an index is
+    // optional once one is given.
+    if (typeof idx === "number" && valid && !valid.has(idx) && !hasLabel) {
       // Not a malformed reply — a considered "it is not in the list". Turned
       // into a give_up so the caller escalates to a screenshot rather than
       // firing a click at an element that was never there.

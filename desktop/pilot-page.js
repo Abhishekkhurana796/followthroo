@@ -44,12 +44,17 @@ function observe() {
   const personName = norm((h1?.textContent || "").split("\n")[0]) || slugName;
 
   const label = (el) => {
+    // Visible words come BEFORE id and name. They were after, so any control
+    // carrying an id was described to the model by that id — "ownConnect"
+    // instead of "Connect" — which is both meaningless to it and impossible to
+    // match when it names what it saw in the screenshot. id and name stay as a
+    // last resort for fields that have no words at all.
     const text = (
       el.getAttribute("aria-label") ||
       el.getAttribute("placeholder") ||
+      el.textContent ||
       el.getAttribute("name") ||
       el.getAttribute("id") ||
-      el.textContent ||
       ""
     )
       .replace(/\s+/g, " ")
@@ -97,9 +102,56 @@ function observe() {
     );
   };
 
-  const nodes = Array.from(document.querySelectorAll(CLICKABLE))
-    .filter(visible)
-    .filter((el) => !chrome(el));
+  /**
+   * Controls LinkedIn does not mark as controls.
+   *
+   * The Connect button on many profiles is this, and nothing else:
+   *
+   *   <span class="_9e7d82ae …">
+   *     <svg id="connect-small" aria-hidden="true">…</svg>
+   *     <div><span><span>Connect</span></span></div>
+   *   </span>
+   *
+   * A bare <span>. No role, no aria-label, an aria-hidden icon, and hashed class
+   * names that cannot be selected. A structural query finds nothing, so the
+   * button was absent from every element list we ever produced — and each time
+   * the model answered "there is no Connect button" it was describing the data
+   * it had been given, accurately.
+   *
+   * So controls are also found the way a person finds them: something that says
+   * a short thing and behaves like a button. `cursor: pointer` is the honest
+   * signal — LinkedIn sets it on these spans and not on ordinary text — and an
+   * icon with a short label is the shape of every action control on the page.
+   */
+  const looksClickable = (el) => {
+    const text = (el.textContent || "").replace(/\s+/g, " ").trim();
+    // A whole section also has "pointer" somewhere inside it; a control says one
+    // short thing.
+    if (!text || text.length > 40) return false;
+    if (getComputedStyle(el).cursor === "pointer") return true;
+    return !!el.querySelector("svg[id]");
+  };
+
+  const structural = Array.from(document.querySelectorAll(CLICKABLE));
+  const textual = Array.from(document.querySelectorAll("span, div, li, a")).filter(looksClickable);
+
+  /**
+   * Keep the outermost element for a given label, drop its inner copies.
+   *
+   * That markup yields four nested elements whose text is exactly "Connect".
+   * Clicking the innermost <span> may do nothing — the handler is on the wrapper
+   * — so the outermost element carrying that exact text is the one to offer.
+   */
+  const candidates = [...structural, ...textual].filter(visible).filter((el) => !chrome(el));
+  const nodes = candidates.filter((el) => {
+    const mine = (el.textContent || "").replace(/\s+/g, " ").trim();
+    return !candidates.some(
+      (other) =>
+        other !== el &&
+        other.contains(el) &&
+        (other.textContent || "").replace(/\s+/g, " ").trim() === mine,
+    );
+  });
 
   // Where the profile's own action row lives. A LinkedIn page has several
   // buttons labelled exactly "More" — the profile overflow menu, and a
@@ -150,6 +202,10 @@ function observe() {
     // Stamped so `act` resolves the very element that was described, rather than
     // re-running a query that may have shifted underneath us.
     el.setAttribute("data-ft-idx", String(idx));
+    // Stamped on the element itself so text resolution can prefer the profile's
+    // own action row without recomputing which container that is.
+    if (topCard && topCard.contains(el)) el.setAttribute("data-ft-top", "1");
+    else el.removeAttribute("data-ft-top");
     const r = el.getBoundingClientRect();
     elements.push({
       i: idx,
@@ -216,7 +272,76 @@ function observe() {
  */
 function act({ decision, expectedName, forbiddenSource, goal }) {
   const FORBIDDEN_RE = new RegExp(forbiddenSource, "i");
-  const el = document.querySelector(`[data-ft-idx="${decision.index}"]`);
+
+  /**
+   * Find a control by the words on it.
+   *
+   * This is what rescues a control the element list cannot describe — an
+   * unlabelled <span> with "Connect" inside it. It is also weaker evidence than
+   * an index: "Connect" is equally the text on the sidebar strangers' buttons,
+   * and that span carries no name, so the check that catches "Invite Wrong
+   * Person to connect" has nothing to read.
+   *
+   * So it is ordered, and it refuses rather than guesses. An ambiguous click is
+   * how the wrong person receives an invitation, and that cannot be taken back.
+   */
+  const resolveByText = (wanted) => {
+    const want = String(wanted || "").replace(/\s+/g, " ").trim().toLowerCase();
+    if (!want) return { error: "no text to look for" };
+
+    const seen = Array.from(document.querySelectorAll("[data-ft-idx]")).filter(
+      (el) => (el.textContent || "").replace(/\s+/g, " ").trim().toLowerCase() === want,
+    );
+    if (!seen.length) return { error: `nothing on the page reads exactly "${wanted}"` };
+
+    const inDialog = seen.filter((el) => el.closest('[role="dialog"], .artdeco-modal'));
+    if (inDialog.length) return { el: inDialog[0] };
+
+    /**
+     * Other people's controls, which are not all in <aside>.
+     *
+     * "More profiles for you" sits inside <main> and renders a Connect per
+     * stranger, so excluding the sidebar alone still leaves somebody else's
+     * button as a candidate — and with only one of them left it would have been
+     * accepted as unambiguous. The heading above it is what gives it away.
+     */
+    const recommendation = (el) => {
+      const sec = el.closest("section, [data-view-name]");
+      const head = sec && sec.querySelector("h1, h2, h3");
+      return /people also viewed|more profiles|people you may know|others? named|similar profiles/i.test(
+        (head?.textContent || "").trim(),
+      );
+    };
+
+    const outside = seen.filter((el) => !el.closest("aside") && !recommendation(el));
+    if (!outside.length) {
+      return { error: `every "${wanted}" on this page belongs to somebody else's card` };
+    }
+
+    const topCardEls = outside.filter((el) => el.getAttribute("data-ft-top") === "1");
+    if (topCardEls.length) return { el: topCardEls[0] };
+    if (outside.length === 1) return { el: outside[0] };
+
+    return {
+      error: `"${wanted}" matches ${outside.length} places and none is the profile's own action row — refusing to guess whose it is`,
+    };
+  };
+
+  let el;
+  if (decision.label && (decision.index === undefined || decision.index === null)) {
+    const found = resolveByText(decision.label);
+    if (found.error) return { ok: false, error: `refused: ${found.error}` };
+    el = found.el;
+  } else {
+    el = document.querySelector(`[data-ft-idx="${decision.index}"]`);
+    // An index that has gone stale but a text description that has not is worth
+    // one more try — the page reflows constantly.
+    if (!el && decision.label) {
+      const found = resolveByText(decision.label);
+      if (found.error) return { ok: false, error: `refused: ${found.error}` };
+      el = found.el;
+    }
+  }
   if (!el) return { ok: false, error: `element ${decision.index} is no longer on the page` };
 
   const label = (el.getAttribute("aria-label") || el.getAttribute("placeholder") || el.textContent || "")

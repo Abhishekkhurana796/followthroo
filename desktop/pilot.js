@@ -45,17 +45,39 @@ function describe(seen) {
     .join(" | ");
 }
 
-async function askServer(apiBase, token, observation) {
-  const res = await fetch(`${apiBase}/api/linkedin/assist`, {
-    method: "POST",
-    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-    body: JSON.stringify(observation),
-  });
-  const json = await res.json().catch(() => ({}));
-  if (!res.ok || json.ok === false) {
-    throw new Error(json.error || `assist returned ${res.status}`);
+/**
+ * Ask the server, surviving a hiccup.
+ *
+ * One "fetch failed" used to drop the whole action to the old selector path —
+ * which then reported that it could not find a Connect button, so a momentary
+ * network blip read as a LinkedIn layout change. A home connection drops
+ * packets; a run lasting half an hour will meet that.
+ */
+async function askServer(apiBase, token, observation, attempts = 3) {
+  let last;
+  for (let i = 1; i <= attempts; i++) {
+    try {
+      const res = await fetch(`${apiBase}/api/linkedin/assist`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify(observation),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok || json.ok === false) {
+        // A rejected token or a missing model will not fix itself; only retry
+        // what might.
+        const retryable = res.status >= 500 || res.status === 429;
+        last = new Error(json.error || `assist returned ${res.status}`);
+        if (!retryable) throw last;
+      } else {
+        return json.data.decision;
+      }
+    } catch (e) {
+      last = e;
+    }
+    if (i < attempts) await sleep(1200 * i);
   }
-  return json.data.decision;
+  throw last;
 }
 
 /**
@@ -136,9 +158,16 @@ async function pilotAction({ page, action, apiBase, token, onStep = () => {}, us
         screenshot,
       });
     } catch (e) {
+      const msg = String((e && e.message) || e);
+      // The window was closed mid-run. Nothing else will work either, and
+      // "could not reach the assistant" would send somebody looking at their
+      // network for a browser that is no longer there.
+      if (/Target page, context or browser has been closed|Target closed/i.test(msg)) {
+        return { status: "failed", result: "the Chrome window was closed, so the run stopped", fatal: "closed" };
+      }
       // A model that is down is not a profile without a Connect button, and the
       // run has to be able to tell those apart.
-      return { status: "failed", result: `could not reach the assistant: ${String((e && e.message) || e)}` };
+      return { status: "failed", result: `could not reach the assistant: ${msg}` };
     }
 
     // The elements go into the log too. A decision without the page it was made

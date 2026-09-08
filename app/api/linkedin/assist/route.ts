@@ -35,7 +35,7 @@ const Body = z.object({
   // Capped so one page cannot turn into an enormous prompt. LinkedIn profiles
   // sit well under this; anything approaching it is a sign the page is not what
   // we think it is.
-  elements: z.array(Element).max(120),
+  elements: z.array(Element).max(200),
   /** Base64 JPEG, no data: prefix. ~1.5MB of base64 is a generous 1080p frame. */
   screenshot: z.string().max(2_000_000).nullish(),
 });
