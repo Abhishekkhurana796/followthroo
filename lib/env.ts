@@ -86,6 +86,13 @@ export const env = {
     baseUrl: url("OPENROUTER_BASE_URL") ?? "https://openrouter.ai/api",
     model: get("OPENROUTER_MODEL") ?? "minimax/minimax-m2",
     classifierModel: get("OPENROUTER_CLASSIFIER_MODEL") ?? get("OPENROUTER_MODEL") ?? "minimax/minimax-m2",
+    // The LinkedIn pilot has different requirements from the CRM agent: it reads
+    // a page and returns one JSON decision, and it is handed a screenshot once
+    // the element list has not been enough — so it needs vision and exact
+    // structured output rather than good prose. Separate from OPENROUTER_MODEL
+    // so tuning the thing that clicks on real accounts cannot change what writes
+    // to leads, or the reverse.
+    pilotModel: get("OPENROUTER_PILOT_MODEL") ?? get("OPENROUTER_MODEL") ?? "minimax/minimax-m2",
     // Comma-separated. OpenRouter tries these in order when the primary is
     // unavailable, which is why there is no second provider integration here.
     fallbackModels: (get("OPENROUTER_FALLBACK_MODELS") ?? "")

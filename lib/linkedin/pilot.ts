@@ -64,7 +64,7 @@ function provider() {
   return {
     apiKey: (useOpenRouter ? env.openrouter.apiKey : env.anthropic.apiKey)!,
     baseURL: useOpenRouter ? env.openrouter.baseUrl : undefined,
-    model: useOpenRouter ? env.openrouter.model : env.anthropic.model,
+    model: useOpenRouter ? env.openrouter.pilotModel : env.anthropic.model,
     fallbackModels: useOpenRouter ? env.openrouter.fallbackModels : [],
   };
 }
