@@ -65,3 +65,7 @@ verify-runner.log
 
 # dev server output, written by `npm run dev > dev.log`
 dev.log
+
+# Run logs written by the desktop runner. The verification suite passes an
+# empty userDataPath, so they land here rather than in the app data folder.
+logs/

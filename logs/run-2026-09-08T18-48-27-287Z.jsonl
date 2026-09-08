@@ -1,2 +1,0 @@
-{"at":"2026-09-08T18:48:27.288Z","event":"run-start","cap":20,"dryRun":false,"apiBase":"http://127.0.0.1:56460"}
-{"at":"2026-09-08T18:48:29.916Z","event":"run-end","sent":0,"failed":0,"skipped":0,"attempted":0,"stoppedBecause":"Automatic sending is off. Turn on \"Send invites automatically\" in Followthroo → LinkedIn, then press Start."}
