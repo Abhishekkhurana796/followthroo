@@ -38,6 +38,28 @@ export async function GET(req: NextRequest) {
     );
   }
 
+  // Only the desktop app may claim work.
+  //
+  // The extension stopped asking for actions in 3.0.0, but an installed 2.5.x
+  // keeps polling this endpoint with the same pairing token and there is no way
+  // to make somebody update. Two clients claiming from one queue means the same
+  // person gets invited twice, and an invitation cannot be recalled — so the
+  // rule is enforced here rather than trusted to whatever is installed.
+  //
+  // An old client sees an empty queue rather than an error, which is exactly
+  // what it should do with it: nothing.
+  const client = req.headers.get("x-followthroo-client");
+  if (client !== "desktop") {
+    return withCors(
+      ok({
+        pacing: { minDelaySec: account.minDelaySec, maxDelaySec: account.maxDelaySec },
+        mode: account.mode,
+        actions: [],
+        note: "Invitations are sent by the Followthroo desktop app. This client can only read.",
+      })
+    );
+  }
+
   const limit = Math.min(Math.max(Number(req.nextUrl.searchParams.get("limit") ?? 3), 1), 10);
   const actions = await claimActions(account, limit);
 

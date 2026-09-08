@@ -20,6 +20,7 @@
 const path = require("node:path");
 const { chromium } = require("playwright-core");
 const { fillLinkedInAction } = require("./page-actions");
+const { pilotAction } = require("./pilot");
 
 /**
  * The daily ceiling, enforced here as well as on the server.
@@ -92,6 +93,10 @@ async function api(apiBase, pathname, { method = "GET", token, body } = {}) {
     method,
     headers: {
       Authorization: `Bearer ${token}`,
+      // Identifies this as the desktop app. The queue hands actions to nothing
+      // else, so an old Chrome extension still polling with the same token gets
+      // an empty list instead of racing us for the same person.
+      "X-Followthroo-Client": "desktop",
       ...(body ? { "Content-Type": "application/json" } : {}),
     },
     body: body ? JSON.stringify(body) : undefined,
@@ -332,7 +337,30 @@ async function runBatch({
             `Followthroo is working in this window — leave it alone. Sending ${progress() + 1} of ${cap}.`,
           )
           .catch(() => {});
-        outcome = await page.evaluate(fillLinkedInAction, { ...action, autoSend });
+
+        // The model drives. It reads whatever is actually on the page, which is
+        // what LinkedIn kept changing out from under a selector — Connect on the
+        // card, Connect in an overflow menu, Connect renamed.
+        outcome = await pilotAction({
+          page,
+          action: { ...action, autoSend },
+          apiBase,
+          token,
+          onStep: (s) =>
+            emit("status", {
+              message: s.refused
+                ? `Ignored an unsafe suggestion: ${s.refused}`
+                : `Working on ${who}: ${s.decision?.reason || s.decision?.action || "thinking"}`,
+            }),
+        });
+
+        // Only when no model is configured at all. The selector path still
+        // works for the common layouts and is better than refusing to run, but
+        // it is a floor, not the plan.
+        if (/could not reach the assistant|No model is configured/i.test(outcome.result || "")) {
+          emit("status", { message: "No assistant available — falling back to the built-in rules." });
+          outcome = await page.evaluate(fillLinkedInAction, { ...action, autoSend });
+        }
       } catch (e) {
         outcome = { status: "failed", result: String((e && e.message) || e) };
       }
