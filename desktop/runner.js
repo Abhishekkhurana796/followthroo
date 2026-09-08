@@ -358,8 +358,16 @@ async function runBatch({
         // works for the common layouts and is better than refusing to run, but
         // it is a floor, not the plan.
         if (/could not reach the assistant|No model is configured/i.test(outcome.result || "")) {
+          const why = outcome.result;
           emit("status", { message: "No assistant available — falling back to the built-in rules." });
           outcome = await page.evaluate(fillLinkedInAction, { ...action, autoSend });
+          // Say which path produced this. Without it, a fallback failure reads
+          // as "the AI could not do it" when the AI was never asked — and the
+          // real problem (an endpoint that is not deployed, a missing key) is
+          // invisible in the one place anybody looks.
+          outcome.result = `[no AI — ${why}] ${outcome.result}`;
+        } else {
+          outcome.result = `[AI] ${outcome.result}`;
         }
       } catch (e) {
         outcome = { status: "failed", result: String((e && e.message) || e) };
