@@ -92,7 +92,12 @@ export const env = {
     // structured output rather than good prose. Separate from OPENROUTER_MODEL
     // so tuning the thing that clicks on real accounts cannot change what writes
     // to leads, or the reverse.
-    pilotModel: get("OPENROUTER_PILOT_MODEL") ?? get("OPENROUTER_MODEL") ?? "minimax/minimax-m2",
+    // Defaulted separately, and NOT to OPENROUTER_MODEL's default: that is
+    // "minimax/minimax-m2", which OpenRouter has retired from its free tier and
+    // now 404s. Gemini Flash is cheap, fast, and reads an image — which this
+    // path needs, because a screenshot is attached once the element list has not
+    // been enough.
+    pilotModel: get("OPENROUTER_PILOT_MODEL") ?? "google/gemini-2.5-flash",
     // Comma-separated. OpenRouter tries these in order when the primary is
     // unavailable, which is why there is no second provider integration here.
     fallbackModels: (get("OPENROUTER_FALLBACK_MODELS") ?? "")
