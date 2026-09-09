@@ -15,12 +15,15 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { chromium, type Browser, type BrowserContext, type Page } from "@playwright/test";
+import { observe } from "../desktop/pilot-page";
 import { sendConnectionRequest } from "../desktop/connect-flow";
 import { CODES } from "../desktop/outcome-codes";
 
 const ROOT = join(__dirname, "..");
 const DRIVER = readFileSync(join(ROOT, "scripts", "linkedin-fixtures", "profile-driver.html"), "utf8");
 const DEEP = readFileSync(join(ROOT, "scripts", "linkedin-fixtures", "profile-deep-card.html"), "utf8");
+/** No <h1> at all, an unhyphenated slug, and three competing "More"s. */
+const H2NAME = readFileSync(join(ROOT, "scripts", "linkedin-fixtures", "profile-h2-name.html"), "utf8");
 const RIGHT = "https://www.linkedin.com/in/anirudh-bisht/";
 
 let pass = 0,
@@ -205,6 +208,44 @@ async function main() {
         __note?: string | null;
       };
       ok(!w.__sentWithoutNote && (w.__note ?? null) === null, `nothing was sent (plain: ${w.__sentWithoutNote}, note: ${w.__note})`);
+      await ctx.close();
+    }
+
+    console.log("\nCASE 10 — no <h1>, unhyphenated slug, three \"More\" buttons");
+    {
+      // The real /in/liannemui failure: 0 of 38 elements could be attributed,
+      // because personName fell back to the slug ("liannemui" vs a heading
+      // reading "lianne mui") and topCard/nameBox both need an <h1> that the
+      // page does not have. The driver delegated, and the model was handed three
+      // identical "More"s and correctly refused all three.
+      const ctx = await ctxFor(H2NAME);
+      const page = await ctx.newPage();
+      const url = "https://www.linkedin.com/in/liannemui/";
+      await page.goto(url);
+
+      const seen = await page.evaluate(observe);
+      ok(seen.personName === "lianne mui", `the name is read from the <h2> (${seen.personName})`);
+      ok(seen.profileReady === true, `the profile reads as ready (${seen.profileReady})`);
+
+      const mores = seen.elements.filter((e) => /^more\b|more actions/i.test(e.label.trim()));
+      const ownMores = mores.filter((e) => e.ownStrong);
+      ok(mores.length >= 3, `all three "More" controls are seen (${mores.length})`);
+      ok(ownMores.length === 1, `exactly one is attributed to this profile (${ownMores.length})`);
+
+      const out = await sendConnectionRequest({
+        page,
+        action: { type: "invite", linkedinUrl: url, note: null, autoSend: true },
+        useNote: true,
+        fallback: null,
+      });
+      ok(out.status === "sent", `status sent (${out.status} / ${out.code} — ${out.result})`);
+
+      const opened = await page.evaluate(() => (window as unknown as { __openedMore?: string }).__openedMore ?? null);
+      ok(opened === "own", `it opened the profile's own More, not the sticky bar or About (${opened})`);
+      const sent = await page.evaluate(() => (window as Win).__sent ?? null);
+      const followed = await page.evaluate(() => (window as Win).__followed ?? false);
+      ok(sent === "right", `the owner was sent from inside that menu (${sent})`);
+      ok(followed === false, `and Follow was never clicked (${followed})`);
       await ctx.close();
     }
   } finally {

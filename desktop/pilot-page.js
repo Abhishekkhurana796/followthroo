@@ -94,7 +94,16 @@ function observe() {
     'button, a[role="button"], div[role="button"], [role="menuitem"], .artdeco-dropdown__item, textarea, input[type="text"]';
 
   const norm = (s) => (s || "").toLowerCase().replace(/[^a-z0-9 ]+/g, " ").replace(/\s+/g, " ").trim();
-  const h1 = document.querySelector("main h1, h1");
+  /**
+   * Names with everything but letters and digits removed.
+   *
+   * A vanity slug is not always hyphenated: /in/liannemui normalises to
+   * "liannemui" and the page's own heading to "lianne mui". Neither string
+   * contains the other, so comparing them as words concluded the profile's own
+   * action row belonged to somebody else and nothing could be attributed.
+   * Squashing both sides makes the space stop mattering.
+   */
+  const squash = (v) => String(v || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
 
   /**
    * Who this page belongs to. Never empty when the URL says /in/<slug>.
@@ -109,7 +118,36 @@ function observe() {
   )
     .replace(/\b[0-9a-f]{6,}\b/g, "")
     .trim();
-  const personName = norm((h1?.textContent || "").split("\n")[0]) || slugName;
+  /**
+   * The element carrying the profile owner's name.
+   *
+   * This was `document.querySelector("main h1, h1")`, and on a profile with no
+   * <h1> at all — LinkedIn ships some with the name in an <h2> — it came back
+   * null. Three things hang off it: `personName` (which then fell back to the
+   * URL slug), `topCard` (null without it) and `nameBox` (the geometry signal's
+   * origin). So one missing tag disabled every way of attributing an element at
+   * once, on a page that was showing the name plainly, and the run refused
+   * three identical "More" buttons and gave up.
+   *
+   * So: the <h1> when there is one, otherwise the heading whose text is the
+   * person the URL says this is. Matching against the slug is what stops this
+   * picking up "About" or "Activity".
+   */
+  const nameEl = (() => {
+    const h1 = document.querySelector("main h1, h1");
+    if (h1 && norm(h1.textContent)) return h1;
+    const slugSq = squash(slugName);
+    if (!slugSq) return null;
+    const headings = Array.from(document.querySelectorAll("main h1, main h2, h1, h2"));
+    return (
+      headings.find((h) => {
+        const t = squash(h.textContent);
+        return t && (t.includes(slugSq) || slugSq.includes(t));
+      }) || null
+    );
+  })();
+
+  const personName = norm((nameEl?.textContent || "").split("\n")[0]) || slugName;
 
   const label = (el) => {
     // Visible words come BEFORE id and name. They were after, so any control
@@ -298,7 +336,7 @@ function observe() {
    * look like part of the action row.
    */
   const topCard = (() => {
-    if (!h1) return null;
+    if (!nameEl) return null;
     const ownAction = (el) =>
       /^(message|more|connect|invite|follow|pending)\b/i.test(label(el)) &&
       !el.closest("aside") &&
@@ -307,7 +345,7 @@ function observe() {
     if (!actions.length) return null;
 
     const stop = document.querySelector("main") || document.body;
-    let node = h1.parentElement;
+    let node = nameEl.parentElement;
     while (node && node !== stop && node !== document.body) {
       if (actions.some((a) => node.contains(a))) return node;
       node = node.parentElement;
@@ -342,7 +380,7 @@ function observe() {
    * strangers' Connects are hundreds of pixels away, in the right-hand rail or
    * far down the page.
    */
-  const nameBox = h1 ? h1.getBoundingClientRect() : null;
+  const nameBox = nameEl ? nameEl.getBoundingClientRect() : null;
   const nearTheName = (el) => {
     if (!nameBox) return false;
     const r = el.getBoundingClientRect();
@@ -361,8 +399,11 @@ function observe() {
   const ownStrongOf = (el) => {
     if (el.closest("aside") || recommendation(el)) return false;
     if (topCard && topCard.contains(el)) return true;
-    const sec = norm(sectionOf(el));
-    return !!(sec && personName && (sec.includes(personName) || personName.includes(sec)));
+    // Squashed, so "lianne mui" and an unhyphenated "liannemui" slug match. The
+    // length floor keeps a two-letter name from matching half the page.
+    const sec = squash(sectionOf(el));
+    const who = squash(personName);
+    return !!(sec && who && who.length >= 4 && (sec.includes(who) || who.includes(sec)));
   };
 
   /**
@@ -444,7 +485,7 @@ function observe() {
     personName,
     url: location.href,
     /** Has the profile actually rendered, or are we looking at a shell? */
-    profileReady: !!(h1 && personName && elements.some((e) => e.inTopCard)),
+    profileReady: !!(nameEl && personName && elements.some((e) => e.inTopCard)),
     /**
      * An invitation is outstanding — the button says "Pending".
      *

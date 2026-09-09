@@ -9,6 +9,15 @@ export const metadata = { title: "Changelog — Followthroo" };
  */
 const ENTRIES = [
   {
+    version: "0.16.2",
+    date: "Sep 2026",
+    items: [
+      "Fixed connection requests failing on profiles where LinkedIn does not put the person’s name in the usual place. The app worked out which buttons belong to the person you are visiting by starting from their name heading—and on those profiles there is no such heading, so it fell back to reading the name out of the web address and then could attribute nothing at all. It would see three buttons saying “More” (one pinned to the top of the screen, the person’s own, and one that expands their About text), correctly refuse to guess between them, and stop",
+      "The name is now found wherever it sits on the page, and matched against the web address even when that address runs the name together without punctuation (/in/liannemui against a heading reading “Lianne Mui”). Those two together are what let it pick the person’s own “More” menu and find Connect inside it",
+      "On a profile that offers Follow rather than Connect, the request now goes through the person’s own menu instead of giving up—and Follow is still never pressed in place of Connect",
+    ],
+  },
+  {
     version: "0.16.1",
     date: "Sep 2026",
     items: [
