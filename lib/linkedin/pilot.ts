@@ -61,8 +61,10 @@ export interface PilotObservation {
   /** What has already been done this attempt, newest last. */
   history: string[];
   elements: PilotElement[];
-  /** Base64 JPEG, sent only once the element list has not been enough. */
+  /** Base64 JPEG of the viewport, on every step. The picture leads; the list describes. */
   screenshot?: string | null;
+  /** So a coordinate answer can be given in the same space as the picture. */
+  viewport?: { width: number; height: number } | null;
 }
 
 export type PilotDecision =
@@ -75,7 +77,7 @@ export type PilotDecision =
    * Deliberately not called `text`: on a `type` action `text` is what to type,
    * and one field meaning two things is how the note ends up in the button.
    */
-  | { action: "click"; index?: number; label?: string; reason: string }
+  | { action: "click"; index?: number; label?: string; x?: number; y?: number; reason: string }
   | { action: "type"; index?: number; label?: string; text: string; reason: string }
   | { action: "done"; reason: string }
   | { action: "give_up"; reason: string };
@@ -104,6 +106,7 @@ from the list means nothing about whether it is on the page.
 Reply with ONLY a JSON object, no prose, no code fence:
   {"action":"click","index":<n>,"reason":"<short>"}
   {"action":"click","label":"<exact words on the control>","reason":"<short>"}
+  {"action":"click","x":<px>,"y":<px>,"reason":"<short>"}
   {"action":"type","index":<n>,"text":"<text>","reason":"<short>"}
   {"action":"done","reason":"<short>"}
   {"action":"give_up","reason":"<short>"}
@@ -112,6 +115,13 @@ Use an index when the control you want is clearly in the list. When you can SEE 
 control in the screenshot that is not in the list — this is common — answer with
 "label" set to its exact visible words, e.g. {"action":"click","label":"Connect"}.
 Never invent an index for something that is not listed.
+
+If you can see the control but cannot give its exact words either — an icon with
+no text, or a label you cannot read — answer with "x" and "y": the pixel position
+of its CENTRE in the attached screenshot, measured from the top left. Use this
+last, because a few pixels of error lands on a different button. Whatever sits at
+that point is identified and checked before anything is clicked, and a point that
+turns out to be somebody else's control, or something destructive, is refused.
 
 Rules that matter more than completing the task:
 
@@ -195,6 +205,7 @@ function userPrompt(o: PilotObservation): string {
     `Allowed to actually send: ${o.autoSend ? "yes" : "no — stop once the text is entered"}`,
     `Add a note: ${o.useNote ? "yes" : 'no — click "Send without a note"'}`,
     `Step ${o.step}.`,
+    o.viewport ? `The screenshot is ${o.viewport.width} by ${o.viewport.height} pixels.` : "",
     o.history.length ? `Already done:\n${o.history.map((h) => `  - ${h}`).join("\n")}` : "Nothing done yet.",
     "",
     "Clickable elements:",
@@ -230,10 +241,15 @@ function parseDecision(text: string, valid?: Set<number>): PilotDecision {
     const idx = (parsed as { index?: unknown }).index;
     const lbl = (parsed as { label?: unknown }).label;
     const hasLabel = typeof lbl === "string" && lbl.trim().length > 0 && lbl.length <= 80;
-    if (typeof idx !== "number" && !hasLabel) throw new Error(`${a} without an index or a label`);
+    const px = (parsed as { x?: unknown }).x;
+    const py = (parsed as { y?: unknown }).y;
+    const hasPoint = typeof px === "number" && typeof py === "number";
+    if (typeof idx !== "number" && !hasLabel && !hasPoint) {
+      throw new Error(`${a} without an index, a label or a point`);
+    }
     // A label is resolved on the page by its visible words, so an index is
     // optional once one is given.
-    if (typeof idx === "number" && valid && !valid.has(idx) && !hasLabel) {
+    if (typeof idx === "number" && valid && !valid.has(idx) && !hasLabel && !hasPoint) {
       // Not a malformed reply — a considered "it is not in the list". Turned
       // into a give_up so the caller escalates to a screenshot rather than
       // firing a click at an element that was never there.

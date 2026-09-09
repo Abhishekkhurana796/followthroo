@@ -5,6 +5,10 @@
   /* The signal that makes these findable at all. LinkedIn sets it on the
      wrapper; ordinary text does not have it. */
   .ft-clickable { cursor: pointer; }
+  /* An svg with no width fills the page and the screenshot becomes one black
+     shape — which is exactly what happened, and the model correctly reported
+     that it could not see anything. */
+  svg { width: 16px; height: 16px; }
 </style>
 </head>
 <body>
@@ -33,7 +37,7 @@
     <a href="/in/wrong-person-1">Wrong Person One</a>
     <!-- The stranger's Connect is the same shape, and says the same word. -->
     <span class="_aa11bb22 ft-clickable" data-who="wrong-1">
-      <svg id="connect-small" aria-hidden="true" viewBox="0 0 16 16"><path d="M9 4a3 3 0 1 1-3-3"/></svg>
+      <svg id="connect-small" aria-hidden="true" width="16" height="16" viewBox="0 0 16 16"><path d="M9 4a3 3 0 1 1-3-3"/></svg>
       <div><span><span>Connect</span></span></div>
     </span>
   </div>
@@ -48,7 +52,7 @@
 
       <div class="actions">
         <span class="_9e7d82ae _93ebcf8e ft-clickable" id="ownConnect" data-who="right">
-          <svg id="connect-small" fill="currentColor" aria-hidden="true" viewBox="0 0 16 16"><path d="M9 4a3 3 0 1 1-3-3 3 3 0 0 1 3 3"/></svg>
+          <svg id="connect-small" fill="currentColor" aria-hidden="true" width="16" height="16" viewBox="0 0 16 16"><path d="M9 4a3 3 0 1 1-3-3 3 3 0 0 1 3 3"/></svg>
           <div class="_9f31adb5"><span class="_183ca032"><span>Connect</span></span></div>
         </span>
         <button aria-label="Message Anirudh Bisht" data-who="right-msg">Message</button>
@@ -61,7 +65,7 @@
     <div class="rail-card">
       <a href="/in/wrong-person-3">Wrong Person Three</a>
       <span class="_cc33dd44 ft-clickable" data-who="wrong-3">
-        <svg id="connect-small" aria-hidden="true" viewBox="0 0 16 16"><path d="M9 4a3 3 0 1 1-3-3"/></svg>
+        <svg id="connect-small" aria-hidden="true" width="16" height="16" viewBox="0 0 16 16"><path d="M9 4a3 3 0 1 1-3-3"/></svg>
         <div><span><span>Connect</span></span></div>
       </span>
     </div>
@@ -99,13 +103,23 @@
     modal.querySelector("#addNote").addEventListener("click", () => {
       modal.querySelector("#noteWrap").hidden = false;
     });
+    // Once an invitation is away, LinkedIn replaces Connect with "Pending".
+    // Without that the page looks untouched, and a model checking its work sees
+    // a Connect button still sitting there, concludes it has not sent yet, and
+    // clicks it again — round and round until the step limit. Which is exactly
+    // what it did here.
+    const markPending = () => {
+      modal.remove();
+      const own = document.getElementById("ownConnect");
+      if (own) own.innerHTML = '<div><span><span>Pending</span></span></div>';
+    };
     modal.querySelector("#sendPlain").addEventListener("click", () => {
       window.__sentWithoutNote = true;
-      modal.remove();
+      markPending();
     });
     modal.querySelector("#sendInvite").addEventListener("click", () => {
       window.__note = modal.querySelector("#custom-message").value;
-      modal.remove();
+      markPending();
     });
   }
 </script>

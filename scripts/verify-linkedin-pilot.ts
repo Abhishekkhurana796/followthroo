@@ -93,7 +93,7 @@ async function main() {
       const page = await openPage(RIGHT + "?cardconnect");
       const expectedName = (await page.evaluate(observe)).personName;
       const run = (decision: Decision) =>
-        page.evaluate(act, { decision, expectedName, forbiddenSource: FORBIDDEN.source, goal: "invite" });
+        page.evaluate(act, { decision, expectedName, forbiddenSource: FORBIDDEN.source, goal: "invite", autoSend: true });
 
       // A stranger's Connect, from the "People also viewed" rail.
       const strangerIdx = await indexOf(page, /Wrong Person One/i);
@@ -123,7 +123,7 @@ async function main() {
       const page = await openPage(RIGHT + "?cardconnect");
       const expectedName = (await page.evaluate(observe)).personName;
       const run = (decision: Decision, name = expectedName) =>
-        page.evaluate(act, { decision, expectedName: name, forbiddenSource: FORBIDDEN.source, goal: "invite" });
+        page.evaluate(act, { decision, expectedName: name, forbiddenSource: FORBIDDEN.source, goal: "invite", autoSend: true });
 
       // What actually happened on a real profile: the model reported "Connect
       // button is available directly on the profile" and clicked
@@ -180,6 +180,7 @@ async function main() {
         expectedName: seen.personName,
         forbiddenSource: FORBIDDEN.source,
         goal: "invite",
+        autoSend: true,
       });
       ok(byLabel.ok === true, `clicking by label works (${byLabel.error ?? byLabel.did})`);
       const invited = await page.evaluate(() => (window as never as { __invited?: string }).__invited ?? null);
@@ -196,11 +197,55 @@ async function main() {
         expectedName: ambSeen.personName,
         forbiddenSource: FORBIDDEN.source,
         goal: "invite",
+        autoSend: true,
       });
       ok(ambRes.ok === false, `ambiguous text is refused, not guessed (${ambRes.error ?? "ALLOWED"})`);
       const ambInvited = await amb.evaluate(() => (window as never as { __invited?: string }).__invited ?? null);
       ok(ambInvited === null, `and nobody was invited (invited: ${ambInvited})`);
       await amb.close();
+      await sctx.close();
+    }
+
+    console.log("\n1d. a test run cannot send, whatever the model decides");
+    {
+      const sctx = await browser.newContext();
+      await sctx.route("**/*", (route) =>
+        route.fulfill({ status: 200, contentType: "text/html; charset=utf-8", body: SPAN_FIXTURE }),
+      );
+      const page = await sctx.newPage();
+      await page.goto(RIGHT);
+      const seen = await page.evaluate(observe);
+
+      // Open the dialog so a Send control exists to be refused.
+      await page.evaluate(act, {
+        decision: { action: "click", label: "Connect" },
+        expectedName: seen.personName,
+        forbiddenSource: FORBIDDEN.source,
+        goal: "invite",
+        autoSend: false,
+      });
+      await page.waitForTimeout(300);
+
+      // "Allowed to actually send: no" was only a line in the prompt, which the
+      // model is free to ignore — so a Test run could put a real invitation on
+      // somebody's LinkedIn, and never record it, because a dry run reports
+      // nothing to the server. Test and Start were doing the same thing.
+      for (const label of ["Send now", "Send without a note"]) {
+        const res = await page.evaluate(act, {
+          decision: { action: "click", label },
+          expectedName: seen.personName,
+          forbiddenSource: FORBIDDEN.source,
+          goal: "invite",
+          autoSend: false,
+        });
+        ok(res.ok === false, `"${label}" is refused during a test run (${res.error ?? "ALLOWED"})`);
+      }
+      const sentPlain = await page.evaluate(
+        () => (window as never as { __sentWithoutNote?: boolean }).__sentWithoutNote ?? false,
+      );
+      const note = await page.evaluate(() => (window as never as { __note?: string }).__note ?? null);
+      ok(sentPlain === false && note === null, `and nothing was actually sent (plain: ${sentPlain}, note: ${note})`);
+      await page.close();
       await sctx.close();
     }
 
@@ -215,6 +260,7 @@ async function main() {
         expectedName,
         forbiddenSource: FORBIDDEN.source,
         goal: "invite",
+        autoSend: true,
       });
       await page.waitForTimeout(400);
 
@@ -225,6 +271,7 @@ async function main() {
           expectedName,
           forbiddenSource: FORBIDDEN.source,
           goal: "invite",
+          autoSend: true,
         });
         ok(res.ok === false, `${name} is refused (${res.error ?? "ALLOWED"})`);
       }

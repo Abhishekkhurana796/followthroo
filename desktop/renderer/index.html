@@ -60,7 +60,17 @@
         flex: 0 0 auto;
       }
       h1 { font-size: 15px; font-weight: 700; margin: 0; letter-spacing: -0.01em; }
-      .dot { width: 9px; height: 9px; border-radius: 999px; background: var(--line); margin-left: auto; }
+      .dot { width: 9px; height: 9px; border-radius: 999px; background: var(--line); }
+      /* Reload. The queue was only read on open, on save, and when a run ended,
+         so leads added in the web app did not appear until the pairing token was
+         re-saved — which is a strange thing to have to do to see your own work. */
+      .reload {
+        margin-left: auto; flex: 0 0 auto; width: 26px; height: 26px; padding: 0;
+        border: 1px solid var(--line); border-radius: 8px; background: var(--surface);
+        color: var(--ink-soft); font-size: 13px; line-height: 1; cursor: pointer;
+      }
+      .reload:hover { background: var(--tint); color: var(--ink); }
+      .reload:disabled { opacity: 0.5; cursor: default; }
       .dot.on { background: var(--ok); }
       .dot.err { background: var(--warn); }
       .sub { margin: 0 0 16px; font-size: 12px; color: var(--ink-soft); }
@@ -156,6 +166,7 @@
     <div class="head">
       <span class="mark">F</span>
       <h1>Followthroo for LinkedIn</h1>
+      <button class="reload" id="reload" title="Check for new leads">&#8635;</button>
       <span class="dot" id="dot" title="Status"></span>
     </div>
     <p class="sub">Sends your LinkedIn invitations from this computer, at a human pace. Keep working while it runs.</p>

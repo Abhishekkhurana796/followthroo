@@ -38,6 +38,7 @@ const Body = z.object({
   elements: z.array(Element).max(200),
   /** Base64 JPEG, no data: prefix. ~1.5MB of base64 is a generous 1080p frame. */
   screenshot: z.string().max(2_000_000).nullish(),
+  viewport: z.object({ width: z.number(), height: z.number() }).nullish(),
 });
 
 /**

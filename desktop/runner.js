@@ -483,7 +483,7 @@ async function runBatch({
           // works for the common layouts and is better than refusing to run, but
           // it is a floor, not the plan.
           if (
-            /could not reach the assistant|No model is configured/i.test(
+            /No model is configured|not available on this deployment/i.test(
               outcome.result || "",
             )
           ) {

@@ -107,6 +107,15 @@ function fakeApp(opts: { profileSuffix?: string; autoSend?: boolean } = {}) {
       return;
     }
 
+    // No model on this deployment, which is the one case that still falls back
+    // to the selector path. These cases test the loop — claim, pace, stop — not
+    // the pilot, so the deterministic path is what they want.
+    if (url.pathname === "/api/linkedin/assist") {
+      res.writeHead(503, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ ok: false, error: "No model is configured on this deployment." }));
+      return;
+    }
+
     res.writeHead(404, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ ok: false, error: "not found" }));
   });

@@ -34,6 +34,16 @@ const MAX_STEPS = 8;
  */
 const SCREENSHOT_AFTER_STEP = 0;
 
+/**
+ * How many elements may go to the assistant.
+ *
+ * The endpoint refuses more than 200, and a rejected body reads to the client as
+ * "could not reach the assistant" — so exceeding it silently sent every action
+ * to the old selector path. The list arrives sorted with the dialog first, then
+ * the profile's action row, so a trim takes from the least useful end.
+ */
+const MAX_ELEMENTS = 150;
+
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /** The page in one line, for a failure message somebody has to act on. */
@@ -128,6 +138,12 @@ async function pilotAction({ page, action, apiBase, token, onStep = () => {}, us
     return { status: "skipped", result: "already connected — no invitation to send" };
   }
 
+  // Somebody already invited them and it has not been accepted yet. Sending a
+  // second one is not possible and would not be wanted.
+  if (goal === "invite" && seen.pending) {
+    return { status: "skipped", result: "an invitation to this person is already pending" };
+  }
+
   let sawScreenshot = false;
   let forceScreenshot = false;
 
@@ -154,8 +170,12 @@ async function pilotAction({ page, action, apiBase, token, onStep = () => {}, us
         url: seen.url,
         step,
         history,
-        elements: seen.elements,
+        elements: seen.elements.slice(0, MAX_ELEMENTS),
         screenshot,
+        viewport: page.viewportSize() || (await page.evaluate(() => ({
+          width: window.innerWidth,
+          height: window.innerHeight,
+        }))),
       });
     } catch (e) {
       const msg = String((e && e.message) || e);
@@ -255,6 +275,8 @@ async function pilotAction({ page, action, apiBase, token, onStep = () => {}, us
       expectedName: seen.personName,
       forbiddenSource: FORBIDDEN.source,
       goal,
+      // Not advice. With this false, act() refuses anything that would send.
+      autoSend,
     });
 
     if (!outcome.ok) {
@@ -271,6 +293,18 @@ async function pilotAction({ page, action, apiBase, token, onStep = () => {}, us
 
     // Let the click land — a dialog opening, a menu expanding.
     await sleep(1400 + Math.random() * 900);
+    // The page saying "Pending" after we clicked Connect is the invitation
+    // itself confirming it went — better evidence than any answer the model
+    // could give, and it stops the loop the moment the work is done.
+    const now = await page.evaluate(observe);
+    if (goal === "invite" && autoSend && now.pending && history.some((h) => /clicked "(invite|connect)/i.test(h))) {
+      return {
+        status: "sent",
+        result: "invitation sent",
+        kind: "invite",
+        noteUsed: history.some((h) => /^typed/.test(h)),
+      };
+    }
     const before = seen.elements.length;
     seen = await page.evaluate(observe);
 

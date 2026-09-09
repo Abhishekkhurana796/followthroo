@@ -143,7 +143,9 @@ function observe() {
    * — so the outermost element carrying that exact text is the one to offer.
    */
   const candidates = [...structural, ...textual].filter(visible).filter((el) => !chrome(el));
-  const nodes = candidates.filter((el) => {
+
+  // Same words, nested: keep the outermost, which is where the handler lives.
+  const outermost = candidates.filter((el) => {
     const mine = (el.textContent || "").replace(/\s+/g, " ").trim();
     return !candidates.some(
       (other) =>
@@ -152,6 +154,21 @@ function observe() {
         (other.textContent || "").replace(/\s+/g, " ").trim() === mine,
     );
   });
+
+  /**
+   * Drop the containers.
+   *
+   * Casting a wider net catches the wrappers too: a card holding a name and a
+   * button reads "Wrong Person Three Connect", and a row holding two buttons
+   * reads "Connect Message". Neither is a control, both are clutter, and enough
+   * of them together blew past the 200-element limit on the endpoint — which
+   * came back as "could not reach the assistant" and sent the whole action to
+   * the old selector path.
+   *
+   * After the pass above, anything still containing another candidate is a
+   * grouping element rather than the thing being grouped.
+   */
+  const nodes = outermost.filter((el) => !outermost.some((other) => other !== el && el.contains(other)));
 
   // Where the profile's own action row lives. A LinkedIn page has several
   // buttons labelled exactly "More" — the profile overflow menu, and a
@@ -235,6 +252,16 @@ function observe() {
     url: location.href,
     /** Has the profile actually rendered, or are we looking at a shell? */
     profileReady: !!(h1 && personName && elements.some((e) => e.inTopCard)),
+    /**
+     * An invitation is outstanding — the button says "Pending".
+     *
+     * Read here rather than left to the model. Before we act it means somebody
+     * already invited them; after we act it is the page confirming the
+     * invitation went. Both are facts, and neither should depend on a model
+     * choosing the right word for them: shown Pending, it answered give_up on an
+     * invitation it had just successfully sent.
+     */
+    pending: elements.some((e) => e.inTopCard && /^pending$/i.test(e.label.trim())),
     signedOut:
       /\/(login|checkpoint|authwall)/.test(location.pathname) ||
       !!document.querySelector('input[name="session_key"]'),
@@ -270,7 +297,7 @@ function observe() {
  * profiles for you", and their labels carry their own names, so a label naming
  * somebody else is disqualifying on its face.
  */
-function act({ decision, expectedName, forbiddenSource, goal }) {
+function act({ decision, expectedName, forbiddenSource, goal, autoSend }) {
   const FORBIDDEN_RE = new RegExp(forbiddenSource, "i");
 
   /**
@@ -289,9 +316,20 @@ function act({ decision, expectedName, forbiddenSource, goal }) {
     const want = String(wanted || "").replace(/\s+/g, " ").trim().toLowerCase();
     if (!want) return { error: "no text to look for" };
 
-    const seen = Array.from(document.querySelectorAll("[data-ft-idx]")).filter(
-      (el) => (el.textContent || "").replace(/\s+/g, " ").trim().toLowerCase() === want,
-    );
+    const sameWords = (el) => (el.textContent || "").replace(/\s+/g, " ").trim().toLowerCase() === want;
+
+    let seen = Array.from(document.querySelectorAll("[data-ft-idx]")).filter(sameWords);
+
+    // Stamps come from the last observe(), so anything that appeared since — a
+    // dialog opened by the click we just made, a menu that just expanded — is
+    // unstamped and would be invisible here. Fall back to the whole document,
+    // keeping the outermost element for the words, exactly as observe() does.
+    if (!seen.length) {
+      const all = Array.from(document.querySelectorAll("button, a, span, div, li, [role]")).filter(
+        (el) => sameWords(el) && !el.closest("[data-followthroo-overlay]"),
+      );
+      seen = all.filter((el) => !all.some((other) => other !== el && other.contains(el)));
+    }
     if (!seen.length) return { error: `nothing on the page reads exactly "${wanted}"` };
 
     const inDialog = seen.filter((el) => el.closest('[role="dialog"], .artdeco-modal'));
@@ -327,8 +365,40 @@ function act({ decision, expectedName, forbiddenSource, goal }) {
     };
   };
 
+  /**
+   * A point becomes an element before it becomes a click.
+   *
+   * Clicking a raw coordinate would be the one action with no guardrails on it —
+   * nothing to compare against a name, nothing to check against the forbidden
+   * list, and a few pixels of error is a different button. Asking the page what
+   * is at that point turns the model's guess back into an element, and every
+   * check below then applies exactly as it does to an index.
+   */
+  const resolveByPoint = (x, y) => {
+    const px = Number(x);
+    const py = Number(y);
+    if (!Number.isFinite(px) || !Number.isFinite(py)) return { error: "that is not a point" };
+    if (px < 0 || py < 0 || px > window.innerWidth || py > window.innerHeight) {
+      return { error: `(${px}, ${py}) is outside the window` };
+    }
+    const hit = document.elementFromPoint(px, py);
+    if (!hit) return { error: `nothing is at (${px}, ${py})` };
+    if (hit.closest("[data-followthroo-overlay]")) return { error: "that point is on our own banner" };
+    // Prefer the control we already catalogued over whatever fragment of text
+    // happens to be topmost at that pixel.
+    return { el: hit.closest("[data-ft-idx]") || hit };
+  };
+
   let el;
-  if (decision.label && (decision.index === undefined || decision.index === null)) {
+  if (
+    (decision.x !== undefined || decision.y !== undefined) &&
+    decision.index === undefined &&
+    !decision.label
+  ) {
+    const found = resolveByPoint(decision.x, decision.y);
+    if (found.error) return { ok: false, error: `refused: ${found.error}` };
+    el = found.el;
+  } else if (decision.label && (decision.index === undefined || decision.index === null)) {
     const found = resolveByText(decision.label);
     if (found.error) return { ok: false, error: `refused: ${found.error}` };
     el = found.el;
@@ -355,6 +425,17 @@ function act({ decision, expectedName, forbiddenSource, goal }) {
   // Somebody else's button. The check is deliberately narrow — it only fires
   // when the label names a person AND that person is not the one we are on.
   const norm = (s) => (s || "").toLowerCase().replace(/[^a-z0-9 ]+/g, " ").replace(/\s+/g, " ").trim();
+  // A test run must not send.
+  //
+  // "Allowed to actually send: no" was only ever a line in the prompt, and the
+  // model is free to ignore it — so a Test run could click Send and put a real
+  // invitation on somebody's LinkedIn, which is also never recorded, because a
+  // dry run reports nothing to the server. Test and Start were doing the same
+  // thing. This is the hard stop the prompt was pretending to be.
+  if (!autoSend && /^send\b|send now|send invitation|send without a note/i.test(label)) {
+    return { ok: false, error: `refused: "${label}" would send, and this is a test run` };
+  }
+
   // Following is not connecting. "Follow <name>" sits exactly where Connect sits
   // on a profile that has no Connect on its card, and it was clicked as though
   // it were one — which follows somebody on their real account instead of asking
