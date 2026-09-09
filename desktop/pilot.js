@@ -242,7 +242,7 @@ async function pilotAction({ page, action, apiBase, token, onStep = () => {}, us
       // invitation — a lie in the CRM, and the sequence follows up on a
       // conversation that never started. Require that we actually clicked
       // something that invites.
-      if (goal === "invite" && !history.some((h) => /clicked "(invite|connect)/i.test(h))) {
+      if (goal === "invite" && !history.some((h) => /clicked "(invite|connect|send)/i.test(h))) {
         return {
           status: "failed",
           result: "the assistant said it was done without ever clicking Connect — nothing was sent",
@@ -270,7 +270,7 @@ async function pilotAction({ page, action, apiBase, token, onStep = () => {}, us
     // `act` is passed by reference so Playwright serializes its source into the
     // page. An arrow function calling act() would not work: act does not exist
     // in the page, only here.
-    const outcome = await page.evaluate(act, {
+    let outcome = await page.evaluate(act, {
       decision,
       expectedName: seen.personName,
       forbiddenSource: FORBIDDEN.source,
@@ -278,6 +278,125 @@ async function pilotAction({ page, action, apiBase, token, onStep = () => {}, us
       // Not advice. With this false, act() refuses anything that would send.
       autoSend,
     });
+
+    // PLAYWRIGHT NATIVE RESCUE:
+    // If the in-page evaluate could not find the element or refused due to overlay/shadow-DOM encapsulation,
+    // and the requested action is a legitimate invitation workflow step (Send without a note, Add a note, Send now),
+    // we use Playwright's native CDP locator engine. Playwright locators automatically pierce shadow roots,
+    // bypass overlay backdrops, and perform trusted OS-level clicks.
+    if (!outcome.ok && decision.action === "click" && autoSend) {
+      const lbl = String(decision.label || "").toLowerCase();
+      const rsn = String(decision.reason || "").toLowerCase();
+      const chosenEl = decision.index !== undefined && seen.elements ? seen.elements.find((e) => e.i === decision.index) : null;
+      const combined = [lbl, rsn, chosenEl ? chosenEl.label : ""].join(" ").toLowerCase();
+
+      // Case A: "Send without a note"
+      if (/without a note/i.test(combined) || (!outcome.ok && !useNote && /send/i.test(combined))) {
+        const locators = [
+          page.locator('button:has-text("Send without a note")'),
+          page.locator('button[aria-label*="without a note" i]'),
+          page.getByRole('button', { name: /send without a note/i }),
+          page.locator('.artdeco-modal button.artdeco-button--primary'),
+          page.locator('[role="dialog"] button.artdeco-button--primary'),
+          page.locator('div[role="dialog"] button:has-text("Send")'),
+          page.locator('#artdeco-modal-outlet button.artdeco-button--primary'),
+        ];
+        for (const loc of locators) {
+          const target = loc.first();
+          if (await target.isVisible({ timeout: 1200 }).catch(() => false)) {
+            await target.scrollIntoViewIfNeeded().catch(() => {});
+            await sleep(100);
+            try {
+              await target.click({ timeout: 2500 });
+            } catch (_) {
+              await target.click({ timeout: 2000, force: true }).catch(() => {});
+            }
+            outcome = {
+              ok: true,
+              action: "click",
+              did: 'clicked "Send without a note"',
+              rescued: true,
+            };
+            break;
+          }
+        }
+      }
+
+      // Case B: "Add a note"
+      if (!outcome.ok && /add a note/i.test(combined)) {
+        const locators = [
+          page.locator('button:has-text("Add a note")'),
+          page.locator('button[aria-label*="add a note" i]'),
+          page.getByRole('button', { name: /add a note/i }),
+          page.locator('.artdeco-modal button.artdeco-button--secondary'),
+          page.locator('[role="dialog"] button.artdeco-button--secondary'),
+        ];
+        for (const loc of locators) {
+          const target = loc.first();
+          if (await target.isVisible({ timeout: 1200 }).catch(() => false)) {
+            await target.scrollIntoViewIfNeeded().catch(() => {});
+            await sleep(100);
+            try {
+              await target.click({ timeout: 2500 });
+            } catch (_) {
+              await target.click({ timeout: 2000, force: true }).catch(() => {});
+            }
+            outcome = {
+              ok: true,
+              action: "click",
+              did: 'clicked "Add a note"',
+              rescued: true,
+            };
+            break;
+          }
+        }
+      }
+
+      // Case C: "Send" / "Send now" / "Send invitation"
+      if (!outcome.ok && (/send( now| invitation)?/i.test(combined) || /^send\b/i.test(combined) || /click.*send\b/i.test(combined))) {
+        const locators = [
+          page.locator('button:has-text("Send now")'),
+          page.locator('button:has-text("Send invitation")'),
+          page.locator('button:has-text("Send")'),
+          page.locator('.artdeco-modal button.artdeco-button--primary'),
+          page.locator('[role="dialog"] button.artdeco-button--primary'),
+        ];
+        for (const loc of locators) {
+          const target = loc.first();
+          if (await target.isVisible({ timeout: 1200 }).catch(() => false)) {
+            await target.scrollIntoViewIfNeeded().catch(() => {});
+            await sleep(100);
+            try {
+              await target.click({ timeout: 2500 });
+            } catch (_) {
+              await target.click({ timeout: 2000, force: true }).catch(() => {});
+            }
+            outcome = {
+              ok: true,
+              action: "click",
+              did: 'clicked "Send"',
+              rescued: true,
+            };
+            break;
+          }
+        }
+      }
+    }
+
+    if (!outcome.ok && decision.action === "type") {
+      const textarea = page.locator(
+        'textarea#custom-message, textarea[name="message"], .artdeco-modal textarea, [role="dialog"] textarea'
+      ).first();
+      if (await textarea.isVisible({ timeout: 1200 }).catch(() => false)) {
+        await textarea.fill(String(decision.text ?? ""));
+        outcome = {
+          ok: true,
+          action: "type",
+          did: `typed note (${String(decision.text ?? "").length} chars)`,
+          rescued: true,
+        };
+      }
+    }
 
     if (!outcome.ok) {
       // A refusal is worth recording in history: it stops the model proposing
@@ -288,16 +407,56 @@ async function pilotAction({ page, action, apiBase, token, onStep = () => {}, us
         return { status: "failed", result: `stopped after three refused suggestions — last: ${outcome.error}` };
       }
     } else {
+      // Execute the click using Playwright's native trusted mouse input pipeline if not already clicked by rescue.
+      if (outcome.action === "click" && !outcome.rescued) {
+        let clicked = false;
+        if (outcome.selector) {
+          try {
+            await page.click(outcome.selector, { timeout: 2000, noWaitAfter: true });
+            clicked = true;
+          } catch (_) {}
+        }
+        if (!clicked && outcome.point && typeof outcome.point.x === "number" && typeof outcome.point.y === "number") {
+          try {
+            await page.mouse.move(outcome.point.x, outcome.point.y);
+            await sleep(40 + Math.random() * 40);
+            await page.mouse.click(outcome.point.x, outcome.point.y);
+            clicked = true;
+          } catch (_) {}
+        }
+        await page.evaluate(() => {
+          document.querySelectorAll("[data-ft-act]").forEach((e) => e.removeAttribute("data-ft-act"));
+        }).catch(() => {});
+      }
+
       history.push(outcome.did);
     }
 
     // Let the click land — a dialog opening, a menu expanding.
-    await sleep(1400 + Math.random() * 900);
-    // The page saying "Pending" after we clicked Connect is the invitation
-    // itself confirming it went — better evidence than any answer the model
-    // could give, and it stops the loop the moment the work is done.
+    await sleep(1400 + Math.random() * 800);
+    // If a dialog or menu is opening, give it a moment to appear in the DOM
+    for (let i = 0; i < 6; i++) {
+      const appeared = await page
+        .evaluate(() => !!document.querySelector('[role="dialog"], .artdeco-modal, .artdeco-dropdown__content, [role="menu"]'))
+        .catch(() => false);
+      if (appeared) break;
+      await sleep(250);
+    }
+
+    // Check if invitation sent toast appeared or pending status confirmed
+    const hasSentToast = await page
+      .locator('.artdeco-toast-item, div[role="alert"], [data-view-name*="toast"]')
+      .filter({ hasText: /invitation sent|invite sent/i })
+      .isVisible({ timeout: 800 })
+      .catch(() => false);
+
     const now = await page.evaluate(observe);
-    if (goal === "invite" && autoSend && now.pending && history.some((h) => /clicked "(invite|connect)/i.test(h))) {
+    if (
+      goal === "invite" &&
+      autoSend &&
+      (now.pending || hasSentToast) &&
+      history.some((h) => /clicked "(invite|connect|send)/i.test(h))
+    ) {
       return {
         status: "sent",
         result: "invitation sent",

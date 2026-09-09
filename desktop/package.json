@@ -1,7 +1,7 @@
 {
   "name": "followthroo-linkedin-desktop",
   "productName": "Followthroo for LinkedIn",
-  "version": "1.9.1",
+  "version": "1.9.2",
   "private": true,
   "description": "Sends your Followthroo LinkedIn invitations from your own computer, at a human pace.",
   "main": "main.js",

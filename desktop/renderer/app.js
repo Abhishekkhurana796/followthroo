@@ -165,6 +165,10 @@ document.getElementById("reopen").addEventListener("click", () => setCollapsed(f
 
 async function load() {
   const s = await window.ft.getSettings();
+  if (s.version) {
+    const v = $("version");
+    if (v) v.textContent = `v${s.version}`;
+  }
   cap = s.maxPerDay;
   el.cap.textContent = String(cap);
   el.apiBase.value = s.apiBase;

@@ -22,6 +22,74 @@
 const FORBIDDEN = /remove connection|unfollow|report|block|withdraw|delete|restrict|unsubscribe|sign out|log out/i;
 
 function observe() {
+  const querySelectorAllDeep = (selector, root = document) => {
+    const results = [];
+    const queue = [root];
+    const seenRoots = new Set();
+    while (queue.length > 0) {
+      const curr = queue.shift();
+      if (!curr || seenRoots.has(curr)) continue;
+      seenRoots.add(curr);
+      try {
+        if (curr.querySelectorAll) {
+          const matched = curr.querySelectorAll(selector);
+          for (let i = 0; i < matched.length; i++) results.push(matched[i]);
+          const all = curr.querySelectorAll("*");
+          for (let i = 0; i < all.length; i++) {
+            const el = all[i];
+            if (el && el.shadowRoot && !seenRoots.has(el.shadowRoot)) {
+              queue.push(el.shadowRoot);
+            }
+          }
+        }
+      } catch (_) {}
+    }
+    return results;
+  };
+
+  const querySelectorDeep = (selector, root = document) => {
+    const queue = [root];
+    const seenRoots = new Set();
+    while (queue.length > 0) {
+      const curr = queue.shift();
+      if (!curr || seenRoots.has(curr)) continue;
+      seenRoots.add(curr);
+      try {
+        if (curr.querySelector) {
+          const matched = curr.querySelector(selector);
+          if (matched) return matched;
+          const all = curr.querySelectorAll("*");
+          for (let i = 0; i < all.length; i++) {
+            const el = all[i];
+            if (el && el.shadowRoot && !seenRoots.has(el.shadowRoot)) {
+              queue.push(el.shadowRoot);
+            }
+          }
+        }
+      } catch (_) {}
+    }
+    return null;
+  };
+
+  const closestDeep = (el, selector) => {
+    let curr = el;
+    while (curr && curr !== document && curr !== document.body) {
+      if (curr.matches && curr.matches(selector)) return curr;
+      const root = curr.getRootNode ? curr.getRootNode() : null;
+      if (root && root instanceof ShadowRoot && (curr === root || !curr.parentElement)) {
+        curr = root.host;
+      } else if (curr.parentElement) {
+        curr = curr.parentElement;
+      } else if (curr.parentNode) {
+        curr = curr.parentNode;
+        if (curr instanceof ShadowRoot) curr = curr.host;
+      } else {
+        break;
+      }
+    }
+    return null;
+  };
+
   const CLICKABLE =
     'button, a[role="button"], div[role="button"], [role="menuitem"], .artdeco-dropdown__item, textarea, input[type="text"]';
 
@@ -47,19 +115,21 @@ function observe() {
     // Visible words come BEFORE id and name. They were after, so any control
     // carrying an id was described to the model by that id — "ownConnect"
     // instead of "Connect" — which is both meaningless to it and impossible to
-    // match when it names what it saw in the screenshot. id and name stay as a
-    // last resort for fields that have no words at all.
-    const text = (
+    const clean = (s) =>
+      String(s || "")
+        .replace(/[\u200e\u200f\u200b\ufeff\u00ad]/g, "")
+        .replace(/\s+/g, " ")
+        .trim();
+
+    const text = clean(
       el.getAttribute("aria-label") ||
       el.getAttribute("placeholder") ||
       el.textContent ||
+      el.getAttribute("value") ||
       el.getAttribute("name") ||
       el.getAttribute("id") ||
       ""
-    )
-      .replace(/\s+/g, " ")
-      .trim()
-      .slice(0, 200);
+    ).slice(0, 200);
     if (text) return text;
     // A text box with no accessible name at all still has to be describable, or
     // the model cannot be told to type into it. LinkedIn's invite note is
@@ -71,7 +141,7 @@ function observe() {
   };
 
   const visible = (el) => {
-    if (el.closest("[data-followthroo-overlay]")) return false; // our own banner
+    if (closestDeep(el, "[data-followthroo-overlay]")) return false; // our own banner
     const r = el.getBoundingClientRect();
     if (r.width === 0 && r.height === 0) return false;
     const s = getComputedStyle(el);
@@ -88,7 +158,7 @@ function observe() {
    * on a page that plainly had one.
    */
   const chrome = (el) => {
-    if (el.closest('header, nav, footer, [role="banner"], [role="navigation"], .global-nav, #global-nav')) {
+    if (closestDeep(el, 'header, nav, footer, [role="banner"], [role="navigation"], .global-nav, #global-nav')) {
       return true;
     }
     const t = (el.getAttribute("aria-label") || el.textContent || "").trim();
@@ -98,7 +168,7 @@ function observe() {
     // row out of sight. None of it can send an invitation.
     return (
       /^skip to |^close jump menu/i.test(t) ||
-      /^open control menu for post|^reaction button|^open reactions menu|^repost|^…\s*more$|^see more$/i.test(t)
+      /^open control menu for post|^reaction button|^open reactions menu|^repost |^…\s*more$|^see more$/i.test(t)
     );
   };
 
@@ -132,8 +202,8 @@ function observe() {
     return !!el.querySelector("svg[id]");
   };
 
-  const structural = Array.from(document.querySelectorAll(CLICKABLE));
-  const textual = Array.from(document.querySelectorAll("span, div, li, a")).filter(looksClickable);
+  const structural = querySelectorAllDeep(CLICKABLE);
+  const textual = querySelectorAllDeep("span, div, li, a").filter(looksClickable);
 
   /**
    * Keep the outermost element for a given label, drop its inner copies.
@@ -325,8 +395,12 @@ function observe() {
       // the note again — a wasted step out of eight, and on a real page that is
       // the difference between finishing and running out of them.
       filled: "value" in el && String(el.value || "").trim() !== "" ? true : undefined,
-      inDialog: !!el.closest('[role="dialog"], .artdeco-modal'),
-      inAside: !!el.closest("aside"),
+      inDialog:
+        !!closestDeep(
+          el,
+          '[role="dialog"], [aria-modal="true"], .artdeco-modal, .artdeco-modal-overlay, #artdeco-modal-outlet, .send-invite, [data-view-name*="modal"], [data-view-name*="invite"], div[data-artdeco-is-focused="true"]',
+        ) || /without a note|add a note/i.test(l),
+      inAside: !!closestDeep(el, "aside"),
       // The three that disambiguate two identical "More" buttons.
       inTopCard: own,
       section: sectionOf(el),
@@ -360,16 +434,27 @@ function observe() {
     signedOut:
       /\/(login|checkpoint|authwall)/.test(location.pathname) ||
       !!document.querySelector('input[name="session_key"]'),
-    dialogOpen: !!document.querySelector('.artdeco-modal[role="dialog"], div[role="dialog"]'),
+    dialogOpen:
+      elements.some((e) => e.inDialog) ||
+      !!(
+        querySelectorDeep(
+          '[role="dialog"], [aria-modal="true"], .artdeco-modal, .artdeco-modal-overlay, #artdeco-modal-outlet, .send-invite, [data-view-name*="modal"], [data-view-name*="invite"], div[data-artdeco-is-focused="true"]',
+        ) ||
+        querySelectorAllDeep('button, [role="button"], span').some((b) =>
+          /without a note|add a note/i.test(b.getAttribute("aria-label") || b.textContent || ""),
+        )
+      ),
     // Read from the page rather than inferred, so "already connected" is a fact
     // and not a guess made from the absence of a button.
     firstDegree:
       /1st/i.test(document.querySelector(".dist-value, .distance-badge")?.textContent || "") ||
-      Array.from(document.querySelectorAll('button, div[role="button"], [role="menuitem"]')).some((b) =>
+      querySelectorAllDeep('button, div[role="button"], [role="menuitem"]').some((b) =>
         /remove connection/i.test((b.getAttribute("aria-label") || b.textContent || "")),
       ),
     limitWall: (() => {
-      const dlg = document.querySelector('.artdeco-modal[role="dialog"], div[role="dialog"]');
+      const dlg = querySelectorDeep(
+        '[role="dialog"], [aria-modal="true"], .artdeco-modal, .artdeco-modal-overlay, #artdeco-modal-outlet, .send-invite, [data-view-name*="modal"]',
+      );
       const t = ((dlg && dlg.textContent) || "").toLowerCase();
       if (/weekly invitation limit|reached the weekly|try again next week/.test(t)) {
         return "LinkedIn says this account has hit its weekly invitation limit";
@@ -395,22 +480,79 @@ function observe() {
 function act({ decision, expectedName, forbiddenSource, goal, autoSend }) {
   const FORBIDDEN_RE = new RegExp(forbiddenSource, "i");
 
+  const querySelectorAllDeep = (selector, root = document) => {
+    const results = [];
+    const queue = [root];
+    const seenRoots = new Set();
+    while (queue.length > 0) {
+      const curr = queue.shift();
+      if (!curr || seenRoots.has(curr)) continue;
+      seenRoots.add(curr);
+      try {
+        if (curr.querySelectorAll) {
+          const matched = curr.querySelectorAll(selector);
+          for (let i = 0; i < matched.length; i++) results.push(matched[i]);
+          const all = curr.querySelectorAll("*");
+          for (let i = 0; i < all.length; i++) {
+            const el = all[i];
+            if (el && el.shadowRoot && !seenRoots.has(el.shadowRoot)) {
+              queue.push(el.shadowRoot);
+            }
+          }
+        }
+      } catch (_) {}
+    }
+    return results;
+  };
+
+  const querySelectorDeep = (selector, root = document) => {
+    const queue = [root];
+    const seenRoots = new Set();
+    while (queue.length > 0) {
+      const curr = queue.shift();
+      if (!curr || seenRoots.has(curr)) continue;
+      seenRoots.add(curr);
+      try {
+        if (curr.querySelector) {
+          const matched = curr.querySelector(selector);
+          if (matched) return matched;
+          const all = curr.querySelectorAll("*");
+          for (let i = 0; i < all.length; i++) {
+            const el = all[i];
+            if (el && el.shadowRoot && !seenRoots.has(el.shadowRoot)) {
+              queue.push(el.shadowRoot);
+            }
+          }
+        }
+      } catch (_) {}
+    }
+    return null;
+  };
+
+  const closestDeep = (el, selector) => {
+    let curr = el;
+    while (curr && curr !== document && curr !== document.body) {
+      if (curr.matches && curr.matches(selector)) return curr;
+      const root = curr.getRootNode ? curr.getRootNode() : null;
+      if (root && root instanceof ShadowRoot && (curr === root || !curr.parentElement)) {
+        curr = root.host;
+      } else if (curr.parentElement) {
+        curr = curr.parentElement;
+      } else if (curr.parentNode) {
+        curr = curr.parentNode;
+        if (curr instanceof ShadowRoot) curr = curr.host;
+      } else {
+        break;
+      }
+    }
+    return null;
+  };
+
   /**
    * Other people's controls, which are not all in <aside>.
-   *
-   * "More profiles for you" sits inside <main> and renders a Connect per
-   * stranger, so excluding the sidebar alone still leaves somebody else's
-   * button as a candidate — and with only one of them left it would have been
-   * accepted as unambiguous. The heading above it is what gives it away.
-   *
-   * At act() scope rather than inside resolveByText, because a coordinate
-   * answer never went through resolveByText at all: a point landing on a
-   * stranger's Connect in "More profiles for you" passed every check, since the
-   * span carries no name for the name check to read. The model is now steered
-   * towards coordinates when text is ambiguous, so that gap had to close first.
    */
   const recommendation = (el) => {
-    const sec = el.closest("section, [data-view-name]");
+    const sec = closestDeep(el, "section, [data-view-name]");
     const head = sec && sec.querySelector("h1, h2, h3");
     return /people also viewed|more profiles|people you may know|others? named|similar profiles/i.test(
       (head?.textContent || "").trim(),
@@ -419,50 +561,108 @@ function act({ decision, expectedName, forbiddenSource, goal, autoSend }) {
 
   /**
    * Find a control by the words on it.
-   *
-   * This is what rescues a control the element list cannot describe — an
-   * unlabelled <span> with "Connect" inside it. It is also weaker evidence than
-   * an index: "Connect" is equally the text on the sidebar strangers' buttons,
-   * and that span carries no name, so the check that catches "Invite Wrong
-   * Person to connect" has nothing to read.
-   *
-   * So it is ordered, and it refuses rather than guesses. An ambiguous click is
-   * how the wrong person receives an invitation, and that cannot be taken back.
    */
   const resolveByText = (wanted) => {
-    const want = String(wanted || "").replace(/\s+/g, " ").trim().toLowerCase();
+    const clean = (s) =>
+      String(s || "")
+        .replace(/[\u200e\u200f\u200b\ufeff\u00ad]/g, "")
+        .replace(/\s+/g, " ")
+        .trim();
+
+    const want = clean(wanted).toLowerCase();
     if (!want) return { error: "no text to look for" };
 
-    const sameWords = (el) => (el.textContent || "").replace(/\s+/g, " ").trim().toLowerCase() === want;
-
-    let seen = Array.from(document.querySelectorAll("[data-ft-idx]")).filter(sameWords);
-
-    // Stamps come from the last observe(), so anything that appeared since — a
-    // dialog opened by the click we just made, a menu that just expanded — is
-    // unstamped and would be invisible here. Fall back to the whole document,
-    // keeping the outermost element for the words, exactly as observe() does.
-    if (!seen.length) {
-      const all = Array.from(document.querySelectorAll("button, a, span, div, li, [role]")).filter(
-        (el) => sameWords(el) && !el.closest("[data-followthroo-overlay]"),
+    // 1. Direct targeted handler for "without a note" (invitation modal send)
+    if (/without a note/i.test(want)) {
+      const allButtons = querySelectorAllDeep('button, [role="button"], .artdeco-button, a, span, div');
+      const match = allButtons.find((el) => {
+        if (closestDeep(el, "[data-followthroo-overlay]")) return false;
+        const aria = clean(el.getAttribute("aria-label") || "").toLowerCase();
+        const txt = clean(el.textContent || "").toLowerCase();
+        return aria.includes("without a note") || txt.includes("without a note");
+      });
+      if (match) {
+        const btn = closestDeep(match, 'button, [role="button"], .artdeco-button') || match;
+        return { el: btn };
+      }
+      // Fallback: the primary button in an open invitation modal
+      const modal = querySelectorDeep(
+        '[role="dialog"], [aria-modal="true"], .artdeco-modal, .artdeco-modal-overlay, #artdeco-modal-outlet, .send-invite, [data-view-name*="modal"]'
       );
-      seen = all.filter((el) => !all.some((other) => other !== el && other.contains(el)));
+      if (modal) {
+        const primary = modal.querySelector(
+          'button.artdeco-button--primary, button[aria-label*="without a note" i], button[aria-label*="Send" i]'
+        );
+        if (primary) return { el: primary };
+      }
+    }
+
+    // 2. Direct targeted handler for "add a note"
+    if (/add a note/i.test(want)) {
+      const allButtons = querySelectorAllDeep('button, [role="button"], .artdeco-button, a, span, div');
+      const match = allButtons.find((el) => {
+        if (closestDeep(el, "[data-followthroo-overlay]")) return false;
+        const aria = clean(el.getAttribute("aria-label") || "").toLowerCase();
+        const txt = clean(el.textContent || "").toLowerCase();
+        return aria.includes("add a note") || txt.includes("add a note");
+      });
+      if (match) {
+        const btn = closestDeep(match, 'button, [role="button"], .artdeco-button') || match;
+        return { el: btn };
+      }
+    }
+
+    // 3. Direct targeted handler for "send" / "send now" / "send invitation" (final invite send)
+    if (/^send( now| invitation)?$/i.test(want) || /^send\b/i.test(want)) {
+      const allButtons = querySelectorAllDeep('button, [role="button"], .artdeco-button, a');
+      const match = allButtons.find((el) => {
+        if (closestDeep(el, "[data-followthroo-overlay]")) return false;
+        if (el.disabled || el.getAttribute("aria-disabled") === "true") return false;
+        const aria = clean(el.getAttribute("aria-label") || "").toLowerCase();
+        const txt = clean(el.textContent || "").toLowerCase();
+        if (aria.includes("without a note") || txt.includes("without a note")) return false;
+        return /^send( now| invitation)?$/i.test(aria) || /^send( now| invitation)?$/i.test(txt);
+      });
+      if (match) {
+        const btn = closestDeep(match, 'button, [role="button"], .artdeco-button') || match;
+        return { el: btn };
+      }
+    }
+
+    const labelsOf = (el) => {
+      const list = [];
+      const aria = clean(el.getAttribute("aria-label")).toLowerCase();
+      if (aria) list.push(aria);
+      const txt = clean(el.textContent).toLowerCase();
+      if (txt) list.push(txt);
+      const val = clean(el.getAttribute("value")).toLowerCase();
+      if (val) list.push(val);
+      return list;
+    };
+
+    const sameWords = (el) => labelsOf(el).some((l) => l === want);
+
+    let seen = querySelectorAllDeep("[data-ft-idx]").filter(sameWords);
+
+    if (!seen.length) {
+      const all = querySelectorAllDeep("button, a, span, div, li, [role]").filter(
+        (el) => sameWords(el) && !closestDeep(el, "[data-followthroo-overlay]"),
+      );
+      // Prefer button elements over containers
+      const buttonsOnly = all.filter((el) => el.matches && el.matches('button, a, [role="button"], [role="menuitem"], .artdeco-button'));
+      if (buttonsOnly.length) {
+        seen = buttonsOnly;
+      } else {
+        seen = all.filter((el) => !all.some((other) => other !== el && other.contains(el)));
+      }
     }
     /**
      * Near-misses, when nothing matches word for word.
-     *
-     * The model answers "Send" for a button that reads "Send now", or "Connect"
-     * for one that reads "Connect with Sofia" — both perfectly reasonable
-     * descriptions of what is on screen, and exact matching rejected them. The
-     * fixture's "Send now" is why an invitation that had been filled in
-     * correctly then failed at the last step.
-     *
-     * Kept tight: only short labels, and only where the wanted words appear at a
-     * word boundary, so "Send" cannot match a paragraph mentioning sending.
      */
     if (!seen.length) {
       const letterOrDigit = (c) => /[a-z0-9]/.test(c);
       const holdsTheWords = (words) => {
-        const hay = words.toLowerCase();
+        const hay = clean(words).toLowerCase();
         for (let i = hay.indexOf(want); i !== -1; i = hay.indexOf(want, i + 1)) {
           const before = i === 0 ? " " : hay[i - 1];
           const after = i + want.length >= hay.length ? " " : hay[i + want.length];
@@ -470,20 +670,32 @@ function act({ decision, expectedName, forbiddenSource, goal, autoSend }) {
         }
         return false;
       };
-      const near = Array.from(document.querySelectorAll("button, a, span, div, li, [role]")).filter((el) => {
-        if (el.closest("[data-followthroo-overlay]")) return false;
-        const words = (el.textContent || "").replace(/\s+/g, " ").trim();
-        return words.length <= 40 && holdsTheWords(words);
+      const near = querySelectorAllDeep("button, a, span, div, li, [role]").filter((el) => {
+        if (closestDeep(el, "[data-followthroo-overlay]")) return false;
+        return labelsOf(el).some((l) => l.length <= 60 && (holdsTheWords(l) || l.includes(want)));
       });
-      seen = near.filter((el) => !near.some((other) => other !== el && other.contains(el)));
+      const nearButtons = near.filter((el) => el.matches && el.matches('button, a, [role="button"], [role="menuitem"], .artdeco-button'));
+      if (nearButtons.length) {
+        seen = nearButtons;
+      } else {
+        seen = near.filter((el) => !near.some((other) => other !== el && other.contains(el)));
+      }
     }
 
     if (!seen.length) return { error: `nothing on the page reads "${wanted}"` };
 
-    const inDialog = seen.filter((el) => el.closest('[role="dialog"], .artdeco-modal'));
-    if (inDialog.length) return { el: inDialog[0] };
+    const inDialog = seen.filter((el) =>
+      closestDeep(
+        el,
+        '[role="dialog"], [aria-modal="true"], .artdeco-modal, .artdeco-modal-overlay, #artdeco-modal-outlet, .send-invite, [data-view-name*="modal"]',
+      ),
+    );
+    if (inDialog.length) {
+      const btn = inDialog.find((el) => closestDeep(el, 'button, [role="button"], .artdeco-button'));
+      return { el: btn ? (closestDeep(btn, 'button, [role="button"], .artdeco-button') || btn) : inDialog[0] };
+    }
 
-    const outside = seen.filter((el) => !el.closest("aside") && !recommendation(el));
+    const outside = seen.filter((el) => !closestDeep(el, "aside") && !recommendation(el));
     if (!outside.length) {
       return { error: `every "${wanted}" on this page belongs to somebody else's card` };
     }
@@ -492,16 +704,6 @@ function act({ decision, expectedName, forbiddenSource, goal, autoSend }) {
     if (topCardEls.length) return { el: topCardEls[0] };
     if (outside.length === 1) return { el: outside[0] };
 
-    /**
-     * Refuse, but leave a way forward.
-     *
-     * This used to end here with "refusing to guess whose it is", and the model
-     * — which could see the button perfectly well in the screenshot — had no
-     * other move to make, so it repeated the same answer until the third
-     * refusal killed the action. Naming the candidates and the two other ways
-     * to point at one turns a dead end into a next step. It still does not
-     * click anything: an ambiguous invitation cannot be recalled.
-     */
     const where = outside
       .map((el) => el.getAttribute("data-ft-idx"))
       .filter((i) => i !== null)
@@ -516,38 +718,41 @@ function act({ decision, expectedName, forbiddenSource, goal, autoSend }) {
 
   /**
    * A point becomes an element before it becomes a click.
-   *
-   * Clicking a raw coordinate would be the one action with no guardrails on it —
-   * nothing to compare against a name, nothing to check against the forbidden
-   * list, and a few pixels of error is a different button. Asking the page what
-   * is at that point turns the model's guess back into an element, and every
-   * check below then applies exactly as it does to an index.
    */
   const resolveByPoint = (x, y) => {
-    const px = Number(x);
-    const py = Number(y);
+    let px = Number(x);
+    let py = Number(y);
     if (!Number.isFinite(px) || !Number.isFinite(py)) return { error: "that is not a point" };
+    if (py > window.innerHeight && window.scrollY > 0 && py >= window.scrollY && py <= window.scrollY + window.innerHeight) {
+      py = py - window.scrollY;
+    }
+    if (px < 0 && px >= -60) px = 10;
+    if (py < 0 && py >= -60) py = 10;
+    if (px > window.innerWidth && px <= window.innerWidth + 60) px = window.innerWidth - 10;
+    if (py > window.innerHeight && py <= window.innerHeight + 100) py = window.innerHeight - 10;
+
     if (px < 0 || py < 0 || px > window.innerWidth || py > window.innerHeight) {
       return { error: `(${px}, ${py}) is outside the window` };
     }
-    const hit = document.elementFromPoint(px, py);
+    let hit = document.elementFromPoint(px, py);
     if (!hit) return { error: `nothing is at (${px}, ${py})` };
-    if (hit.closest("[data-followthroo-overlay]")) return { error: "that point is on our own banner" };
-    // Prefer the control we already catalogued over whatever fragment of text
-    // happens to be topmost at that pixel — but only if it is plausibly a
-    // control. A stale stamp on a container resolved a point on the Connect
-    // button to an element whose text was the entire profile, and the refusal
-    // that followed printed all of it.
+    // Pierce into shadow DOM if the hit landed on a shadow host
+    while (hit && hit.shadowRoot) {
+      const inner = hit.shadowRoot.elementFromPoint(px, py);
+      if (!inner || inner === hit) break;
+      hit = inner;
+    }
+    if (closestDeep(hit, "[data-followthroo-overlay]")) return { error: "that point is on our own banner" };
+
     const plausible = (node) => {
       if (!node || node === document.body || node === document.documentElement) return false;
       const words = (node.textContent || "").replace(/\s+/g, " ").trim();
       if (words.length > 60) return false;
       const box = node.getBoundingClientRect();
-      // A control is not most of the window.
       return box.width < window.innerWidth * 0.8 && box.height < window.innerHeight * 0.5;
     };
 
-    const catalogued = hit.closest("[data-ft-idx]");
+    const catalogued = closestDeep(hit, "[data-ft-idx]");
     if (plausible(catalogued)) return { el: catalogued };
     if (plausible(hit)) return { el: hit };
     // Walk up a little in case the point landed on an icon inside the control.
@@ -565,7 +770,23 @@ function act({ decision, expectedName, forbiddenSource, goal, autoSend }) {
     decision.index === undefined &&
     !decision.label
   ) {
-    const found = resolveByPoint(decision.x, decision.y);
+    let found = resolveByPoint(decision.x, decision.y);
+    if (found.error && decision.reason) {
+      const reasonLower = String(decision.reason).toLowerCase();
+      if (/\b(more button|more menu|open.*more|click.*more|\.\.\.)\b/i.test(reasonLower)) {
+        const textFound = resolveByText("More");
+        if (!textFound.error) found = textFound;
+      } else if (/\b(connect button|click.*connect)\b/i.test(reasonLower)) {
+        const textFound = resolveByText("Connect");
+        if (!textFound.error) found = textFound;
+      } else if (/\b(send without a note|without a note)\b/i.test(reasonLower)) {
+        const textFound = resolveByText("Send without a note");
+        if (!textFound.error) found = textFound;
+      } else if (/\b(add a note)\b/i.test(reasonLower)) {
+        const textFound = resolveByText("Add a note");
+        if (!textFound.error) found = textFound;
+      }
+    }
     if (found.error) return { ok: false, error: `refused: ${found.error}` };
     el = found.el;
   } else if (decision.label && (decision.index === undefined || decision.index === null)) {
@@ -573,9 +794,7 @@ function act({ decision, expectedName, forbiddenSource, goal, autoSend }) {
     if (found.error) return { ok: false, error: `refused: ${found.error}` };
     el = found.el;
   } else {
-    el = document.querySelector(`[data-ft-idx="${decision.index}"]`);
-    // An index that has gone stale but a text description that has not is worth
-    // one more try — the page reflows constantly.
+    el = querySelectorDeep(`[data-ft-idx="${decision.index}"]`);
     if (!el && decision.label) {
       const found = resolveByText(decision.label);
       if (found.error) return { ok: false, error: `refused: ${found.error}` };
@@ -587,16 +806,13 @@ function act({ decision, expectedName, forbiddenSource, goal, autoSend }) {
   const label = (el.getAttribute("aria-label") || el.getAttribute("placeholder") || el.textContent || "")
     .replace(/\s+/g, " ")
     .trim()
-    // Capped. Uncapped, a refusal on a container printed the entire profile —
-    // several thousand characters of somebody's career history — into the
-    // activity log and the failure message.
     .slice(0, 120);
 
-  if (el.closest("aside")) return { ok: false, error: `refused: "${label}" is in the sidebar` };
+  if (closestDeep(el, "aside")) return { ok: false, error: `refused: "${label}" is in the sidebar` };
   if (recommendation(el)) {
     return { ok: false, error: `refused: "${label}" is on somebody else's card, not this profile's` };
   }
-  if (el.closest("[data-followthroo-overlay]")) return { ok: false, error: "refused: that is our own banner" };
+  if (closestDeep(el, "[data-followthroo-overlay]")) return { ok: false, error: "refused: that is our own banner" };
   if (FORBIDDEN_RE.test(label)) return { ok: false, error: `refused: "${label}" is destructive` };
 
   // Somebody else's button. The check is deliberately narrow — it only fires
@@ -662,10 +878,25 @@ function act({ decision, expectedName, forbiddenSource, goal, autoSend }) {
   }
 
   const targetNode =
-    el.closest('button, a, [role="button"], [role="menuitem"], .artdeco-button, .artdeco-dropdown__item, .ft-clickable') || el;
+    closestDeep(el, 'button, a, [role="button"], [role="menuitem"], .artdeco-button, .artdeco-dropdown__item, .ft-clickable') || el;
 
   try {
     targetNode.scrollIntoView({ block: "center", inline: "nearest" });
+  } catch (_) {}
+
+  try {
+    targetNode.setAttribute("data-ft-act", "1");
+  } catch (_) {}
+
+  let point = null;
+  try {
+    const rect = targetNode.getBoundingClientRect();
+    if (rect.width > 0 && rect.height > 0) {
+      point = {
+        x: Math.round(rect.left + rect.width / 2),
+        y: Math.round(rect.top + rect.height / 2),
+      };
+    }
   } catch (_) {}
 
   try {
@@ -685,7 +916,13 @@ function act({ decision, expectedName, forbiddenSource, goal, autoSend }) {
     if (typeof targetNode.click === "function") targetNode.click();
   } catch (_) {}
 
-  return { ok: true, did: `clicked "${label}"` };
+  return {
+    ok: true,
+    action: "click",
+    did: `clicked "${label}"`,
+    selector: '[data-ft-act="1"]',
+    point: point || (decision.x !== undefined && decision.y !== undefined ? { x: decision.x, y: decision.y } : null),
+  };
 }
 
 module.exports = { observe, act, FORBIDDEN };

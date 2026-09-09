@@ -179,7 +179,11 @@ Connect appears in one of two places, and you must check them in this order:
      instead of asking to connect. Never choose it. If the only options are
      Follow and More, the Connect you want is inside More.
   b) INSIDE THE OVERFLOW MENU, only when there is no Connect on the action row.
-     Open the "More" / "More actions", then look again in the list that follows.
+     Open the "More" / "More actions" (the three dots button). Find it in the
+     list (marked IN-PROFILE-ACTION-ROW) and answer with its index, or
+     {"action":"click","label":"More"}. Do NOT answer with x/y coordinates to
+     open More; always use index or label. Then look again in the list that
+     follows for Connect.
 
 IN-PROFILE-ACTION-ROW is a HINT, not a requirement. It is derived from the page
 structure and is often absent even when the element is exactly the one you want.
@@ -272,12 +276,29 @@ function parseDecision(text: string, valid?: Set<number>): PilotDecision {
     const px = (parsed as { x?: unknown }).x;
     const py = (parsed as { y?: unknown }).y;
     const hasPoint = typeof px === "number" && typeof py === "number";
-    if (typeof idx !== "number" && !hasLabel && !hasPoint) {
+
+    if (hasPoint && !hasLabel) {
+      const reason = String((parsed as { reason?: unknown }).reason || "").toLowerCase();
+      if (/\b(more button|more menu|open.*more|click.*more|three dots|3 dots)\b/i.test(reason)) {
+        (parsed as { label?: string }).label = "More";
+      } else if (/\b(connect button|click.*connect)\b/i.test(reason)) {
+        (parsed as { label?: string }).label = "Connect";
+      } else if (/\b(send without a note|without a note)\b/i.test(reason)) {
+        (parsed as { label?: string }).label = "Send without a note";
+      } else if (/\b(add a note)\b/i.test(reason)) {
+        (parsed as { label?: string }).label = "Add a note";
+      }
+    }
+
+    const finalLabel = (parsed as { label?: unknown }).label;
+    const finalHasLabel = typeof finalLabel === "string" && finalLabel.trim().length > 0 && finalLabel.length <= 80;
+
+    if (typeof idx !== "number" && !finalHasLabel && !hasPoint) {
       throw new Error(`${a} without an index, a label or a point`);
     }
     // A label is resolved on the page by its visible words, so an index is
     // optional once one is given.
-    if (typeof idx === "number" && valid && !valid.has(idx) && !hasLabel && !hasPoint) {
+    if (typeof idx === "number" && valid && !valid.has(idx) && !finalHasLabel && !hasPoint) {
       // Not a malformed reply — a considered "it is not in the list". Turned
       // into a give_up so the caller escalates to a screenshot rather than
       // firing a click at an element that was never there.

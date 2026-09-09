@@ -286,6 +286,7 @@ ipcMain.handle("settings:get", () => ({
   ...store.read(app.getPath("userData")),
   maxPerDay: MAX_PER_DAY,
   running,
+  version: app.getVersion(),
 }));
 
 ipcMain.handle("settings:save", (_e, patch) => {
