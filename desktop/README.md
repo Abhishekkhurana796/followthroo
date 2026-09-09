@@ -277,42 +277,61 @@ download button on `/dashboard/linkedin` from "ask your admin" into a link.
 ### Where it lives now
 
 Vercel Blob, in a public store called **`leadskonnect-downloads`** (region `bom1`),
-linked to the `leadskonnect` project. The published URL is:
+linked to the `leadskonnect` project. `NEXT_PUBLIC_DESKTOP_BLOB_BASE` holds the
+store's base URL in production, preview and development:
 
 ```text
-https://wet59gidjhcn7yck.public.blob.vercel-storage.com/followthroo-linkedin-setup.exe
+https://wet59gidjhcn7yck.public.blob.vercel-storage.com
 ```
 
-`NEXT_PUBLIC_DESKTOP_APP_URL` is set to that in production, preview and
-development.
+One immutable object **per version** under that base:
+
+```text
+<base>/followthroo-linkedin-setup-<version>.exe
+```
+
+The site never links to a blob directly. `DESKTOP_APP_URL` points at
+`/api/desktop/download`, which 302s to `desktopInstallerUrl()` — built from
+`DESKTOP_APP_VERSION` in `lib/constants.ts`. That indirection is the whole
+release mechanism: bump the constant and the link moves, with no env var to edit
+and no `NEXT_PUBLIC_*` rebuild needed to change which file is current.
+
+An earlier arrangement overwrote one fixed pathname
+(`followthroo-linkedin-setup.exe`) on every release. Blob objects are served with
+a thirty-day cache, so edges kept handing out the previous build: somebody
+downloading "the latest" got last week's, and the bug they had just reported was
+still there after they reinstalled. Hence one object per version, cached hard and
+correctly, with the route as the only mutable part.
 
 ### Publishing a new build
 
-From `desktop/`, after `npm run dist`:
+Three steps, in order. Skipping the upload ships a download button that 404s.
+
+1. Bump `desktop/package.json`, `DESKTOP_APP_VERSION` in `lib/constants.ts` and
+   the version badge in `desktop/renderer/index.html` — same commit.
+2. Build and upload, from `desktop/` after `npm run dist`:
 
 ```bash
+V=$(node -p "require('./package.json').version")
 RW=$(grep -m1 '^BLOB_READ_WRITE_TOKEN=' ../.env.local | cut -d= -f2- | tr -d '"\r')
-vercel blob put "dist/Followthroo for LinkedIn Setup 1.0.0.exe" \
-  --pathname followthroo-linkedin-setup.exe \
-  --access public --allow-overwrite true --rw-token "$RW"
+vercel blob put "dist/Followthroo for LinkedIn Setup $V.exe" \
+  --pathname "followthroo-linkedin-setup-$V.exe" \
+  --access public --rw-token "$RW"
 ```
 
-Three flags that are not optional, each of which cost a failed attempt:
+3. Deploy the web app, so the route redirects to the version just uploaded.
+
+Two flags that are not optional, each of which cost a failed attempt:
 
 - `--rw-token` — without it the CLI finds `VERCEL_OIDC_TOKEN` in `.env.local`
   but no `BLOB_STORE_ID`, and refuses with a message about setting both or
   neither. Passing the read-write token explicitly sidesteps the whole question.
 - `--access public` — required, and the point: a private blob needs a signed URL,
   which a customer clicking a download link does not have.
-- `--allow-overwrite true` — the pathname must stay
-  `followthroo-linkedin-setup.exe` across releases so the env var never changes.
-  Without this the upload either fails or lands beside the old one.
-  (`--add-random-suffix=false` is documented as the default and did **not**
-  prevent a suffix; `--allow-overwrite` is what actually gives a stable name.)
 
-`NEXT_PUBLIC_*` is inlined at build time, so changing that variable needs a
-redeploy — but re-uploading to the same pathname does not, which is the reason
-for the stable name.
+`--allow-overwrite` is deliberately **not** used any more. Versioned pathnames
+are write-once; needing to overwrite one means a build was published twice under
+the same version, which is the thing the caching bug above punished.
 
 ### The alternatives, and why not
 
