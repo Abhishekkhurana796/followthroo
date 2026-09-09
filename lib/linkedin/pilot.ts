@@ -21,32 +21,47 @@
  * provider key inside a downloadable binary hands it to anyone who unzips it.
  */
 import Anthropic from "@anthropic-ai/sdk";
+import { z } from "zod";
 import { env, configured } from "../env";
 
-/** One clickable the page reported. `i` is what the model answers with. */
-export interface PilotElement {
-  i: number;
-  tag: string;
-  role?: string | null;
-  label: string;
-  disabled?: boolean;
-  inDialog?: boolean;
-  inAside?: boolean;
-  /** In the profile's own top card — the action row, not a "see more" elsewhere. */
-  inTopCard?: boolean;
-  /** Nearest heading above it, so identical labels can be told apart. */
-  section?: string | null;
-  y?: number;
-}
+/**
+ * The wire contract, defined once.
+ *
+ * This was a hand-written `interface` here and a separate Zod schema in
+ * app/api/linkedin/assist/route.ts, and they drifted: the schema never declared
+ * `inTopCard`, `section` or `y`, and Zod strips what it does not declare. So the
+ * three fields the page went to some trouble to compute were deleted in transit,
+ * `userPrompt` below rendered neither IN-PROFILE-ACTION-ROW nor [under: …], and
+ * the model was told at length to rely on a marker it was never shown.
+ *
+ * Types are derived from the schema now, so a field cannot exist in one and be
+ * silently dropped by the other.
+ */
 
-export interface PilotObservation {
-  goal: "invite" | "message";
-  /** The profile owner, from the page's <h1>. */
-  personName: string;
+/** One clickable the page reported. `i` is what the model answers with. */
+export const PilotElementSchema = z.object({
+  i: z.number().int().min(0),
+  tag: z.string().max(20),
+  role: z.string().max(40).nullish(),
+  label: z.string().max(300),
+  disabled: z.boolean().optional(),
+  inDialog: z.boolean().optional(),
+  inAside: z.boolean().optional(),
+  /** In the profile's own action row, established from the card or the heading. */
+  inTopCard: z.boolean().optional(),
+  /** Nearest heading above it, so identical labels can be told apart. */
+  section: z.string().max(120).nullish(),
+  y: z.number().optional(),
+});
+
+export const PilotObservationSchema = z.object({
+  goal: z.enum(["invite", "message"]),
+  /** The profile owner, from the page's <h1> or its URL slug. */
+  personName: z.string().max(200),
   /** The note or message to send, already truncated by the caller. */
-  note: string | null;
+  note: z.string().max(4000).nullable(),
   /** True when the run is allowed to actually send. */
-  autoSend: boolean;
+  autoSend: z.boolean(),
   /**
    * Whether this invitation may carry a note.
    *
@@ -55,17 +70,23 @@ export interface PilotObservation {
    * it cannot know how many have been spent today, and guessing would burn the
    * allowance on whoever happened to come first.
    */
-  useNote?: boolean;
-  url: string;
-  step: number;
+  useNote: z.boolean().optional(),
+  url: z.string().max(500),
+  step: z.number().int().min(0).max(20),
   /** What has already been done this attempt, newest last. */
-  history: string[];
-  elements: PilotElement[];
-  /** Base64 JPEG of the viewport, on every step. The picture leads; the list describes. */
-  screenshot?: string | null;
+  history: z.array(z.string().max(300)).max(20),
+  // Capped so one page cannot turn into an enormous prompt. LinkedIn profiles
+  // sit well under this; anything approaching it is a sign the page is not what
+  // we think it is.
+  elements: z.array(PilotElementSchema).max(200),
+  /** Base64 JPEG, no data: prefix. ~1.5MB of base64 is a generous 1080p frame. */
+  screenshot: z.string().max(2_000_000).nullish(),
   /** So a coordinate answer can be given in the same space as the picture. */
-  viewport?: { width: number; height: number } | null;
-}
+  viewport: z.object({ width: z.number(), height: z.number() }).nullish(),
+});
+
+export type PilotElement = z.infer<typeof PilotElementSchema>;
+export type PilotObservation = z.infer<typeof PilotObservationSchema>;
 
 export type PilotDecision =
   /**
@@ -188,7 +209,12 @@ Only ever use an index that appears in the list. Do not answer -1 or any other
 number that is not listed — if what you need is not there, answer give_up and say
 so, and you will be shown a screenshot of the page instead.`;
 
-function userPrompt(o: PilotObservation): string {
+/**
+ * Exported so a test can assert the markers survive validation. The prompt is
+ * where IN-PROFILE-ACTION-ROW is actually rendered, so it is the only honest
+ * place to check that the field made it through the schema.
+ */
+export function userPrompt(o: PilotObservation): string {
   const lines = o.elements.map(
     (e) =>
       `${e.i}. <${e.tag}${e.role ? ` role=${e.role}` : ""}${e.disabled ? " disabled" : ""}${

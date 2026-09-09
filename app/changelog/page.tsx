@@ -9,6 +9,17 @@ export const metadata = { title: "Changelog — Followthroo" };
  */
 const ENTRIES = [
   {
+    version: "0.14.0",
+    date: "Sep 2026",
+    items: [
+      "Fixed the reason no connection requests were going out at all. The app could see the Connect button perfectly well — it said so, every time — and then refused to press it. The check that stops it inviting the wrong person works by first establishing which button belongs to the profile you are on, and that step had quietly never once succeeded, so every button looked equally unattributable and none of them could be clicked",
+      "A LinkedIn profile shows several Connect buttons: the person’s own, one stuck to the top of the screen as you scroll, and one for each stranger in “People you may know” and “Others named …”. The app now works out which is which from the heading each one sits under, rather than from the page’s nesting, which LinkedIn changes constantly",
+      "If it genuinely cannot tell which Connect belongs to the person you asked for, it still refuses — an invitation cannot be recalled. But it now says which buttons it was choosing between and carries on looking, instead of repeating the same refusal until the run gave up on that person",
+      "Fixed: a connection request aimed by position on the screen could land on somebody else’s card inside “Others named …”, a section whose heading is the same name as the person you are visiting. That path is now checked the same way every other one is",
+      "Each invitation also starts about ten seconds sooner. The app was waiting for a signal that the profile had finished loading, and that signal depended on the same broken step, so it never arrived and every invite sat through the full wait",
+    ],
+  },
+  {
     version: "0.13.0",
     date: "Sep 2026",
     items: [

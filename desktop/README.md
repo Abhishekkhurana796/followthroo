@@ -3,7 +3,7 @@
 Sends a customer's queued LinkedIn invitations from their own computer, on their
 own IP, using their own logged-in LinkedIn session.
 
-**Last updated:** 2026-09-08
+**Last updated:** 2026-09-09
 **Status:** draft
 
 ---
@@ -109,6 +109,41 @@ The banner is `pointer-events: none` and carries `data-followthroo-overlay`, whi
 `page-actions.js` explicitly excludes from its button search — otherwise a banner
 containing the word "Connect" would be clicked instead of LinkedIn's own button on
 every single invitation. There is a test for exactly that.
+
+## Which "Connect" belongs to this profile
+
+A profile page carries several controls reading exactly `Connect`: the person's
+own, a duplicate in the bar that sticks to the top as you scroll, and one per
+stranger in "People you may know", "Explore Premium profiles" and "Others named
+<the same name>". Only the first may ever be clicked, and an invitation cannot be
+recalled, so `act()` in `pilot-page.js` refuses to click any of them until one has
+been positively attributed to this profile.
+
+Attribution used to be structural: climb from the `<h1>` to the nearest
+`<section>`, or up to eight parents looking for a real `button`. Both assumptions
+are false on the live site — the top card is a `<div data-view-name>`, the heading
+sits ten levels below the card root, and Connect is a bare `<span>` with no role
+at all. So the marker was false for every element of every run, nothing could be
+attributed, and the app spent four releases reporting that it could see Connect
+and was refusing to press it.
+
+There are two signals now, and either is enough:
+
+- **the card**, climbing from the `<h1>` with no depth limit and testing against
+  the candidate list that already includes unlabelled spans, stopping before
+  `<main>` — `<main>` also holds "More profiles for you";
+- **the heading** each control sits under, compared against the profile owner's
+  name. This is the one that survives LinkedIn re-nesting things.
+
+Sections that recommend other people are excluded from both, which is what stops
+"Others named <owner>" — whose heading *is* the owner's name — from qualifying.
+That exclusion also runs after resolution, so it covers a decision given as screen
+coordinates; that path never went through the text resolver and so was never
+checked, and the strangers' spans carry no name for the name check to read.
+
+With no evidence either way the answer is still a refusal, not a guess. The
+refusal now names the candidates and says to answer with an index or a point, so
+one dead-end suggestion repeated three times no longer ends the action.
 
 ## When a run stops
 

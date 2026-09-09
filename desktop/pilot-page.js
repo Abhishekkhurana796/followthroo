@@ -170,6 +170,29 @@ function observe() {
    */
   const nodes = outermost.filter((el) => !outermost.some((other) => other !== el && el.contains(other)));
 
+  /** The nearest heading above an element, as a human would describe where it is. */
+  const sectionOf = (el) => {
+    const sec = el.closest("section, [data-view-name]");
+    const head = sec && sec.querySelector("h1, h2, h3");
+    return head ? (head.textContent || "").replace(/\s+/g, " ").trim().slice(0, 60) : null;
+  };
+
+  /**
+   * Somebody else's card, which is not always in <aside>.
+   *
+   * "More profiles for you" sits inside <main> and renders a Connect per
+   * stranger. "Others named <owner>" is the one that matters most here: its
+   * heading is literally the profile owner's name, so the heading test below
+   * would otherwise hand us a stranger's button as though it were his own.
+   *
+   * Kept in step with the copy inside act() — the two functions are evaluated in
+   * the page separately and cannot share a closure.
+   */
+  const recommendation = (el) =>
+    /people also viewed|more profiles|people you may know|others? named|similar profiles/i.test(
+      sectionOf(el) || "",
+    );
+
   // Where the profile's own action row lives. A LinkedIn page has several
   // buttons labelled exactly "More" — the profile overflow menu, and a
   // "…see more" in About or Experience — and a label alone cannot tell them
@@ -179,37 +202,63 @@ function observe() {
   /**
    * The container that holds BOTH the name and the profile's action buttons.
    *
-   * Walking up from the <h1> to the nearest <section> assumed LinkedIn keeps the
-   * heading and the buttons in one element. It frequently does not, so the
-   * marker came back false for the very button it exists to identify — and the
-   * model, told to prefer marked elements, reported that no Connect had the
-   * attribute and gave up on a profile whose Connect it could see in the
-   * screenshot.
+   * Two earlier versions of this looked for the buttons the wrong way, and both
+   * failed on every real profile while passing on the fixture:
    *
-   * So climb until the ancestor also contains a Message or More action. That is
-   * the action row by definition, whatever it is wrapped in today.
+   *   - `h1.closest("section")` assumed the top card is a <section>. It is a
+   *     <div data-view-name="…">.
+   *   - Climbing at most eight parents and looking for a `button` /
+   *     `[role=button]` assumed two things that are false: that the heading and
+   *     the action row are close together (the common ancestor is deeper than
+   *     eight levels), and that Connect is a real control (it is a bare <span>,
+   *     which is the whole reason `looksClickable` exists above).
+   *
+   * The cost was invisible: `inTopCard` came back false for every element of
+   * every run, so `resolveByText` had no way to tell the profile's own Connect
+   * from anyone else's and refused to click either — three refusals in a row end
+   * the action. The app could see the button and was not allowed to press it.
+   *
+   * So: climb with no fixed depth, and test using `nodes` — the candidate list
+   * that already includes the unlabelled spans. Stop before <main>, because
+   * <main> also contains "More profiles for you" and would make every stranger
+   * look like part of the action row.
    */
   const topCard = (() => {
     if (!h1) return null;
-    const hasAction = (node) =>
-      Array.from(node.querySelectorAll('button, div[role="button"], a[role="button"]')).some((b) =>
-        /^(message|more|connect|invite|follow)\b/i.test(
-          (b.getAttribute("aria-label") || b.textContent || "").trim(),
-        ),
-      );
+    const ownAction = (el) =>
+      /^(message|more|connect|invite|follow|pending)\b/i.test(label(el)) &&
+      !el.closest("aside") &&
+      !recommendation(el);
+    const actions = nodes.filter(ownAction);
+    if (!actions.length) return null;
+
+    const stop = document.querySelector("main") || document.body;
     let node = h1.parentElement;
-    for (let i = 0; i < 8 && node; i++) {
-      if (hasAction(node)) return node;
+    while (node && node !== stop && node !== document.body) {
+      if (actions.some((a) => node.contains(a))) return node;
       node = node.parentElement;
     }
-    return h1.closest("section") || h1.parentElement;
+    return null;
   })();
 
-  /** The nearest heading above an element, as a human would describe where it is. */
-  const sectionOf = (el) => {
-    const sec = el.closest("section, [data-view-name]");
-    const head = sec && sec.querySelector("h1, h2, h3");
-    return head ? (head.textContent || "").replace(/\s+/g, " ").trim().slice(0, 60) : null;
+  /**
+   * The profile's own controls, established from evidence rather than structure.
+   *
+   * `topCard` is a guess about how LinkedIn nests things today, and it has been
+   * wrong twice. The section heading is not a guess: the action row sits under a
+   * heading that is the person's name, and the strangers' Connects sit under
+   * "People you may know" and "Explore Premium profiles". That signal was
+   * already being computed and thrown away.
+   *
+   * Either piece of evidence is enough; neither is required. What is required is
+   * that there be some evidence — an element with none stays unmarked, and
+   * act() still refuses to guess.
+   */
+  const ownsAction = (el) => {
+    if (el.closest("aside") || recommendation(el)) return false;
+    if (topCard && topCard.contains(el)) return true;
+    const sec = norm(sectionOf(el));
+    return !!(sec && personName && (sec.includes(personName) || personName.includes(sec)));
   };
 
   const elements = [];
@@ -221,7 +270,8 @@ function observe() {
     el.setAttribute("data-ft-idx", String(idx));
     // Stamped on the element itself so text resolution can prefer the profile's
     // own action row without recomputing which container that is.
-    if (topCard && topCard.contains(el)) el.setAttribute("data-ft-top", "1");
+    const own = ownsAction(el);
+    if (own) el.setAttribute("data-ft-top", "1");
     else el.removeAttribute("data-ft-top");
     const r = el.getBoundingClientRect();
     elements.push({
@@ -233,7 +283,7 @@ function observe() {
       inDialog: !!el.closest('[role="dialog"], .artdeco-modal'),
       inAside: !!el.closest("aside"),
       // The three that disambiguate two identical "More" buttons.
-      inTopCard: !!(topCard && topCard.contains(el)),
+      inTopCard: own,
       section: sectionOf(el),
       y: Math.round(r.top + window.scrollY),
     });
@@ -301,6 +351,28 @@ function act({ decision, expectedName, forbiddenSource, goal, autoSend }) {
   const FORBIDDEN_RE = new RegExp(forbiddenSource, "i");
 
   /**
+   * Other people's controls, which are not all in <aside>.
+   *
+   * "More profiles for you" sits inside <main> and renders a Connect per
+   * stranger, so excluding the sidebar alone still leaves somebody else's
+   * button as a candidate — and with only one of them left it would have been
+   * accepted as unambiguous. The heading above it is what gives it away.
+   *
+   * At act() scope rather than inside resolveByText, because a coordinate
+   * answer never went through resolveByText at all: a point landing on a
+   * stranger's Connect in "More profiles for you" passed every check, since the
+   * span carries no name for the name check to read. The model is now steered
+   * towards coordinates when text is ambiguous, so that gap had to close first.
+   */
+  const recommendation = (el) => {
+    const sec = el.closest("section, [data-view-name]");
+    const head = sec && sec.querySelector("h1, h2, h3");
+    return /people also viewed|more profiles|people you may know|others? named|similar profiles/i.test(
+      (head?.textContent || "").trim(),
+    );
+  };
+
+  /**
    * Find a control by the words on it.
    *
    * This is what rescues a control the element list cannot describe — an
@@ -335,22 +407,6 @@ function act({ decision, expectedName, forbiddenSource, goal, autoSend }) {
     const inDialog = seen.filter((el) => el.closest('[role="dialog"], .artdeco-modal'));
     if (inDialog.length) return { el: inDialog[0] };
 
-    /**
-     * Other people's controls, which are not all in <aside>.
-     *
-     * "More profiles for you" sits inside <main> and renders a Connect per
-     * stranger, so excluding the sidebar alone still leaves somebody else's
-     * button as a candidate — and with only one of them left it would have been
-     * accepted as unambiguous. The heading above it is what gives it away.
-     */
-    const recommendation = (el) => {
-      const sec = el.closest("section, [data-view-name]");
-      const head = sec && sec.querySelector("h1, h2, h3");
-      return /people also viewed|more profiles|people you may know|others? named|similar profiles/i.test(
-        (head?.textContent || "").trim(),
-      );
-    };
-
     const outside = seen.filter((el) => !el.closest("aside") && !recommendation(el));
     if (!outside.length) {
       return { error: `every "${wanted}" on this page belongs to somebody else's card` };
@@ -360,8 +416,25 @@ function act({ decision, expectedName, forbiddenSource, goal, autoSend }) {
     if (topCardEls.length) return { el: topCardEls[0] };
     if (outside.length === 1) return { el: outside[0] };
 
+    /**
+     * Refuse, but leave a way forward.
+     *
+     * This used to end here with "refusing to guess whose it is", and the model
+     * — which could see the button perfectly well in the screenshot — had no
+     * other move to make, so it repeated the same answer until the third
+     * refusal killed the action. Naming the candidates and the two other ways
+     * to point at one turns a dead end into a next step. It still does not
+     * click anything: an ambiguous invitation cannot be recalled.
+     */
+    const where = outside
+      .map((el) => el.getAttribute("data-ft-idx"))
+      .filter((i) => i !== null)
+      .join(", ");
     return {
-      error: `"${wanted}" matches ${outside.length} places and none is the profile's own action row — refusing to guess whose it is`,
+      error:
+        `"${wanted}" matches ${outside.length} places and none is marked as this profile's own` +
+        (where ? ` (elements ${where})` : "") +
+        ` — answer with an index from the list, or with x/y from the screenshot`,
     };
   };
 
@@ -419,6 +492,9 @@ function act({ decision, expectedName, forbiddenSource, goal, autoSend }) {
     .trim();
 
   if (el.closest("aside")) return { ok: false, error: `refused: "${label}" is in the sidebar` };
+  if (recommendation(el)) {
+    return { ok: false, error: `refused: "${label}" is on somebody else's card, not this profile's` };
+  }
   if (el.closest("[data-followthroo-overlay]")) return { ok: false, error: "refused: that is our own banner" };
   if (FORBIDDEN_RE.test(label)) return { ok: false, error: `refused: "${label}" is destructive` };
 

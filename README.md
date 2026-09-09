@@ -1,11 +1,11 @@
-# LeadsKonnect
+# Followthroo
 
 An AI-powered multi-channel outreach platform that automates personalized campaigns
 across **Email, LinkedIn, WhatsApp, and social comments**, backed by a CRM, a template
 engine, a rate-limiting/safety layer, and a Claude agent that orchestrates the whole
 sequence — fronted by a premium Next.js UI.
 
-**Last updated:** 2026-07-03
+**Last updated:** 2026-09-09
 **Status:** foundation built — most channels wired, need credentials to go live
 
 ---
@@ -13,14 +13,15 @@ sequence — fronted by a premium Next.js UI.
 ## Why
 
 Personalized outreach gets replies; generic blasts get ignored — and get accounts
-banned. LeadsKonnect scales personalization while respecting every channel's hard
+banned. Followthroo scales personalization while respecting every channel's hard
 limits, so it can run at volume *without* tripping spam detection or platform throttles.
 
 ## Tech stack
 
 Next.js (App Router, full-stack) · TypeScript · Tailwind CSS v4 · motion/Framer Motion ·
 Nodemailer (+DKIM) · Twilio (WhatsApp) · PostgreSQL + Prisma · Redis + BullMQ ·
-`@anthropic-ai/sdk` (`claude-opus-4-8`) · Vercel.
+`@anthropic-ai/sdk` pointed at **OpenRouter** · Electron + Playwright (the LinkedIn
+desktop app) · Vercel.
 
 ## Run it locally
 
@@ -79,8 +80,10 @@ skip Postgres/Redis, the UI still runs — only the CRM/queue API routes return 
 | `REDIS_URL` | queue + shared rate limits (falls back to in-memory without it) |
 | `SMTP_HOST/PORT/USER/PASS`, `MAIL_FROM` | Email sending |
 | `TWILIO_ACCOUNT_SID/AUTH_TOKEN/WHATSAPP_FROM` | WhatsApp |
-| `LINKEDIN_ACCESS_TOKEN` or `LINKEDIN_LI_AT` | LinkedIn |
-| `ANTHROPIC_API_KEY` | AI agent (`/api/agent`) |
+| `LINKEDIN_ACCESS_TOKEN` or `LINKEDIN_LI_AT` | LinkedIn sign-in and posting **only** — not invitations (see below) |
+| `OPENROUTER_API_KEY` | AI agent and the LinkedIn pilot; `ANTHROPIC_API_KEY` works as a direct alternative |
+| `OPENROUTER_MODEL` · `OPENROUTER_PILOT_MODEL` | agent model · the model that drives the browser |
+| `ENCRYPTION_KEYS` | at-rest encryption for tenant credentials (never in the database) |
 | `APP_SECRET` | sessions/tokens |
 
 Full list + manual steps (fonts, DKIM DNS, Twilio templates, LinkedIn driver, webhook
@@ -95,6 +98,8 @@ signatures) are in **`SETUP.md`**.
 | `npm run worker` | BullMQ send worker (throttled, humanized sends) |
 | `npm run db:push` / `db:generate` / `db:studio` | Prisma schema push / client / GUI |
 | `npm run typecheck` / `lint` | TS + lint checks |
+| `npm run verify:linkedin` | the LinkedIn safety suites — run these before shipping anything in `desktop/` |
+| `npm run desktop` / `desktop:dist` | run / build the Windows invitation app |
 
 ## Key API routes
 
@@ -104,9 +109,34 @@ signatures) are in **`SETUP.md`**.
 | `GET/PATCH/DELETE /api/leads/:id` | read / update / GDPR-delete |
 | `POST /api/leads/import` | CSV import (maps columns → variables, dedupes) |
 | `GET/POST/PUT /api/campaigns` | list / create / launch a sequence |
-| `POST /api/agent` | run the Claude orchestration agent |
+| `POST /api/agent` | run the orchestration agent |
+| `GET/POST /api/linkedin/queue` | the desktop app claims invitations here and reports outcomes |
+| `POST /api/linkedin/assist` | one decision: what should the desktop app click next |
 | `POST /api/webhooks/email` · `/whatsapp` | bounce / reply / opt-out handling |
 | `GET /api/status` | health + integration map |
+
+## LinkedIn invitations come from a desktop app
+
+LinkedIn's API cannot send a connection request or a message to somebody you are
+not connected to — `w_member_social` only posts to your own feed — so invitations
+are sent by a real browser, on the customer's own machine and IP. `desktop/` is an
+Electron app that drives Chrome with Playwright; the server's job is the queue and
+the CRM, and it is unchanged from the extension era: same pairing token, same
+`/api/linkedin/queue`, same `claimActions`.
+
+Two things are worth knowing before touching it:
+
+- **One claimer, always.** `claimActions` marks a row `in_progress` with a read
+  then a write, so two clients polling one queue can each hold the same action and
+  each send it — and an invitation cannot be recalled. The Chrome extension still
+  does sourcing and no longer claims invite actions at all.
+- **A model decides what to click; the client decides what is allowed.** The page
+  is described to a model, which answers with one element; `desktop/pilot-page.js`
+  then refuses anything in the sidebar, anything destructive, anything naming
+  somebody else, and anything it cannot attribute to the profile being visited.
+
+`desktop/README.md` has the rest: what stops a run, how attribution works, and how
+to build and sign the installer.
 
 ## Project docs (kept local, not in this repo)
 
