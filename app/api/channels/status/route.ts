@@ -2,6 +2,7 @@ import type { NextRequest } from "next/server";
 import { ok } from "@/lib/http";
 import { requireOrg } from "@/lib/tenant";
 import { env, configured } from "@/lib/env";
+import { prisma } from "@/lib/db";
 
 export const runtime = "nodejs";
 
@@ -12,14 +13,36 @@ function maskPhone(phone: string): string {
   return digits.length > 4 ? `••• ${digits.slice(-4)}` : digits;
 }
 
-// GET /api/channels/status — WhatsApp/SMS business-channel config, for the settings
-// screen. Credentials themselves stay in env vars (CLAUDE.md: secrets never move into the
+// GET /api/channels/status — one answer for the Channels screen: is each way of
+// reaching someone actually working, and where do leads come from.
+//
+// Credentials themselves stay in env vars (CLAUDE.md: secrets never move into the
 // database from a settings UI) — this only ever reports status + a masked identifier.
+// Counts, never rows: a SendingAccount carries `pass`, `refreshToken` and
+// `dkimPrivateKey`, and must never reach a browser.
 export async function GET(req: NextRequest) {
   const ctx = await requireOrg(req);
   if (ctx instanceof Response) return ctx;
 
+  const [mailboxes, linkedIn, leadSources] = await Promise.all([
+    prisma.sendingAccount.count({ where: { organizationId: ctx.orgId } }),
+    prisma.linkedInAccount.findFirst({
+      where: { organizationId: ctx.orgId, userId: ctx.userId },
+      select: { status: true, liMemberName: true, lastSeenAt: true },
+    }),
+    prisma.leadSource.count({ where: { organizationId: ctx.orgId } }).catch(() => 0),
+  ]);
+
   return ok({
+    email: {
+      configured: mailboxes > 0,
+      mailboxes,
+    },
+    linkedin: {
+      configured: linkedIn?.status === "connected",
+      memberName: linkedIn?.liMemberName ?? null,
+      lastSeenAt: linkedIn?.lastSeenAt ?? null,
+    },
     whatsapp: {
       configured: configured.whatsapp,
       fromMasked: env.twilio.whatsappFrom ? maskPhone(env.twilio.whatsappFrom) : null,
@@ -29,5 +52,6 @@ export async function GET(req: NextRequest) {
       // (dev PRD §3.9), not something code can stand up. See docs/channels.md.
       configured: false,
     },
+    leadSources: { count: leadSources },
   });
 }

@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import LeadDetailClient from "./LeadDetailClient";
 import { getLeadDetail, getLeadTimeline } from "@/lib/queries";
 import { getServerTenant } from "@/lib/tenant";
+import { leadScope } from "@/lib/scope";
 
 // Server Component: the record and its timeline are fetched here, beside the DB,
 // and handed down as SWR fallback. Keys must match the client's fetch URLs exactly.
@@ -13,9 +14,10 @@ export default async function Page({ params }: { params: Promise<{ id: string }>
   const tenant = await getServerTenant();
   if (!tenant) notFound();
 
+  const scope = await leadScope(tenant);
   const [lead, timeline] = await Promise.all([
-    getLeadDetail(tenant.orgId, id).catch(() => null),
-    getLeadTimeline(tenant.orgId, id).catch(() => []),
+    getLeadDetail(tenant.orgId, id, scope.where).catch(() => null),
+    getLeadTimeline(tenant.orgId, id, 100, scope.where).catch(() => []),
   ]);
   if (!lead) notFound();
 

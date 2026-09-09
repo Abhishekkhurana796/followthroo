@@ -11,6 +11,7 @@ import { useSession } from "@/lib/auth-client";
 import { cn } from "@/lib/cn";
 import { Badge, Banner, DashHeader, Panel, Skeleton } from "@/components/ui";
 import { ActivationChecklist } from "@/components/dashboard/ActivationChecklist";
+import { TeamPerformance } from "@/components/dashboard/TeamPerformance";
 import { tourTarget } from "@/components/dashboard/tour/target";
 
 type Attention = {
@@ -26,7 +27,7 @@ type Task = {
   lead: { id: string; firstName: string | null; lastName: string | null; email: string | null; company: string | null } | null;
 };
 type Home = {
-  counts: { newLeads: number; followUpsDue: number; unreadReplies: number; overdueItems: number };
+  counts: { newLeads: number; followUpsDue: number; unreadReplies: number; overdueItems: number; unassigned: number };
   attention: Attention[];
   followUps: Task[];
   leadsBySource: { label: string; count: number }[];
@@ -70,7 +71,11 @@ function ago(iso: string) {
  * and every row is a link into the thing that needs doing. Analytics live on Reports.
  */
 export default function Overview({ checklistDismissed = false }: { checklistDismissed?: boolean }) {
-  const { data: home, error, isLoading } = useSWR<Home>("/api/home");
+  // Whose dashboard we are looking at. Null is "everyone I can see", which for a
+  // team member is already just their own book — so this control only ever
+  // appears for someone with more than one person under them.
+  const [viewAs, setViewAs] = useState<string | null>(null);
+  const { data: home, error, isLoading } = useSWR<Home>(viewAs ? `/api/home?member=${viewAs}` : "/api/home");
   const { data: session } = useSession();
   const greeting = useGreeting();
   const err = error ? (error as Error).message : null;
@@ -85,6 +90,20 @@ export default function Overview({ checklistDismissed = false }: { checklistDism
     { label: "New replies", value: c?.unreadReplies, icon: Reply, href: "/dashboard/inbox", tone: c?.unreadReplies ? "accent" : "neutral" },
     { label: "Overdue in pipeline", value: c?.overdueItems, icon: AlertTriangle, href: "/dashboard/ageing", tone: c?.overdueItems ? "danger" : "neutral" },
   ];
+
+  // Only appears when there is something to see, and only for the roles that
+  // can. A rep never has unassigned contacts in scope, so a permanent zero tile
+  // would be furniture; for an owner a non-zero count means a rule is not doing
+  // its job, which is worth interrupting for.
+  if (c?.unassigned) {
+    tiles.push({
+      label: "Unassigned",
+      value: c.unassigned,
+      icon: UserPlus,
+      href: "/dashboard/leads?view=unassigned",
+      tone: "danger",
+    });
+  }
 
   return (
     <>
@@ -120,6 +139,8 @@ export default function Overview({ checklistDismissed = false }: { checklistDism
             </Link>
           ))}
         </div>
+
+        <TeamPerformance viewAs={viewAs} onViewAs={setViewAs} />
 
         <div className="grid gap-6 xl:grid-cols-[1fr_340px]">
           <div className="space-y-6">

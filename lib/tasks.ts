@@ -15,7 +15,7 @@
  * actions need no setup — they are a reading of the data, not a record.
  */
 import { prisma } from "./db";
-import type { Prisma, TaskKind, TaskStatus } from "@prisma/client";
+import type { Department, Prisma, TaskKind, TaskPriority, TaskStatus } from "@prisma/client";
 
 /** What the UI renders in a Next Action slot. */
 export type NextAction = {
@@ -41,25 +41,149 @@ export async function createTask(input: {
   leadId?: string | null;
   pipelineItemId?: string | null;
   title: string;
+  instruction?: string | null;
   kind?: TaskKind;
+  priority?: TaskPriority;
   dueAt?: Date | null;
   ownerId?: string | null;
   createdBy?: string | null;
   createdKind?: "user" | "ai" | "system";
 }) {
-  return prisma.task.create({
+  const task = await prisma.task.create({
     data: {
       organizationId: input.organizationId,
       leadId: input.leadId ?? null,
       pipelineItemId: input.pipelineItemId ?? null,
       title: input.title,
+      instruction: input.instruction ?? null,
       kind: input.kind ?? "follow_up",
+      priority: input.priority ?? "none",
       dueAt: input.dueAt ?? null,
       ownerId: input.ownerId ?? null,
       createdBy: input.createdBy ?? null,
       createdKind: input.createdKind ?? "user",
     },
   });
+
+  // Tell the owner now, not when it comes due. Best-effort: a notification that
+  // fails must not lose the task it was about.
+  if (task.ownerId) {
+    await notifyTaskAssigned(task, input.createdBy ?? null).catch((e) =>
+      console.error("[tasks] assignment notification failed:", e),
+    );
+  }
+  return task;
+}
+
+/**
+ * "You have a new task" — the bell always, email unless they turned it off.
+ *
+ * Skips self-assignment via `notify`'s actor check: being told about something
+ * you just did yourself is noise, and noise is how people learn to ignore the
+ * bell entirely.
+ */
+async function notifyTaskAssigned(
+  task: { id: string; organizationId: string; ownerId: string | null; title: string; dueAt: Date | null; leadId: string | null },
+  actorId: string | null,
+) {
+  if (!task.ownerId) return;
+  const { notify } = await import("./notifications");
+  const due = task.dueAt ? ` Due ${task.dueAt.toLocaleDateString("en-IN", { day: "numeric", month: "short" })}.` : "";
+  const href = task.leadId ? `/dashboard/leads/${task.leadId}` : "/dashboard/tasks";
+
+  await notify({
+    organizationId: task.organizationId,
+    userId: task.ownerId,
+    actorId,
+    kind: "task_assigned",
+    title: task.title,
+    body: `A task was assigned to you.${due}`,
+    href,
+    entityType: "task",
+    entityId: task.id,
+    prefKey: "taskAssigned",
+    email: {
+      subject: `New task: ${task.title}`,
+      body: `A task has been assigned to you.
+
+${task.title}${due}
+
+Open it: ${process.env.NEXT_PUBLIC_APP_URL ?? ""}${href}`,
+    },
+  });
+}
+
+/* ------------------------------------------------------------------ */
+/* Assignment                                                          */
+/* ------------------------------------------------------------------ */
+
+/** The subset of TenantContext the assignment rules actually read. */
+export type AssignerContext = {
+  orgId: string;
+  userId: string;
+  role: string;
+  department: string | null;
+};
+
+const MEMBER_SELECT = {
+  userId: true,
+  role: true,
+  department: true,
+  user: { select: { id: true, name: true, email: true } },
+} satisfies Prisma.MemberSelect;
+
+export type AssignableMember = Prisma.MemberGetPayload<{ select: typeof MEMBER_SELECT }>;
+
+/**
+ * Who this caller may hand a task to.
+ *
+ * Reuses the scoping leads and pipelines already follow rather than inventing a
+ * second permission model: owner and admin reach the whole workspace, a group
+ * leader reaches their own department, and everyone else can only give work to
+ * themselves. A group leader with no department set is treated as the latter,
+ * because "same department as me" is not a filter you can build from null.
+ *
+ * Returns the list rather than a per-id boolean, because that is what lets the
+ * dialog render a picker at all -- and hide it entirely when there is exactly
+ * one legal answer.
+ */
+export async function assignableMembers(ctx: AssignerContext): Promise<AssignableMember[]> {
+  const selfOnly =
+    (ctx.role !== "owner" && ctx.role !== "admin" && ctx.role !== "group_leader") ||
+    (ctx.role === "group_leader" && !ctx.department);
+
+  if (selfOnly) {
+    const me = await prisma.member.findFirst({
+      where: { organizationId: ctx.orgId, userId: ctx.userId },
+      select: MEMBER_SELECT,
+    });
+    return me ? [me] : [];
+  }
+
+  return prisma.member.findMany({
+    where: {
+      organizationId: ctx.orgId,
+      // Owners and admins pass no department filter. A group leader sees their
+      // own department, plus themselves in case they sit outside it.
+      ...(ctx.role === "group_leader"
+        ? { OR: [{ department: ctx.department as Department }, { userId: ctx.userId }] }
+        : {}),
+    },
+    orderBy: { createdAt: "asc" },
+    select: MEMBER_SELECT,
+  });
+}
+
+/**
+ * True when `ownerId` is someone this caller may assign to.
+ *
+ * Worth being strict here: `Task.ownerId` is a raw userId with no foreign key,
+ * so before this check the API would accept and store any string at all.
+ */
+export async function canAssignTo(ctx: AssignerContext, ownerId: string): Promise<boolean> {
+  if (ownerId === ctx.userId) return true;
+  const allowed = await assignableMembers(ctx);
+  return allowed.some((m) => m.userId === ownerId);
 }
 
 /** Scoped by org in the WHERE, so a foreign id can never be completed. */
@@ -82,10 +206,35 @@ export async function reopenTask(organizationId: string, taskId: string) {
 export async function updateTask(
   organizationId: string,
   taskId: string,
-  data: { title?: string; kind?: TaskKind; dueAt?: Date | null; ownerId?: string | null; status?: TaskStatus },
+  data: {
+    title?: string;
+    instruction?: string | null;
+    kind?: TaskKind;
+    priority?: TaskPriority;
+    dueAt?: Date | null;
+    ownerId?: string | null;
+    status?: TaskStatus;
+  },
+  /** Who is making the change, so they are not notified about their own action. */
+  actorId?: string | null,
 ) {
+  // Read the previous owner first: reassignment should tell the new person, and
+  // re-saving a task without touching ownership should tell nobody at all.
+  const before = data.ownerId !== undefined
+    ? await prisma.task.findFirst({ where: { id: taskId, organizationId }, select: { ownerId: true } })
+    : null;
+
   const res = await prisma.task.updateMany({ where: { id: taskId, organizationId }, data });
-  return res.count > 0;
+  if (res.count === 0) return false;
+
+  if (data.ownerId && before && before.ownerId !== data.ownerId) {
+    const task = await prisma.task.findUnique({
+      where: { id: taskId },
+      select: { id: true, organizationId: true, ownerId: true, title: true, dueAt: true, leadId: true },
+    });
+    if (task) await notifyTaskAssigned(task, actorId ?? null).catch((e) => console.error("[tasks] reassignment notification failed:", e));
+  }
+  return true;
 }
 
 export async function deleteTask(organizationId: string, taskId: string) {
@@ -183,7 +332,9 @@ const TASK_SELECT = {
   id: true,
   leadId: true,
   title: true,
+  instruction: true,
   kind: true,
+  priority: true,
   status: true,
   dueAt: true,
   ownerId: true,
@@ -195,32 +346,63 @@ const TASK_SELECT = {
 
 export type TaskRow = Prisma.TaskGetPayload<{ select: typeof TASK_SELECT }>;
 
+/**
+ * Attach a display name to each task's owner.
+ *
+ * `Task.ownerId` is a raw userId with no relation, so a list of tasks on its own
+ * cannot say whose they are — which is the whole point of the Everyone view.
+ * Resolved in one batched query rather than per row.
+ */
+export async function withOwnerNames<T extends { ownerId: string | null }>(
+  rows: T[],
+): Promise<(T & { ownerName: string | null })[]> {
+  const ids = [...new Set(rows.map((r) => r.ownerId).filter((v): v is string => !!v))];
+  if (ids.length === 0) return rows.map((r) => ({ ...r, ownerName: null }));
+
+  const users = await prisma.user.findMany({
+    where: { id: { in: ids } },
+    select: { id: true, name: true, email: true },
+  });
+  const byId = new Map(users.map((u) => [u.id, u.name || u.email]));
+  return rows.map((r) => ({ ...r, ownerName: r.ownerId ? byId.get(r.ownerId) ?? null : null }));
+}
+
 export async function listTasks(
   organizationId: string,
-  opts: { scope?: TaskScope; ownerId?: string; leadId?: string; limit?: number } = {},
+  opts: { scope?: TaskScope; ownerId?: string; ownerIds?: string[] | null; leadId?: string; limit?: number } = {},
 ): Promise<TaskRow[]> {
-  const { scope = "open", ownerId, leadId, limit = 200 } = opts;
+  const { scope = "open", ownerId, ownerIds, leadId, limit = 200 } = opts;
   return prisma.task.findMany({
     where: {
       organizationId,
       ...scopeWhere(scope),
-      ...(ownerId ? { ownerId } : {}),
+      // `ownerId` is the caller narrowing to one person ("my tasks", or an
+      // owner drilling into a member). `ownerIds` is the role scope: who this
+      // caller is allowed to see at all, from lib/scope.ts taskOwnerScope.
+      // Null means unrestricted; an empty array means nobody, which must stay
+      // an empty result rather than silently matching everything.
+      ...(ownerId ? { ownerId } : ownerIds ? { ownerId: { in: ownerIds } } : {}),
       ...(leadId ? { leadId } : {}),
     },
     // Nulls last so dated work leads; done tasks read newest-first instead.
-    orderBy: scope === "done" ? { completedAt: "desc" } : [{ dueAt: { sort: "asc", nulls: "last" } }, { createdAt: "asc" }],
+    // Priority outranks the clock: a high-priority task due Friday should sit
+    // above a none-priority one due Thursday, or setting it changed nothing.
+    orderBy:
+      scope === "done"
+        ? { completedAt: "desc" }
+        : [{ priority: "desc" }, { dueAt: { sort: "asc", nulls: "last" } }, { createdAt: "asc" }],
     take: limit,
     select: TASK_SELECT,
   });
 }
 
 /** The four buckets the Tasks screen renders, in one round of queries. */
-export async function getTaskBuckets(organizationId: string, ownerId?: string) {
+export async function getTaskBuckets(organizationId: string, ownerId?: string, ownerIds?: string[] | null) {
   const [overdue, today, upcoming, done] = await Promise.all([
-    listTasks(organizationId, { scope: "overdue", ownerId }),
-    listTasks(organizationId, { scope: "today", ownerId }),
-    listTasks(organizationId, { scope: "upcoming", ownerId }),
-    listTasks(organizationId, { scope: "done", ownerId, limit: 25 }),
+    listTasks(organizationId, { scope: "overdue", ownerId, ownerIds }),
+    listTasks(organizationId, { scope: "today", ownerId, ownerIds }),
+    listTasks(organizationId, { scope: "upcoming", ownerId, ownerIds }),
+    listTasks(organizationId, { scope: "done", ownerId, ownerIds, limit: 25 }),
   ]);
   return { overdue, today, upcoming, done };
 }

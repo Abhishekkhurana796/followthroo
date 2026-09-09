@@ -36,7 +36,7 @@ export default function AcceptInvitationPage({ params }: { params: Promise<{ id:
 
   return (
     <main className="grid min-h-screen place-items-center bg-canvas px-6">
-      <div className="w-full max-w-md rounded-2xl border border-line bg-white p-8 text-center shadow-sm">
+      <div className="w-full max-w-md rounded-2xl border border-line bg-surface p-8 text-center shadow-sm">
         <h1 className="font-display text-xl font-bold">Workspace invitation</h1>
         <p className="mt-3 text-sm text-ink-soft">
           {status === "loading" && "Checking your invitation…"}

@@ -3,9 +3,10 @@ import { z } from "zod";
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { ok, fail } from "@/lib/http";
-import { requireOrg } from "@/lib/tenant";
-import { CampaignSequence } from "@/lib/campaign-engine";
+import { requireOrg, requireRole } from "@/lib/tenant";
+import { CampaignSequence, validateSequence } from "@/lib/campaign-engine";
 import { enrollLeads } from "@/lib/enroll";
+import { CAMPAIGN_INCLUDE } from "@/lib/queries";
 
 export const runtime = "nodejs";
 
@@ -21,7 +22,7 @@ export async function GET(req: NextRequest) {
   if (ctx instanceof Response) return ctx;
   const campaigns = await prisma.campaign.findMany({
     where: { organizationId: ctx.orgId },
-    include: { sendingAccount: true, _count: { select: { enrollments: true } } },
+    include: CAMPAIGN_INCLUDE,
     orderBy: { createdAt: "desc" },
   });
   return ok(campaigns);
@@ -39,11 +40,19 @@ async function ownsSendingAccount(orgId: string, accountId: string): Promise<boo
 export async function POST(req: NextRequest) {
   const ctx = await requireOrg(req);
   if (ctx instanceof Response) return ctx;
+  const gate = requireRole(ctx, ["owner", "admin"]);
+  if (gate) return gate;
   const parsed = CreateCampaign.safeParse(await req.json().catch(() => null));
   if (!parsed.success) return fail(parsed.error.issues[0]?.message ?? "invalid body");
   if (parsed.data.sendingAccountId && !(await ownsSendingAccount(ctx.orgId, parsed.data.sendingAccountId))) {
     return fail("Sending account not found", 404);
   }
+  // Beyond Zod's shape check: a sequence can be well-formed and still impossible
+  // to run — a connection note that will exceed LinkedIn's 300 characters once
+  // personalised, or a template from another workspace.
+  const valid = await validateSequence(ctx.orgId, parsed.data.sequence);
+  if (!valid.ok) return fail(valid.message);
+
   const campaign = await prisma.campaign.create({
     data: {
       organizationId: ctx.orgId,

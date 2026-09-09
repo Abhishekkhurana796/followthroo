@@ -3,7 +3,7 @@ import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { ok, fail } from "@/lib/http";
 import { requireExtAuth } from "@/lib/linkedin/auth";
-import { claimActions, completeAction } from "@/lib/linkedin/queue";
+import { claimActions, completeAction, peekActions } from "@/lib/linkedin/queue";
 import { corsPreflight, withCors } from "@/lib/linkedin/cors";
 
 export const runtime = "nodejs";
@@ -22,6 +22,44 @@ export async function GET(req: NextRequest) {
     data: { lastSeenAt: new Date(), status: "connected" },
   });
 
+  // `peek` is a look, not a claim. The desktop app asks for this before a run so
+  // it can show exactly who is about to be contacted; it must not consume the
+  // queue, or opening the app would quietly mark people in_progress and the list
+  // you were shown would be the list you could no longer choose not to send.
+  if (req.nextUrl.searchParams.get("peek")) {
+    const upto = Math.min(Math.max(Number(req.nextUrl.searchParams.get("limit") ?? 20), 1), 50);
+    return withCors(
+      ok({
+        pacing: { minDelaySec: account.minDelaySec, maxDelaySec: account.maxDelaySec },
+        autoSend: account.autoSend,
+        dailyInviteCap: account.dailyInviteCap,
+        people: await peekActions(account, upto),
+      })
+    );
+  }
+
+  // Only the desktop app may claim work.
+  //
+  // The extension stopped asking for actions in 3.0.0, but an installed 2.5.x
+  // keeps polling this endpoint with the same pairing token and there is no way
+  // to make somebody update. Two clients claiming from one queue means the same
+  // person gets invited twice, and an invitation cannot be recalled — so the
+  // rule is enforced here rather than trusted to whatever is installed.
+  //
+  // An old client sees an empty queue rather than an error, which is exactly
+  // what it should do with it: nothing.
+  const client = req.headers.get("x-followthroo-client");
+  if (client !== "desktop") {
+    return withCors(
+      ok({
+        pacing: { minDelaySec: account.minDelaySec, maxDelaySec: account.maxDelaySec },
+        mode: account.mode,
+        actions: [],
+        note: "Invitations are sent by the Followthroo desktop app. This client can only read.",
+      })
+    );
+  }
+
   const limit = Math.min(Math.max(Number(req.nextUrl.searchParams.get("limit") ?? 3), 1), 10);
   const actions = await claimActions(account, limit);
 
@@ -29,7 +67,20 @@ export async function GET(req: NextRequest) {
     ok({
       pacing: { minDelaySec: account.minDelaySec, maxDelaySec: account.maxDelaySec },
       mode: account.mode,
-      actions: actions.map((a) => ({ id: a.id, type: a.type, linkedinUrl: a.linkedinUrl, note: a.note, leadName: a.leadName })),
+      // Hand-picked rather than spread, so a new column on LinkedInAction never
+      // leaks to the extension by accident. The cost of that is this list has to
+      // be kept in step: autoSend was computed by claimActions and dropped right
+      // here, so the extension always saw undefined, always drafted, and left
+      // the tab sitting open. The verification for it asserted claimActions
+      // rather than this response, so it passed while the feature did nothing.
+      actions: actions.map((a) => ({
+        id: a.id,
+        type: a.type,
+        linkedinUrl: a.linkedinUrl,
+        note: a.note,
+        leadName: a.leadName,
+        autoSend: a.autoSend,
+      })),
     })
   );
 }

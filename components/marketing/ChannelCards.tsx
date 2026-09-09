@@ -2,10 +2,8 @@
 
 import React, { useEffect, useRef } from "react";
 import { Mail, Linkedin, MessageCircle, MessagesSquare, Database, Bot } from "lucide-react";
-import gsap from "gsap";
-import { ScrollTrigger } from "gsap/ScrollTrigger";
+import { gsap } from "./gsap";
 
-gsap.registerPlugin(ScrollTrigger);
 
 type Card = { icon: typeof Mail; title: string; metric: string; blurb: string };
 
@@ -50,7 +48,7 @@ export default function ChannelCards() {
     <section
       id="channels"
       ref={section}
-      className="relative flex min-h-screen flex-col justify-center overflow-hidden bg-ink py-20 text-white"
+      className="band-dark relative flex min-h-screen flex-col justify-center overflow-hidden py-20"
     >
       <div className="mx-auto mb-12 max-w-6xl px-6 text-center">
         <span className="eyebrow !text-white/45">Every channel, one system</span>
@@ -67,7 +65,7 @@ export default function ChannelCards() {
               key={c.title}
               className="glass-dark group flex h-[340px] w-[280px] shrink-0 flex-col rounded-[24px] p-7 transition-transform duration-300 hover:-translate-y-1.5"
             >
-              <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-white text-ink">
+              <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-white text-[#0a0a0a]">
                 <c.icon className="h-6 w-6" />
               </div>
               <div className="mt-auto">

@@ -15,7 +15,11 @@ const APP_HOST = "app.followthroo.com";
 
 /** Everything that is the product, not the showcase site. `/api` is deliberately
  *  excluded — see below. */
-const APP_PATH_PREFIXES = ["/dashboard", "/sign-in", "/sign-up", "/accept-invitation"];
+// `/desktop-auth` is the last hop of desktop sign-in: the system browser lands
+// there with a fresh session and hands a one-time code to the app. It belongs on
+// the app host with the other authenticated paths — bounced to the marketing
+// site it would lose the session it exists to read.
+const APP_PATH_PREFIXES = ["/dashboard", "/sign-in", "/sign-up", "/accept-invitation", "/desktop-auth"];
 
 function isAppPath(pathname: string) {
   return APP_PATH_PREFIXES.some((p) => pathname === p || pathname.startsWith(`${p}/`));

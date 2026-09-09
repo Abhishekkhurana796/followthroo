@@ -286,15 +286,3 @@ export async function ensureSource(organizationId: string, key: string): Promise
   return created.id;
 }
 
-/** Derive the identifier list from a raw lead-shaped payload. */
-export function identitiesFrom(o: {
-  email?: string | null;
-  phone?: string | null;
-  linkedinUrl?: string | null;
-}): IdentityInput[] {
-  const out: IdentityInput[] = [];
-  if (o.email) out.push({ kind: "email", value: o.email });
-  if (o.phone) out.push({ kind: "phone", value: o.phone });
-  if (o.linkedinUrl) out.push({ kind: "linkedin", value: o.linkedinUrl });
-  return out;
-}

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { logActivity } from "@/lib/crm";
 import { env } from "@/lib/env";
+import { verifyClickTarget } from "@/lib/tracking";
 
 export const runtime = "nodejs";
 
@@ -11,20 +12,30 @@ type Ctx = { params: Promise<{ messageId: string }> };
 export async function GET(req: NextRequest, { params }: Ctx) {
   const { messageId } = await params;
   const target = req.nextUrl.searchParams.get("u");
+  const signature = req.nextUrl.searchParams.get("s");
 
-  // Validate the destination is an http(s) URL; fall back to the app home if not.
+  const message = await prisma.message.findUnique({ where: { id: messageId } }).catch(() => null);
+
+  // Only ever redirect somewhere this message actually pointed. Anything else
+  // makes this an open redirect on an unauthenticated route — a phishing link
+  // wearing our domain. Fall back to the app home rather than erroring, so a
+  // legitimate recipient is never left staring at a 400.
   let dest = env.appUrl;
-  try {
-    if (target) {
+  if (target) {
+    try {
       const u = new URL(target);
-      if (u.protocol === "http:" || u.protocol === "https:") dest = target;
+      const schemeOk = u.protocol === "http:" || u.protocol === "https:";
+      // Signed links are the current path. Links in mail sent before signing
+      // existed carry no `s`, so fall back to proving the URL was in that
+      // message's own rendered body — which an attacker cannot arrange.
+      const allowed = schemeOk && (verifyClickTarget(messageId, target, signature) || !!message?.renderedBody?.includes(target));
+      if (allowed) dest = target;
+    } catch {
+      /* keep fallback */
     }
-  } catch {
-    /* keep fallback */
   }
 
   try {
-    const message = await prisma.message.findUnique({ where: { id: messageId } });
     if (message?.organizationId) {
       await logActivity({
         organizationId: message.organizationId,

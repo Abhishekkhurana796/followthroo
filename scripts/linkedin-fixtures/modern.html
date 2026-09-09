@@ -1,0 +1,63 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>Fixture — modern people search</title></head>
+<body>
+<!--
+  A stand-in for LinkedIn's CURRENT people-search markup: attribute hooks, no
+  `entity-result` / `reusable-search__result-container` classes anywhere, and the
+  name living only inside the profile link. This is the shape that broke the
+  extension — rowCards() finds the rows, and every old class-based name selector
+  misses.
+-->
+<main>
+  <div class="search-results-container">
+    <h2>About 2,300 results</h2>
+    <ul>
+      <li data-view-name="search-entity-result" data-chameleon-result-urn="urn:li:member:1">
+        <div>
+          <img alt="" width="48" height="48">
+          <a href="/in/sahiba-singh-1234?miniProfileUrn=abc">
+            <span aria-hidden="true">Sahiba Singh</span>
+            <span class="visually-hidden">Sahiba Singh, verified, 2nd degree connection</span>
+          </a>
+          <span>&middot; 2nd</span>
+          <div>Deputy Manager- Marketing | Influencer Marketing at The Man Company</div>
+          <div>Gurugram, Haryana, India</div>
+          <button>Connect</button>
+        </div>
+      </li>
+      <li data-view-name="search-entity-result" data-chameleon-result-urn="urn:li:member:2">
+        <div>
+          <a href="/in/rohit-mehra-abcd">
+            <span aria-hidden="true">Rohit Mehra</span>
+          </a>
+          <span>&middot; 3rd+</span>
+          <div>Head of Marketing - APAC at YouGov</div>
+          <div>Bengaluru, Karnataka, India</div>
+        </div>
+      </li>
+      <li data-view-name="search-entity-result" data-chameleon-result-urn="urn:li:member:3">
+        <div>
+          <a href="/in/aditi-dwivedi-77/">
+            <span aria-hidden="true">Aditi Dwivedi</span>
+          </a>
+          <span>&middot; 1st</span>
+          <div>Brand Manager at HurixDigital</div>
+          <div>Mumbai, Maharashtra, India</div>
+        </div>
+      </li>
+      <li data-view-name="search-entity-result" data-chameleon-result-urn="urn:li:member:4">
+        <div>
+          <a href="/in/verbose-headline-99">
+            <span aria-hidden="true">Priyanka Raghunathan</span>
+          </a>
+          <span>&middot; 2nd</span>
+          <div>Deputy General Manager - Integrated Marketing Communications | Influencer Marketing | Brand Management | Performance Media | Retention &amp; Lifecycle | Ex-Ogilvy | Ex-FCB Ulka | Ex-JWT | Ex-Dentsu | Speaker | Mentor at The Man Company &amp; Helios Lifestyle Private Limited</div>
+          <div>Gurugram, Haryana, India</div>
+        </div>
+      </li>
+    </ul>
+  </div>
+</main>
+</body>
+</html>

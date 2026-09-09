@@ -11,7 +11,13 @@
  *                (lib/domains/provision.ts). Safe to retry: it only reads DNS and
  *                records what it saw.
  *
- * Transport priority: Upstash QStash (prod) → BullMQ/Redis → inline setTimeout (dev only).
+ * Transport: Upstash QStash in production, inline setTimeout in local dev.
+ *
+ * A BullMQ/Redis tier used to sit between the two. It was removed with its
+ * consumer (lib/worker.ts): QStash has been the production transport since the
+ * scheduler moved off vercel.json, nothing ran the worker, and a producer with
+ * no consumer is worse than no producer at all — jobs enqueued there were
+ * accepted and then silently never ran. Redis is still used, by lib/ratelimit.ts.
  */
 import { env, configured } from "./env";
 import type { Channel } from "./channels/types";
@@ -23,7 +29,14 @@ export interface SendJob {
   leadId: string;
   campaignId?: string;
   templateId?: string;
+  /** Pinned template snapshot; falls back to the template's live copy. */
+  templateVersionId?: string;
   account?: string;
+  /** The sequence node this came from, so an action traces back to its step. */
+  nodeId?: string;
+  /** LinkedIn only: which gesture to draft. Rides the payload so a queued send
+   *  keeps its kind across the wire. */
+  linkedinAction?: "invite" | "message" | "auto";
 }
 
 export interface AdvanceJob {
@@ -46,22 +59,6 @@ export interface DomainVerifyDnsJob {
 }
 
 export type QueueJob = SendJob | AdvanceJob | AckJob | DomainVerifyDnsJob;
-
-export const SEND_QUEUE = "followthroo-sends";
-
-let queue: import("bullmq").Queue<QueueJob> | null = null;
-
-export async function getQueue(): Promise<import("bullmq").Queue<QueueJob> | null> {
-  if (!configured.redis) return null;
-  if (queue) return queue;
-  const { Queue } = await import("bullmq");
-  const IORedis = (await import("ioredis")).default;
-  const connection = new IORedis(env.redisUrl!, { maxRetriesPerRequest: null });
-  queue = new Queue<QueueJob>(SEND_QUEUE, {
-    connection: connection as unknown as import("bullmq").ConnectionOptions,
-  });
-  return queue;
-}
 
 /** Enqueue any job with an optional delay (ms) for sequencing + jitter. */
 export async function enqueueJob(job: QueueJob, delayMs = 0): Promise<boolean> {
@@ -90,33 +87,18 @@ export async function enqueueJob(job: QueueJob, delayMs = 0): Promise<boolean> {
     }
   }
 
-  // Fallback to BullMQ if Redis is configured
-  const q = await getQueue();
-  if (!q) {
-    // Local dev without Redis or QStash: run inline after the delay for convenience.
-    if (process.env.NODE_ENV === "development") {
-      console.warn(`[queue] Redis/QStash not configured. Running job inline (delay ${delayMs}ms)`);
-      import("./job-router").then(({ runJob }) => {
-        setTimeout(() => {
-          runJob(job).catch((err) => console.error("[queue] Inline job failed:", err));
-        }, delayMs);
-      });
-      return true;
-    }
-    return false;
+  // Local dev without QStash: run inline after the delay for convenience.
+  if (process.env.NODE_ENV === "development") {
+    console.warn(`[queue] QStash not configured. Running job inline (delay ${delayMs}ms)`);
+    import("./job-router").then(({ runJob }) => {
+      setTimeout(() => {
+        runJob(job).catch((err) => console.error("[queue] Inline job failed:", err));
+      }, delayMs);
+    });
+    return true;
   }
 
-  await q.add(job.kind ?? "send", job, {
-    delay: delayMs,
-    attempts: 5,
-    backoff: { type: "exponential", delay: 60_000 },
-    removeOnComplete: 1000,
-    removeOnFail: 5000,
-  });
-  return true;
-}
-
-/** Back-compat helper for one-off sends. */
-export async function enqueueSend(job: Omit<SendJob, "kind">, delayMs = 0): Promise<boolean> {
-  return enqueueJob({ kind: "send", ...job }, delayMs);
+  // Refusing loudly beats accepting a job nothing will ever run.
+  console.error("[queue] QStash is not configured — job dropped:", job.kind ?? "send");
+  return false;
 }

@@ -2,7 +2,7 @@
 
 import useSWR from "swr";
 import Link from "next/link";
-import { Bell, Mail, MessageSquareOff, CheckCircle2 } from "lucide-react";
+import { Bell, CheckCircle2, ListChecks, Mail, MessageSquareOff } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { DashHeader, Panel, EmptyState, Skeleton, Badge } from "@/components/ui";
 
@@ -13,13 +13,26 @@ type EscalationRow = {
   sentAt: string;
   meta: { channels?: string[]; reason?: string } | null;
   to: { id: string; name: string; email: string } | null;
+  // Exactly one of these is set: a breached pipeline stage, or an overdue task.
   item: {
     id: string;
     lead: { id: string; firstName: string | null; lastName: string | null; email: string | null };
     stage: { name: string };
     pipeline: { id: string; name: string; department: string };
-  };
+  } | null;
+  task: {
+    id: string;
+    title: string;
+    dueAt: string | null;
+    leadId: string | null;
+    lead: { id: string; firstName: string | null; lastName: string | null; email: string | null } | null;
+  } | null;
 };
+
+function personName(l: { firstName: string | null; lastName: string | null; email: string | null } | null) {
+  if (!l) return null;
+  return [l.firstName, l.lastName].filter(Boolean).join(" ") || l.email || "Unnamed";
+}
 
 const LEVEL_LABEL: Record<number, string> = { 1: "Owner", 2: "Manager", 3: "Admin" };
 
@@ -82,8 +95,8 @@ export default function EscalationsClient() {
             <table className="w-full min-w-[52rem] text-sm">
               <thead>
                 <tr className="border-b border-line text-left font-mono text-xs uppercase tracking-wide text-ink-soft">
-                  <th className="px-4 py-3 font-medium">Lead</th>
-                  <th className="px-4 py-3 font-medium">Pipeline / stage</th>
+                  <th className="px-4 py-3 font-medium">Contact</th>
+                  <th className="px-4 py-3 font-medium">What is late</th>
                   <th className="px-4 py-3 font-medium">Escalated to</th>
                   <th className="px-4 py-3 font-medium">Delivery</th>
                   <th className="px-4 py-3 text-right font-medium">When</th>
@@ -91,20 +104,34 @@ export default function EscalationsClient() {
               </thead>
               <tbody className="divide-y divide-line">
                 {events.map((e) => {
-                  const name =
-                    [e.item.lead.firstName, e.item.lead.lastName].filter(Boolean).join(" ") ||
-                    e.item.lead.email ||
-                    "Unnamed";
+                  const lead = e.item?.lead ?? e.task?.lead ?? null;
+                  const name = personName(lead) ?? "—";
+                  const leadId = e.item?.lead.id ?? e.task?.leadId ?? null;
                   const channels = e.meta?.channels ?? [];
                   return (
                     <tr key={e.id}>
                       <td className="px-4 py-3">
-                        <Link href="/dashboard/leads" className="font-medium hover:text-accent">
-                          {name}
-                        </Link>
+                        {leadId ? (
+                          <Link href={`/dashboard/leads/${leadId}`} className="font-medium hover:text-accent">
+                            {name}
+                          </Link>
+                        ) : (
+                          <span className="text-ink-soft">{name}</span>
+                        )}
                       </td>
                       <td className="px-4 py-3 text-ink-soft">
-                        <span className="capitalize">{e.item.pipeline.department}</span> · {e.item.stage.name}
+                        {e.item ? (
+                          <>
+                            <span className="capitalize">{e.item.pipeline.department}</span> · {e.item.stage.name}
+                          </>
+                        ) : e.task ? (
+                          <span className="inline-flex items-center gap-1.5">
+                            <ListChecks className="h-3.5 w-3.5 shrink-0" aria-hidden />
+                            <span className="min-w-0 truncate">{e.task.title}</span>
+                          </span>
+                        ) : (
+                          "—"
+                        )}
                       </td>
                       <td className="px-4 py-3">
                         <div className="font-medium">{e.to?.name ?? "—"}</div>

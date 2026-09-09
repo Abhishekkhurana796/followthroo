@@ -2,12 +2,24 @@
 
 import { useState } from "react";
 import useSWR from "swr";
-import {
-  ResponsiveContainer, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip,
-  BarChart, Bar, Legend,
-} from "recharts";
+import dynamic from "next/dynamic";
 import { Users, Send, MailOpen, MousePointerClick, Reply, TrendingUp, GitBranch, IndianRupee, Timer } from "lucide-react";
 import { DashHeader, Panel, Skeleton, Badge } from "@/components/ui";
+
+// recharts is a ~400 KB chunk for two charts below the fold. Loading it lazily
+// lets the tiles and tables paint on the first pass; ssr:false because the
+// charts measure their container, so there is nothing useful to render server-side.
+const ChartFallback = ({ height }: { height: number }) => (
+  <div className="p-2" style={{ height }}><Skeleton className="h-full w-full" /></div>
+);
+const EngagementChart = dynamic(() => import("./ReportsCharts").then((m) => m.EngagementChart), {
+  ssr: false,
+  loading: () => <ChartFallback height={280} />,
+});
+const CampaignChart = dynamic(() => import("./ReportsCharts").then((m) => m.CampaignChart), {
+  ssr: false,
+  loading: () => <ChartFallback height={240} />,
+});
 
 type Report = {
   days: number;
@@ -34,7 +46,6 @@ type Report = {
 // swap can never reach — but SVG fill/stroke accept var(), so the values stay
 // theme-reactive without reading computed styles in an effect (that would
 // break SSR and flash on theme change).
-const COLORS = { sent: "var(--ink)", opened: "var(--accent)", clicked: "var(--info)", replied: "var(--success)" };
 const STAGE_ORDER = ["new", "contacted", "replied", "qualified", "won", "lost"];
 
 function Tile({ icon, label, value, sub }: { icon: React.ReactNode; label: string; value: string | number; sub?: string }) {
@@ -47,7 +58,6 @@ function Tile({ icon, label, value, sub }: { icon: React.ReactNode; label: strin
   );
 }
 
-const shortDate = (d: string) => d.slice(5); // MM-DD
 
 export default function ReportsClient() {
   const [days, setDays] = useState(30);
@@ -91,27 +101,7 @@ export default function ReportsClient() {
           {isLoading ? (
             <div className="h-64 p-2"><Skeleton className="h-full w-full" /></div>
           ) : (
-            <ResponsiveContainer width="100%" height={280}>
-              <AreaChart data={data?.series ?? []} margin={{ left: -20, right: 8, top: 8 }}>
-                <defs>
-                  {Object.entries(COLORS).map(([k, c]) => (
-                    <linearGradient key={k} id={`g-${k}`} x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="0%" stopColor={c} stopOpacity={0.25} />
-                      <stop offset="100%" stopColor={c} stopOpacity={0} />
-                    </linearGradient>
-                  ))}
-                </defs>
-                <CartesianGrid strokeDasharray="3 3" stroke="var(--line)" vertical={false} />
-                <XAxis dataKey="date" tickFormatter={shortDate} tick={{ fontSize: 11, fill: "var(--ink-soft)" }} interval="preserveStartEnd" minTickGap={28} />
-                <YAxis allowDecimals={false} tick={{ fontSize: 11, fill: "var(--ink-soft)" }} width={40} />
-                <Tooltip contentStyle={{ borderRadius: 12, border: "1px solid var(--line)", background: "var(--surface-raised)", color: "var(--ink)", fontSize: 12 }} />
-                <Legend wrapperStyle={{ fontSize: 12 }} />
-                <Area type="monotone" dataKey="sent" stroke={COLORS.sent} fill="url(#g-sent)" strokeWidth={2} />
-                <Area type="monotone" dataKey="opened" stroke={COLORS.opened} fill="url(#g-opened)" strokeWidth={2} />
-                <Area type="monotone" dataKey="clicked" stroke={COLORS.clicked} fill="url(#g-clicked)" strokeWidth={2} />
-                <Area type="monotone" dataKey="replied" stroke={COLORS.replied} fill="url(#g-replied)" strokeWidth={2} />
-              </AreaChart>
-            </ResponsiveContainer>
+            <EngagementChart series={data?.series ?? []} />
           )}
         </Panel>
 
@@ -141,17 +131,7 @@ export default function ReportsClient() {
             {(data?.byCampaign ?? []).length === 0 ? (
               <p className="text-sm text-ink-soft">No campaigns yet.</p>
             ) : (
-              <ResponsiveContainer width="100%" height={240}>
-                <BarChart data={(data?.byCampaign ?? []).slice(0, 6)} margin={{ left: -20, right: 8, top: 8 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="var(--line)" vertical={false} />
-                  <XAxis dataKey="name" tick={{ fontSize: 11, fill: "var(--ink-soft)" }} tickFormatter={(n: string) => (n.length > 10 ? n.slice(0, 10) + "…" : n)} />
-                  <YAxis allowDecimals={false} tick={{ fontSize: 11, fill: "var(--ink-soft)" }} width={40} />
-                  <Tooltip contentStyle={{ borderRadius: 12, border: "1px solid var(--line)", background: "var(--surface-raised)", color: "var(--ink)", fontSize: 12 }} />
-                  <Legend wrapperStyle={{ fontSize: 12 }} />
-                  <Bar dataKey="sent" fill={COLORS.sent} radius={[4, 4, 0, 0]} />
-                  <Bar dataKey="replied" fill={COLORS.replied} radius={[4, 4, 0, 0]} />
-                </BarChart>
-              </ResponsiveContainer>
+              <CampaignChart rows={(data?.byCampaign ?? []).slice(0, 6)} />
             )}
           </Panel>
         </div>

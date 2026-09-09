@@ -41,7 +41,9 @@ export interface WarmupRunResult {
 export async function runWarmupForOrg(orgId: string): Promise<WarmupRunResult> {
   const warmups = await prisma.warmup.findMany({
     where: { organizationId: orgId, enabled: true },
-    include: { sendingAccount: true },
+    // Only the two fields this function reads. A SendingAccount row also carries
+    // pass / refreshToken / dkimPrivateKey, and nothing server-side needs them here.
+    include: { sendingAccount: { select: { email: true, active: true } } },
   });
   const active = warmups.filter((w) => w.sendingAccount.active);
   if (active.length < 2) return { mailboxes: active.length, sent: 0, skipped: "need ≥2 enabled warm-up mailboxes" };

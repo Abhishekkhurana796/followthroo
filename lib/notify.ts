@@ -11,12 +11,12 @@ import { safeSend } from "./channels";
 import { sendSystemEmail } from "./channels/email";
 import { enqueueJob } from "./queue";
 
-type BusinessHours = { startHour: number; endHour: number; timezoneOffsetMinutes: number; days: number[] };
+export type BusinessHours = { startHour: number; endHour: number; timezoneOffsetMinutes: number; days: number[] };
 
 // 9am–7pm IST (UTC+5:30), Monday–Saturday — a sane default so this works with zero setup.
 const DEFAULT_BUSINESS_HOURS: BusinessHours = { startHour: 9, endHour: 19, timezoneOffsetMinutes: 330, days: [1, 2, 3, 4, 5, 6] };
 
-function getBusinessHours(raw: unknown): BusinessHours {
+export function getBusinessHours(raw: unknown): BusinessHours {
   if (raw && typeof raw === "object") return { ...DEFAULT_BUSINESS_HOURS, ...(raw as Partial<BusinessHours>) };
   return DEFAULT_BUSINESS_HOURS;
 }

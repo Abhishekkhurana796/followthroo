@@ -110,3 +110,39 @@ rate-limit layer.
 - Redis provider on Vercel (Marketplace) for BullMQ.
 - Whether LinkedIn browser automation runs in a Vercel Sandbox or a dedicated worker
   host (long-lived session + residential IP considerations).
+
+## Scheduling
+
+**QStash Schedules, registered by `scripts/setup-qstash-schedules.ts`.** They do
+not self-register: a fresh environment has no reply polling, no warm-up, no
+sweeps and no task reminders until that script is run against production.
+
+Vercel Cron via `vercel.json` was tried and removed. **Hobby plans reject any
+cron expression more frequent than daily, and reject it at deploy time** — the
+whole deployment fails, not just the cron. This app needs a 5-minute reply
+poller, so `vercel.json` is only an option on Pro.
+
+`lib/cron-auth.ts` accepts either a QStash signature or a `CRON_SECRET` bearer,
+so both schedulers work and manual `curl` runs do too.
+
+| Path | Schedule |
+|---|---|
+| `/api/inbox/poll` | every 5 min |
+| `/api/cron/domain-sweep` | every 5 min |
+| `/api/cron/enrollment-sweep` | every 10 min |
+| `/api/cron/sla-sweep` | every 15 min |
+| `/api/cron/task-sweep` | every 15 min |
+| `/api/cron/daily-digest` | hourly (sends per org at local 8am) |
+| `/api/warmup/run` | every 4 h |
+
+Two constraints worth knowing. Vercel cron expressions are **always UTC**, which is
+why the digest runs hourly and works out each org's local hour itself rather than
+being scheduled for "8am". And **Hobby plans reject anything more frequent than
+daily at build time** — this table needs a Pro plan or it will not deploy.
+
+Delivery is best effort: Vercel may miss a run or occasionally fire one twice, and it
+never retries a failure. Every sweep is therefore written to be idempotent and to
+reconcile from database state rather than assume it ran last time.
+
+`scripts/setup-qstash-schedules.ts` remains as a fallback for non-Vercel hosting.
+Running both schedulers doubles the invocations.

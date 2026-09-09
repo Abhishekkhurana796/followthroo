@@ -3,7 +3,6 @@
 import React, { Suspense } from "react";
 import Sidebar from "@/components/dashboard/Sidebar";
 import { SWRProvider } from "@/components/dashboard/SWRProvider";
-import { ThemeProvider } from "@/components/dashboard/ThemeProvider";
 import { TourProvider } from "@/components/dashboard/tour/TourProvider";
 import { TourOverlay } from "@/components/dashboard/tour/TourOverlay";
 import { ToastProvider, DialogsProvider } from "@/components/ui";
@@ -30,7 +29,6 @@ export function DashboardShell({
   onboarding: OnboardingState | null;
 }) {
   return (
-    <ThemeProvider>
       <SWRProvider>
         <ToastProvider>
           <DialogsProvider>
@@ -57,6 +55,5 @@ export function DashboardShell({
           </DialogsProvider>
         </ToastProvider>
       </SWRProvider>
-    </ThemeProvider>
   );
 }

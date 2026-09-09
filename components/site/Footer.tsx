@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { ThemeToggle } from "@/components/dashboard/ThemeToggle";
 
 /** The "Konnect" mark. */
 function Mark() {
@@ -6,7 +7,7 @@ function Mark() {
     <svg width="24" height="24" viewBox="0 0 26 26" fill="none" aria-hidden>
       <line x1="7" y1="13" x2="19" y2="13" stroke="var(--color-action)" strokeWidth="2.4" />
       <circle cx="7" cy="13" r="5" fill="var(--color-brand)" />
-      <circle cx="19" cy="13" r="5" fill="#fff" stroke="var(--color-brand)" strokeWidth="2.4" />
+      <circle cx="19" cy="13" r="5" fill="var(--color-canvas)" stroke="var(--color-brand)" strokeWidth="2.4" />
     </svg>
   );
 }
@@ -97,6 +98,10 @@ export default function Footer() {
 
         <div className="mt-14 flex flex-col items-center justify-between gap-3 border-t border-line pt-6 text-xs text-ink-soft sm:flex-row">
           <span>© {new Date().getFullYear()} Followthroo. All rights reserved.</span>
+          {/* The public site had no way to change theme at all: the provider was
+              mounted inside the dashboard shell, so a visitor who prefers dark
+              got whatever their system said and could not say otherwise. */}
+          <ThemeToggle />
           <span className="font-mono">
             Built by{" "}
             <a

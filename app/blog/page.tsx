@@ -17,7 +17,7 @@ export default function BlogPage() {
       <section className="bg-canvas pb-24">
         <div className="mx-auto grid max-w-5xl gap-4 px-6 sm:grid-cols-2">
           {POSTS.map((p) => (
-            <article key={p.title} className="group rounded-2xl border border-line bg-white p-6 transition-all hover:-translate-y-0.5 hover:shadow-md">
+            <article key={p.title} className="group rounded-2xl border border-line bg-surface p-6 transition-all hover:-translate-y-0.5 hover:shadow-md">
               <div className="font-mono text-xs uppercase tracking-widest text-ink-soft">{p.tag}</div>
               <h3 className="font-display mt-2 text-xl font-bold">{p.title}</h3>
               <div className="mt-4 font-mono text-xs text-ink-soft">{p.date} · {p.read} read</div>

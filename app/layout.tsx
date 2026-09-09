@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import "./globals.css";
+import { ThemeProvider } from "@/components/dashboard/ThemeProvider";
 
 export const metadata: Metadata = {
   title: "Followthroo — Multi-Channel Outreach",
@@ -45,7 +46,13 @@ export default function RootLayout({
       <head>
         <script dangerouslySetInnerHTML={{ __html: THEME_SCRIPT }} />
       </head>
-      <body>{children}</body>
+      <body>
+        {/* One provider for the whole app. It used to live in DashboardShell,
+            which meant the marketing site had no way to change theme at all —
+            the tokens were stamped by the script above, but nothing could
+            switch them. */}
+        <ThemeProvider>{children}</ThemeProvider>
+      </body>
     </html>
   );
 }

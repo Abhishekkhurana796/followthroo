@@ -19,7 +19,7 @@
 | 1 | **Scaffold + CRM/DB** | Next.js App Router app, Tailwind v4, Postgres schema, lead CRUD, CSV import | ☑ | [docs/crm-data-model.md](docs/crm-data-model.md) |
 | 2 | **Email channel** | Nodemailer + DKIM, queue + throttle, bounce webhook | ◐ needs SMTP creds | [docs/channels.md](docs/channels.md) |
 | 3 | **Templates + sequencing** | Handlebars engine + `{{x\|fallback}}`, spam check, sequences via BullMQ | ☑ | [docs/templates-and-variables.md](docs/templates-and-variables.md) |
-| 4 | **LinkedIn channel** | Interface + guards in place; API/browser driver NOT implemented (opt-in) | ◐ driver TODO | [docs/channels.md](docs/channels.md) |
+| 4 | **LinkedIn channel** | Queue + caps server-side; sourcing via Chrome extension; invitations sent by the `desktop/` Windows app (Electron + Playwright) | ☑ driver shipped 2026-09-07 | [docs/channels.md](docs/channels.md), [desktop/README.md](desktop/README.md) |
 | 5 | **WhatsApp channel** | Twilio send + status webhook + opt-out | ◐ needs Twilio creds | [docs/channels.md](docs/channels.md) |
 | 6 | **Social comments** | Interface stub only | ☐ | [docs/channels.md](docs/channels.md) |
 | 7 | **AI agent** | Claude (`claude-opus-4-8`) tool-loop over safe send path | ◐ needs API key | [docs/ai-agent.md](docs/ai-agent.md) |
@@ -62,6 +62,18 @@ lead sources) was already built; V3 is mostly product surface.
   The storefront takes the payment and credits the margin, so there is deliberately no
   checkout, no order table and no registrar API in the app.
   [docs/domains-and-mailboxes.md](docs/domains-and-mailboxes.md)
+
+## Tasks that actually chase you (shipped 2026-08-24)
+- **A due date that does something.** Creating a task offered one text field: no
+  assignee, no date picker, and a hardcoded due-now, so every task was a follow-up
+  owned by whoever clicked and already overdue. Worse, nothing ever fired — "overdue"
+  was a query scope, so a task went red on a screen nobody had open, and the
+  Notifications settings wrote to localStorage and admitted it in its own footer.
+  Now: a real form (assignee, due presets defaulting to tomorrow 9am, type, priority,
+  instruction, contact), role-scoped assignment enforced server-side, an owner nudge
+  when a task comes due, escalation to the manager a day later recorded on the existing
+  Escalations screen, and a morning digest at local 8am. Preferences persist per user.
+  [docs/crm-data-model.md](docs/crm-data-model.md)
 
 ## Cross-cutting (land alongside relevant phases)
 - **Rate limiting** (token buckets, jitter, warm-up) — begins in Phase 2, reused everywhere. [docs/rate-limits.md](docs/rate-limits.md)

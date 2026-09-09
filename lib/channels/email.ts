@@ -39,13 +39,18 @@ async function sendViaGmailApi(
   from: string,
   to: string,
   subject: string,
-  html: string
+  html: string,
+  messageId?: string
 ): Promise<string> {
   const token = await gmailAccessToken(refreshToken);
   const mime = [
     `From: ${from}`,
     `To: ${to}`,
     `Subject: ${encodeHeader(subject)}`,
+    // Our own Message-ID, so an inbound reply naming it in In-Reply-To can be
+    // matched back to this exact send. Gmail assigns its own opaque id, which is
+    // not the header the recipient's client will quote back at us.
+    ...(messageId ? [`Message-ID: ${messageId}`] : []),
     "MIME-Version: 1.0",
     'Content-Type: text/html; charset="UTF-8"',
     "",
@@ -135,7 +140,7 @@ export const emailChannel: Channel = {
    * tenant got its own quota against one physical mailbox. A send with no connected
    * account now fails loudly instead of quietly doing the wrong thing.
    */
-  async send(lead: Lead, rendered: RenderedMessage, account?: string, orgId?: string): Promise<SendResult> {
+  async send(lead: Lead, rendered: RenderedMessage, account?: string, orgId?: string, rfcMessageId?: string): Promise<SendResult> {
     if (!lead.email) return { ok: false, skipped: true, reason: "lead has no email" };
     if (!account || account === "default") return { ok: false, skipped: true, reason: NO_ACCOUNT };
     // The account id is a bare uuid; without the owning org in the lookup, one tenant
@@ -159,6 +164,30 @@ export const emailChannel: Channel = {
       }
       const fromAddress = sendingAccount.from || `${sendingAccount.name} <${sendingAccount.email}>`;
 
+      // Zoho OAuth accounts send through the Zoho Mail API. The account's region
+      // and Zoho account id were resolved at connect time and stored on the row
+      // (see app/api/auth/zoho/callback), so nothing is re-derived per send.
+      if (sendingAccount.provider === "zoho_oauth") {
+        if (!sendingAccount.refreshToken) {
+          return { ok: false, skipped: true, reason: `Zoho account ${account} needs re-connect (no refresh token)` };
+        }
+        if (!sendingAccount.dkimSelector) {
+          return { ok: false, skipped: true, reason: `Zoho account ${account} needs re-connect (no Zoho account id)` };
+        }
+        const { sendViaZohoMail, dcFromHost } = await import("../zoho");
+        const id = await sendViaZohoMail({
+          refreshToken: sendingAccount.refreshToken,
+          dc: dcFromHost(sendingAccount.host),
+          accountId: sendingAccount.dkimSelector,
+          from: sendingAccount.email,
+          to: lead.email,
+          subject: rendered.subject ?? "",
+          html: htmlBody,
+          messageId: rfcMessageId,
+        });
+        return { ok: true, providerId: id, rfcMessageId };
+      }
+
       // Gmail OAuth accounts send through the Gmail API (matches the gmail.send scope).
       if (sendingAccount.provider === "gmail_oauth") {
         if (!configured.google) {
@@ -172,9 +201,10 @@ export const emailChannel: Channel = {
           fromAddress,
           lead.email,
           rendered.subject ?? "",
-          htmlBody
+          htmlBody,
+          rfcMessageId
         );
-        return { ok: true, providerId: id };
+        return { ok: true, providerId: id, rfcMessageId };
       }
 
       // SMTP account.
@@ -205,8 +235,11 @@ export const emailChannel: Channel = {
         subject: rendered.subject ?? "",
         html: htmlBody,
         text: rendered.body.replace(/<[^>]+>/g, " "),
+        // nodemailer generates one if we do not; we supply ours so the value is
+        // known before the send and can be stored against the Message row.
+        ...(rfcMessageId ? { messageId: rfcMessageId } : {}),
       });
-      return { ok: true, providerId: info.messageId };
+      return { ok: true, providerId: info.messageId, rfcMessageId: rfcMessageId ?? info.messageId };
     } catch (e) {
       return { ok: false, error: e instanceof Error ? e.message : String(e) };
     }

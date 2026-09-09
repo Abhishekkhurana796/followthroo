@@ -1,10 +1,12 @@
 # channels.md — Per-Channel Features & Official Limits
 
-**Last updated:** 2026-08-11
+**Last updated:** 2026-09-07
 **Status:** draft
 
 > Every channel module implements a uniform `send(lead, rendered)` interface and goes
-> through `lib/ratelimit`. Consolidated numbers live in [rate-limits.md](rate-limits.md).
+> through `lib/ratelimit` — except LinkedIn, whose `send()` only enqueues, so its cap is
+> enforced at claim time instead. Consolidated numbers live in
+> [rate-limits.md](rate-limits.md).
 
 ---
 
@@ -157,35 +159,134 @@ export interface Channel {
 
 ---
 
-## LinkedIn — companion Chrome extension, human-assisted (Phase 5 — updated)
+## LinkedIn — desktop app sends, extension sources (Phase 5 — rewritten 2026-09-07)
 
 LinkedIn does **not** grant connection-invite or DM access through its developer program,
 and its User Agreement (§8.2) prohibits bots or automated methods for connections/messages
-outright. So this is deliberately **not** autonomous: a companion Chrome extension drafts
-each action from the user's own logged-in LinkedIn session, in their browser, but a human
-reviews and clicks Send themselves — the extension never does.
+outright. There is no API path here at any price: `w_member_social`, the scope our OAuth
+flow requests, only posts to your own feed. An invitation therefore requires a real browser
+holding a real LinkedIn session, and the only open question is whose browser.
+
+**It is the customer's own.** `desktop/` is an Electron app they install on Windows. It
+drives Chrome with Playwright, on their machine and their IP, signed into the LinkedIn
+account they already use. We never receive a `li_at` cookie, so there is nothing to encrypt,
+nothing to rotate, and no datacenter IP for LinkedIn to correlate against a home session.
+See `desktop/README.md` for why this beat the cloud-browser-plus-residential-proxy model
+that Expandi and HeyReach run.
 
 **Flow:**
 1. A campaign `send` node with `channel: "linkedin"` → `lib/channels/linkedin.ts` enqueues a
-   `LinkedInAction` (it no longer no-ops).
-2. The extension (`extension/`, MV3) polls `GET /api/linkedin/queue` (auth: per-member
-   `LinkedInAccount.extToken`), claims one action, opens the profile in a **foregrounded**
-   tab, and fills the invite note / message box via injected DOM automation — then stops.
-   It reports `status: "drafted"` back so the queue/cap accounting sees it as in-flight.
-3. The human reviews what's filled, sends it themselves in that tab, then confirms **"I
-   sent it"** (or **Skip**) in the extension popup — only that confirmation
-   `POST /api/linkedin/queue`s the terminal outcome, recorded as a `Message` +
-   `ActivityLog` + `ConversationEvent` (visible in reports/timeline). Polling stays paused
-   on one drafted action at a time until the human resolves it, then waits a randomized
-   `min–maxDelaySec` before drafting the next.
+   `LinkedInAction`. Bulk enqueue from the Leads screen goes through `enqueueManyLinkedIn`.
+2. The desktop app polls `GET /api/linkedin/queue?limit=1` (auth: per-member
+   `LinkedInAccount.extToken` — the same pairing token the extension uses), claims one
+   action, navigates to the profile, and runs `desktop/page-actions.js` in the page: find
+   the profile's own Connect, add the note, click Send, and confirm the dialog closed.
+3. It `POST`s the terminal outcome, recorded by `completeAction` as a `Message` +
+   `ActivityLog` + `ConversationEvent`. Then it waits a randomized `min–maxDelaySec` and
+   claims the next.
 
-**Caps + safety:** daily invite cap enforced server-side in `lib/linkedin/queue.ts`
-(`claimActions`, now counting `drafted` toward the cap too); the extension drafts one
-action per tick (default 45–120s apart); stale in-progress claims are auto-reclaimed after
-15 min, stale drafted ones (human never came back) after 40 min. Config + token live at
-`/dashboard/settings/linkedin`.
+**One claimer.** The extension (`extension/`, MV3) still does sourcing and no longer asks
+for invite actions at all. `claimActions` marks a row `in_progress` with a read followed by
+a write, so two clients polling one queue can each hold the same action and each send it —
+and an invitation cannot be recalled. Any third client replaces the desktop app rather than
+running beside it.
 
-**⚠️ ToS:** drafting from a personal LinkedIn account is still automation-adjacent even
-with a human sending — keep caps conservative (≤ ~20 invites/day), warm up new accounts,
-don't leave large batches queued unattended. The official "Sign in with LinkedIn (OIDC)" +
-"Share on LinkedIn" APIs remain available for identity/posting and can be wired separately.
+**Caps + safety:** the daily invite cap is enforced twice on purpose — server-side in
+`claimActions` against `LinkedInAccount.dailyInviteCap`, and client-side in `desktop/runner.js`
+against `MAX_PER_DAY`, with the day's tally persisted so pressing Start twice does not send
+forty. Stale `in_progress` claims are reclaimed after 15 min. A run also stops early on
+LinkedIn's own weekly-limit or verification dialog (first occurrence, marked `fatal`), on
+three consecutive failures, on a sign-in wall, and when automatic sending is switched off in
+the web app. Config + token live on `/dashboard/linkedin`.
+
+**Note:** `safeSend` in `lib/channels/index.ts` deliberately skips the generic
+`lib/ratelimit.ts` day-window for LinkedIn. That limiter is charged before `channel.send()`,
+but LinkedIn's `send()` only *enqueues* — so charging it meant a campaign could exhaust
+20/day on rows that were merely queued, while bulk enqueue bypassed the limiter entirely and
+counted nothing. One cap, at claim time.
+
+**⚠️ ToS:** automated sending from a personal LinkedIn account is against the User
+Agreement and the risk is to the customer's account. The web app gates it behind a switch
+that says so, per-action, so turning it off stops the very next invitation. Keep caps
+conservative (≤ ~20 invites/day), warm up new accounts. The official "Sign in with LinkedIn
+(OIDC)" + "Share on LinkedIn" APIs cover identity and posting — see the next section.
+
+---
+
+## LinkedIn — connecting an account, officially (2026-09-04)
+
+**Why this section exists.** Every competitor advertises "connect your LinkedIn account" and
+we did not have one, which read as a missing feature. It was two things at once: a real gap
+(there was no account connection anywhere in the product, only a bearer token to paste into
+an extension) and a question about architecture. Both are answered here.
+
+### What competitors mean by it
+
+Expandi, Dripify, HeyReach, Waalaxy (cloud mode) and PhantomBuster ask for the member's
+`li_at` session cookie — sometimes directly, sometimes through a "connector" extension whose
+only job is to read the cookie and ship it to the vendor. The vendor stores that session and
+drives LinkedIn as the member from its own cloud, usually behind a dedicated residential
+proxy per account so the traffic looks like it comes from one person.
+
+That is what makes unattended, laptop-off automation possible, and it is also its own
+failure mode: a live session used from an IP the member has never signed in from is the
+clearest signal LinkedIn's enforcement has. Restrictions in this category are routine, and
+a breach of any one vendor exposes every customer's LinkedIn account simultaneously.
+
+### What we built instead
+
+`lib/linkedin/oauth.ts` — LinkedIn's own 3-legged OAuth. The member clicks **Connect
+LinkedIn account** in Settings → LinkedIn, consents on linkedin.com, and returns with their
+verified name, photo and email on their `LinkedInAccount` row.
+
+| | Endpoint |
+|---|---|
+| Authorize | `https://www.linkedin.com/oauth/v2/authorization` |
+| Token | `https://www.linkedin.com/oauth/v2/accessToken` |
+| Identity | `https://api.linkedin.com/v2/userinfo` |
+| Post | `https://api.linkedin.com/rest/posts` (`LinkedIn-Version` header required) |
+
+**Scopes:** `openid profile email` (Sign In with LinkedIn) + `w_member_social` (Share on
+LinkedIn). Overridable via `LINKEDIN_SCOPES`, because scope availability is per-app — asking
+for a scope the app has not been granted fails the whole consent with "Invalid scope"
+rather than degrading gracefully.
+
+**Redirect URI** must be registered verbatim in the Developer Portal:
+`https://app.followthroo.com/api/linkedin/oauth/callback`. LinkedIn strips query parameters
+from it, so the member and org travel in httpOnly cookies (`li_oauth_state` / `_org` /
+`_user`), state-checked in the callback.
+
+**Token lifetime is 60 days with no refresh.** Programmatic refresh tokens are gated behind
+LinkedIn's partner programme, so an ordinary app cannot renew silently. `connectionState()`
+returns `expiring` from 7 days out and the settings page prompts a reconnect, rather than
+letting the member discover it through a post that did not go out.
+
+**Storage:** `liAccessToken` / `liRefreshToken` are in `ENCRYPTED_COLUMNS`
+(`lib/db-encryption.ts`), so they are AES-256-GCM ciphertext at rest like every other tenant
+credential. Neither ever reaches a browser — `GET /api/linkedin/connect` returns a name, a
+photo URL and an expiry date. Disconnecting nulls the columns outright rather than setting a
+flag.
+
+### What the connection does and does not unlock
+
+| Capability | Official API | How we do it |
+|---|---|---|
+| Verified identity | ✅ `openid profile email` | OAuth, this section |
+| Post to own feed | ✅ `w_member_social` | `lib/linkedin/post.ts`, server-side, no browser |
+| Read search results | ❌ not sold at any tier | Extension, member's own tab |
+| Company employees, post likers, group members, event guests | ❌ | Extension |
+| Send connection invitations | ❌ | Extension drafts, human sends |
+| Send messages | ❌ | Extension drafts, human sends |
+
+Sales Navigator and Marketing Developer Platform APIs are partner-gated and closed to
+general applicants; they do not change this table for a self-serve SaaS.
+
+**So both halves are load-bearing.** The account connection is the member's identity and
+their posting rights, and it is genuinely official. The extension is how sourcing and
+drafting happen, in the member's own session where the activity is indistinguishable from
+what it is — a person using LinkedIn. Neither replaces the other, and the settings page says
+so in a disclosure on the page rather than leaving people to wonder.
+
+**Verification:** `npx tsx --env-file=.env.local scripts/verify-linkedin-oauth.ts` — 21
+checks covering the encryption registration and AAD binding, authorize-URL construction, and
+the expiry state machine. No database required.

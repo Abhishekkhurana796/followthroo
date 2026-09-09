@@ -16,7 +16,7 @@
 | `id` | uuid (pk) | |
 | `first_name`, `last_name` | text | |
 | `email` | citext (unique) | dedupe key on import |
-| `phone` | text (encrypted) | E.164; needed for WhatsApp |
+| `phone` | text — see docs/security.md for what is and is not encrypted | E.164; needed for WhatsApp |
 | `linkedin_url` | text | |
 | `company`, `title` | text | |
 | `stage` | enum | `new · contacted · replied · qualified · won · lost` |
@@ -169,3 +169,28 @@ account, which is why warm-up, the reply poller, deliverability scoring and
 
 There is deliberately **no order or payment table**: the storefront takes the
 money and credits us the margin.
+
+## Tasks: assignment, priority, reminders
+
+Added 2026-08-24. The `Task` model was always capable of this; the UI simply
+never used it.
+
+| Field | Why |
+|---|---|
+| `priority` | `TaskPriority` enum, `none` by default. Ordered low-to-high so `orderBy: { priority: "desc" }` sorts the way a human expects, and `listTasks` ranks by it *before* the due date — otherwise setting a priority changes nothing you can see. |
+| `instruction` | Free text for whoever picks the task up. Distinct from `Note`, which is a human's words about the **contact**. |
+| `remindedAt` | The one nudge to the owner. Null-guarded, and **released again if the email fails**, so a transient SMTP outage does not silently consume the only reminder a task gets. |
+| `escalatedAt` | The one escalation to the owner's manager. Mirrors `PipelineItem.slaBreachedAt`, including the choice not to retry: the `EscalationEvent` records honestly that nothing was delivered rather than re-sending every 15 minutes. |
+
+`@@index([status, dueAt])` was added because the reminder sweep runs across every
+org, and the existing indexes are all org-scoped.
+
+**`EscalationEvent` now carries either kind of late work.** `itemId` became
+nullable and `taskId` was added; exactly one is set, enforced by the two callers
+since Prisma cannot express it. This reuses the whole `/dashboard/escalations`
+screen — including its "actually delivered" counter — rather than building a
+second one.
+
+**`User` gained** `notificationPrefs Json?` and `lastDigestAt DateTime?`. Both
+nullable with no default, for the same reason as the other app-owned user fields:
+better-auth owns that table and a non-nullable addition reads as drift.

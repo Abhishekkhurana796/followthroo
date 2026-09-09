@@ -5,7 +5,8 @@ import { Copy, Check, Pencil, AlertTriangle, PauseCircle, PlayCircle } from "luc
 import useSWR from "swr";
 import { api } from "@/lib/client";
 import { cn } from "@/lib/cn";
-import { DashHeader, Panel, Banner, Badge, Input, Label, Skeleton, usePrompt, useToast } from "@/components/ui";
+import { DashHeader, Panel, Banner, Badge, Input, Label, Select, Skeleton, usePrompt, useToast } from "@/components/ui";
+import { ASSIGNMENT_RULES, ASSIGNMENT_RULE_LABELS, type AssignmentRule } from "@/lib/assignment-rules";
 
 type Source = {
   id: string;
@@ -16,10 +17,18 @@ type Source = {
   instructions: string;
   ingestUrl: string;
   needsEnvSetup: boolean;
+  assignmentRule: AssignmentRule;
+  assignedToId: string | null;
+  assignmentDept: string | null;
 };
+
+type Assignees = { self: string; members: { userId: string; name: string; isSelf: boolean }[] };
 
 export default function SourcesClient() {
   const { data: sources, isLoading, mutate } = useSWR<Source[]>("/api/lead-sources");
+  // Same list the task assignee picker uses, so routing a source at somebody
+  // cannot offer a person you are not allowed to give work to.
+  const { data: assignees } = useSWR<Assignees>("/api/tasks/assignees");
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [costDraft, setCostDraft] = useState<Record<string, string>>({});
   const [msg, setMsg] = useState<string | null>(null);
@@ -32,7 +41,10 @@ export default function SourcesClient() {
     setTimeout(() => setCopiedId((c) => (c === id ? null : c)), 1500);
   }
 
-  async function patch(id: string, data: Partial<Pick<Source, "label" | "monthlyCost" | "active">>) {
+  async function patch(
+    id: string,
+    data: Partial<Pick<Source, "label" | "monthlyCost" | "active" | "assignmentRule" | "assignedToId">>,
+  ) {
     setMsg(null);
     try {
       await api("/api/lead-sources", { method: "PATCH", body: { id, ...data } });
@@ -139,6 +151,42 @@ export default function SourcesClient() {
                       className="!py-2 text-sm"
                     />
                   </div>
+                  {/* Who contacts from this source land on. With no shared pool
+                      (lib/scope.ts), an unrouted contact is invisible to every
+                      rep — so this is the control that decides whether a lead
+                      gets worked at all. */}
+                  <div className="min-w-[190px]">
+                    <Label htmlFor={`rule-${s.id}`}>Assign new contacts</Label>
+                    <Select
+                      id={`rule-${s.id}`}
+                      value={s.assignmentRule}
+                      onChange={(e) => patch(s.id, { assignmentRule: e.target.value as AssignmentRule })}
+                      className="!py-2 text-sm"
+                    >
+                      {ASSIGNMENT_RULES.map((r) => (
+                        <option key={r} value={r}>{ASSIGNMENT_RULE_LABELS[r].label}</option>
+                      ))}
+                    </Select>
+                    <p className="mt-1 text-xs text-ink-faint">{ASSIGNMENT_RULE_LABELS[s.assignmentRule].hint}</p>
+                  </div>
+
+                  {s.assignmentRule === "fixed" && (
+                    <div className="min-w-[170px]">
+                      <Label htmlFor={`owner-${s.id}`}>Goes to</Label>
+                      <Select
+                        id={`owner-${s.id}`}
+                        value={s.assignedToId ?? ""}
+                        onChange={(e) => patch(s.id, { assignedToId: e.target.value || null })}
+                        className="!py-2 text-sm"
+                      >
+                        <option value="">Choose someone…</option>
+                        {(assignees?.members ?? []).map((m) => (
+                          <option key={m.userId} value={m.userId}>{m.isSelf ? `${m.name} (me)` : m.name}</option>
+                        ))}
+                      </Select>
+                    </div>
+                  )}
+
                   <div className="flex items-center gap-2">
                     {dirty && (
                       <button onClick={() => saveCost(s)} className="btn btn-primary !px-4 !py-2 text-xs">

@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Fixture — profile, invite modal and message form</title></head>
+<body>
+<!--
+  A stand-in for a LinkedIn profile page, reproducing the two flows the extension
+  drives: the connection-request modal and the message compose form.
+
+  It exists because auto-send made the Send click load-bearing. Before, a missed
+  selector just meant the human clicked the button themselves; now it means the
+  action silently does nothing, and the worst possible outcome is recording it as
+  "sent" anyway — the CRM would claim contact that never happened and the
+  sequence would move on to a follow-up.
+
+  Query flags let one page cover the failure modes too:
+    ?sendDisabled=1   Send exists but is disabled  -> must report failed
+    ?noSend=1         Send button missing entirely -> must report failed
+    ?stuck=1          Send clicks but the modal never closes -> must report failed
+    ?connected=1      Already a connection: no Connect button, only Message
+-->
+<main>
+  <h1>Sahiba Singh</h1>
+  <div class="pv-top-card">
+    <div class="text-body-medium">Deputy Manager - Marketing at The Man Company</div>
+  </div>
+
+  <div id="actions">
+    <button id="connect" aria-label="Invite Sahiba Singh to connect">Connect</button>
+    <button id="message" aria-label="Message Sahiba Singh">Message</button>
+  </div>
+</main>
+
+<script>
+  const q = new URLSearchParams(location.search);
+  // A 1st-degree connection has no Connect button — the extension must fall back
+  // to messaging rather than reporting a failure.
+  if (q.get("connected")) document.getElementById("connect").remove();
+
+  document.getElementById("connect")?.addEventListener("click", () => {
+    if (document.querySelector('[role="dialog"]')) return;
+    const modal = document.createElement("div");
+    modal.className = "artdeco-modal";
+    modal.setAttribute("role", "dialog");
+    modal.innerHTML =
+      '<h2>Add a note to your invitation?</h2>' +
+      '<button id="addNote" aria-label="Add a note">Add a note</button>' +
+      '<div id="noteWrap" hidden><textarea id="custom-message" name="message" maxlength="300"></textarea></div>' +
+      (q.get("noSend") ? "" : '<button id="sendInvite" aria-label="Send now">Send now</button>');
+    document.body.appendChild(modal);
+
+    const send = modal.querySelector("#sendInvite");
+    if (send && q.get("sendDisabled")) send.disabled = true;
+    modal.querySelector("#addNote")?.addEventListener("click", () => {
+      modal.querySelector("#noteWrap").hidden = false;
+    });
+    // ?stuck=1 leaves the dialog open after the click, which is exactly what a
+    // rate-limited or errored LinkedIn does.
+    send?.addEventListener("click", () => { if (!q.get("stuck")) modal.remove(); });
+  });
+
+  document.getElementById("message").addEventListener("click", () => {
+    if (document.querySelector(".msg-form__contenteditable")) return;
+    const form = document.createElement("div");
+    form.innerHTML =
+      '<div class="msg-form__contenteditable" contenteditable="true" role="textbox"></div>' +
+      (q.get("noSend") ? "" : '<button class="msg-form__send-button" aria-label="Send">Send</button>');
+    document.body.appendChild(form);
+
+    const btn = form.querySelector(".msg-form__send-button");
+    if (btn && q.get("sendDisabled")) btn.disabled = true;
+    btn?.addEventListener("click", () => {
+      if (q.get("stuck")) return; // clicked, but the text stays put
+      form.querySelector(".msg-form__contenteditable").textContent = "";
+    });
+  });
+</script>
+</body>
+</html>

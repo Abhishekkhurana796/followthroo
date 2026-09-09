@@ -68,18 +68,44 @@ export const env = {
     liAt: get("LINKEDIN_LI_AT"),
   },
 
-  // Agent provider: NVIDIA (OpenAI-compatible endpoint).
-  // Falls back to the bare BASE_URL / MODEL names if that's what's in .env.local.
-  nvidia: {
-    apiKey: get("NVIDIA_API_KEY"),
-    baseUrl: url("NVIDIA_BASE_URL") ?? url("BASE_URL") ?? "https://integrate.api.nvidia.com/v1",
-    model: get("NVIDIA_MODEL") ?? get("MODEL") ?? "meta/llama-3.3-70b-instruct",
-  },
-
   // Agent provider: Anthropic Claude — CLAUDE.md's standing rule for the agent layer.
   // Two models: the main tool-calling loop uses the (configurable, defaults to the most
   // capable) model; reply-intent classification always uses the small/cheap one, since
   // it runs on every inbound reply and doesn't need frontier-model reasoning.
+  // Agent provider: OpenRouter, via its Anthropic-compatible endpoint.
+  //
+  // OpenRouter exposes an "Anthropic Skin" at /v1/messages that speaks the
+  // Messages API natively and passes native tool use straight through, so the
+  // existing @anthropic-ai/sdk client works against it with only a baseURL
+  // change — no second wire format, no translated tool schema.
+  //
+  // Model ids here are OpenRouter's, which are provider-prefixed
+  // ("anthropic/claude-...", "minimax/..."), NOT bare Anthropic ids.
+  openrouter: {
+    apiKey: get("OPENROUTER_API_KEY"),
+    baseUrl: url("OPENROUTER_BASE_URL") ?? "https://openrouter.ai/api",
+    model: get("OPENROUTER_MODEL") ?? "minimax/minimax-m2",
+    classifierModel: get("OPENROUTER_CLASSIFIER_MODEL") ?? get("OPENROUTER_MODEL") ?? "minimax/minimax-m2",
+    // The LinkedIn pilot has different requirements from the CRM agent: it reads
+    // a page and returns one JSON decision, and it is handed a screenshot once
+    // the element list has not been enough — so it needs vision and exact
+    // structured output rather than good prose. Separate from OPENROUTER_MODEL
+    // so tuning the thing that clicks on real accounts cannot change what writes
+    // to leads, or the reverse.
+    // Defaulted separately, and NOT to OPENROUTER_MODEL's default: that is
+    // "minimax/minimax-m2", which OpenRouter has retired from its free tier and
+    // now 404s. Gemini Flash is cheap, fast, and reads an image — which this
+    // path needs, because a screenshot is attached once the element list has not
+    // been enough.
+    pilotModel: get("OPENROUTER_PILOT_MODEL") ?? "google/gemini-2.5-flash",
+    // Comma-separated. OpenRouter tries these in order when the primary is
+    // unavailable, which is why there is no second provider integration here.
+    fallbackModels: (get("OPENROUTER_FALLBACK_MODELS") ?? "")
+      .split(",")
+      .map((m) => m.trim())
+      .filter(Boolean),
+  },
+
   anthropic: {
     apiKey: get("ANTHROPIC_API_KEY"),
     model: get("ANTHROPIC_MODEL") ?? "claude-opus-5",
@@ -138,8 +164,10 @@ export const configured = {
   email: !!(env.smtp.host && env.smtp.user && env.smtp.pass),
   whatsapp: !!(env.twilio.accountSid && env.twilio.authToken && env.twilio.whatsappFrom),
   linkedin: !!(env.linkedin.accessToken || env.linkedin.liAt),
-  agent: !!env.anthropic.apiKey,
-  anthropic: !!env.anthropic.apiKey,
+  // Either provider satisfies the agent — OpenRouter wins when both are set.
+  agent: !!(env.openrouter.apiKey || env.anthropic.apiKey),
+  anthropic: !!(env.openrouter.apiKey || env.anthropic.apiKey),
+  openrouter: !!env.openrouter.apiKey,
   qstash: !!(env.qstash.url && env.qstash.token),
   google: !!(env.google.clientId && env.google.clientSecret),
   meta: !!(env.meta.verifyToken && env.meta.appSecret && env.meta.pageAccessToken),

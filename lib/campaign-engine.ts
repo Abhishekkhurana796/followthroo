@@ -16,14 +16,35 @@ import { jitterMs } from "./ratelimit";
 import { enqueueJob } from "./queue";
 import { processSendJob } from "./job-processor";
 import type { Enrollment } from "@prisma/client";
+import { INVITE_NOTE_MAX, worstCaseNoteLength } from "./linkedin/note";
 
 const CHANNELS = ["email", "linkedin", "whatsapp", "social"] as const;
+
+export const LINKEDIN_ACTIONS = ["invite", "message", "auto"] as const;
+export type LinkedInAction = (typeof LINKEDIN_ACTIONS)[number];
 
 export const SendNode = z.object({
   id: z.string(),
   type: z.literal("send"),
   channel: z.enum(CHANNELS),
+  /// Which LinkedIn gesture this step performs — a connection request or a
+  /// direct message. It lives here rather than as two extra `channel` values
+  /// because `channel` is a Prisma enum shared by Message, Template and
+  /// ConversationEvent: splitting it would mean a migration across three tables
+  /// and templates authored per-kind, when an invite note and a follow-up
+  /// message are quite reasonably the same LinkedIn template.
+  ///
+  /// Absent on every campaign built before LinkedIn steps existed. Those resolve
+  /// to "auto", which is exactly what they already did — invite, falling back to
+  /// a message if the person is already a connection.
+  linkedinAction: z.enum(LINKEDIN_ACTIONS).optional(),
   templateId: z.string().nullable().optional(),
+  /// Pins this step to one snapshot of the template's wording. Without it the
+  /// body is resolved live at send time, so editing the template rewrites every
+  /// unsent step of every running sequence. This is what "apply to future
+  /// campaigns only" pins, and what "update this campaign's unsent messages"
+  /// repoints.
+  templateVersionId: z.string().nullable().optional(),
   waitDays: z.number().min(0).default(0),
   next: z.string().nullable().optional(),
 });
@@ -49,6 +70,18 @@ export const ExitNode = z.object({ id: z.string(), type: z.literal("exit") });
 export const CampaignNode = z.discriminatedUnion("type", [SendNode, ConditionNode, WaitNode, ExitNode]);
 export type CampaignNode = z.infer<typeof CampaignNode>;
 
+/**
+ * What a step actually does on LinkedIn.
+ *
+ * One place decides it, so the engine, the validator and the builder cannot
+ * disagree about what an older campaign with no explicit kind means.
+ */
+export function linkedinActionFor(node: CampaignNode): LinkedInAction {
+  return node.type === "send" && node.channel === "linkedin"
+    ? node.linkedinAction ?? "auto"
+    : "auto";
+}
+
 export const GraphSequence = z.object({
   nodes: z.array(CampaignNode),
   startNodeId: z.string().nullable().optional(),
@@ -58,6 +91,12 @@ export const GraphSequence = z.object({
 const LegacyStep = z.object({
   channel: z.enum(CHANNELS),
   templateId: z.string().nullable().optional(),
+  /// Pins this step to one snapshot of the template's wording. Without it the
+  /// body is resolved live at send time, so editing the template rewrites every
+  /// unsent step of every running sequence. This is what "apply to future
+  /// campaigns only" pins, and what "update this campaign's unsent messages"
+  /// repoints.
+  templateVersionId: z.string().nullable().optional(),
   waitDays: z.number().min(0).default(0),
   unless: z.string().optional(),
   onlyIf: z.string().optional(),
@@ -69,6 +108,71 @@ export type CampaignSequence = z.infer<typeof CampaignSequence>;
 export interface NormalizedGraph {
   nodes: Record<string, CampaignNode>;
   startNodeId: string | null;
+}
+
+/**
+ * Refuse a sequence that cannot work, at the moment it is saved.
+ *
+ * This lives on the server rather than in the builder because the builder is not
+ * the only writer — the agent and any API client save campaigns through the same
+ * two routes, and a check that only runs in one client is not a check.
+ *
+ * It is deliberately about things that are knowable now. The exact rendered
+ * length of a note is not (a variable can be any length), so this uses the
+ * worst case and `lib/channels/linkedin.ts` still measures the real string at
+ * send time.
+ */
+export async function validateSequence(
+  organizationId: string,
+  raw: unknown,
+): Promise<{ ok: true } | { ok: false; message: string }> {
+  const graph = normalizeSequence(raw);
+  const nodes = Object.values(graph.nodes);
+
+  // Step numbers are what the person sees in the builder, so errors name those
+  // rather than internal node ids.
+  const numberOf = new Map(nodes.map((n, i) => [n.id, i + 1]));
+
+  for (const node of nodes) {
+    if (node.type !== "send") continue;
+    if (node.linkedinAction && node.channel !== "linkedin") {
+      return {
+        ok: false,
+        message: `Step ${numberOf.get(node.id)} is not a LinkedIn step, so it cannot have a LinkedIn action.`,
+      };
+    }
+  }
+
+  const inviteSteps = nodes.filter(
+    (n) => n.type === "send" && n.channel === "linkedin" && linkedinActionFor(n) === "invite" && n.templateId,
+  );
+  if (!inviteSteps.length) return { ok: true };
+
+  // One query, scoped to the org — an unscoped `id: { in: [...] }` here would
+  // read another tenant's templates.
+  const ids = inviteSteps.map((n) => (n.type === "send" ? n.templateId! : "")).filter(Boolean);
+  const templates = await prisma.template.findMany({
+    where: { id: { in: ids }, organizationId },
+    select: { id: true, body: true },
+  });
+  const byId = new Map(templates.map((t) => [t.id, t.body ?? ""]));
+
+  for (const node of inviteSteps) {
+    if (node.type !== "send") continue;
+    const body = byId.get(node.templateId!);
+    if (body === undefined) {
+      return { ok: false, message: `Step ${numberOf.get(node.id)} uses a template that no longer exists.` };
+    }
+    const length = worstCaseNoteLength(body);
+    if (length > INVITE_NOTE_MAX) {
+      return {
+        ok: false,
+        message: `Step ${numberOf.get(node.id)}'s connection note reaches about ${length} characters once personalised, and LinkedIn allows ${INVITE_NOTE_MAX}. Shorten the template.`,
+      };
+    }
+  }
+
+  return { ok: true };
 }
 
 /** Convert a stored sequence (graph OR legacy flat array) into a node map. */
@@ -144,6 +248,20 @@ async function finish(id: string, status: "completed" | "stopped" | "replied") {
 }
 
 /** Has the lead replied since this enrollment began (optionally within N days)? */
+/**
+ * Has this contact replied since being enrolled?
+ *
+ * Deliberately lead-wide rather than campaign-scoped: the product promise is
+ * "a reply anywhere pauses the rest for that lead", and a person who answered
+ * one sequence should not keep receiving another.
+ *
+ * The precision now comes from what writes `type: "replied"` in the first
+ * place. lib/inbox/store.ts only uses it when an inbound mail's
+ * In-Reply-To/References names a message we actually sent; a new enquiry from a
+ * known contact is logged as `inbound` instead. So this stayed as it was while
+ * the false positives went away — but that makes the activity type load-bearing:
+ * do not start writing "replied" for anything unverified.
+ */
 async function hasReplied(enr: Enrollment): Promise<boolean> {
   const since = enr.createdAt;
   const a = await prisma.activityLog.findFirst({
@@ -232,9 +350,12 @@ export async function advanceEnrollment(enrollmentId: string): Promise<void> {
       kind: "send",
       organizationId: orgId,
       channel: node.channel,
+      linkedinAction: node.channel === "linkedin" ? linkedinActionFor(node) : undefined,
+      nodeId: node.id,
       leadId: enr.leadId,
       campaignId: enr.campaignId,
       templateId: node.templateId ?? undefined,
+      templateVersionId: node.templateVersionId ?? undefined,
       // No fallback sender: a campaign with no mailbox fails visibly on the message
       // record rather than going out under the platform's address.
       account: enr.campaign.sendingAccountId ?? undefined,

@@ -28,12 +28,3 @@ export function Select({ className, ...props }: React.ComponentPropsWithRef<"sel
   return <select {...props} className={cn(CONTROL, className)} />;
 }
 
-/** Inline validation message. Pairs with `aria-describedby` on the control. */
-export function FieldError({ id, children }: { id?: string; children: React.ReactNode }) {
-  if (!children) return null;
-  return (
-    <p id={id} role="alert" className="mt-1.5 text-sm text-danger">
-      {children}
-    </p>
-  );
-}

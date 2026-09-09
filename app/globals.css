@@ -230,7 +230,12 @@ html {
   color: transparent;
 }
 
-/* ---- glass ---- */
+/* ---- glass ----
+   `.glass` is a frosted panel that takes its text colour from the page, so it
+   has to follow the theme. It did not: the white fill was hardcoded, and in dark
+   mode it rendered light text on a white panel — the hero's own card, unreadable.
+   `.glass-dark` below is deliberately different: that one is an always-dark band
+   in both themes, and must not flip. */
 .glass {
   background: rgba(255, 255, 255, 0.55);
   backdrop-filter: blur(14px) saturate(140%);
@@ -238,11 +243,28 @@ html {
   border: 1px solid rgba(255, 255, 255, 0.7);
   box-shadow: 0 1px 0 rgba(255, 255, 255, 0.6) inset, 0 20px 50px -24px rgba(20, 20, 20, 0.28);
 }
+[data-theme="dark"] .glass {
+  background: rgba(26, 26, 33, 0.6);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.05) inset, 0 20px 50px -24px rgba(0, 0, 0, 0.7);
+}
 .glass-dark {
   background: rgba(18, 18, 22, 0.5);
   backdrop-filter: blur(14px) saturate(140%);
   -webkit-backdrop-filter: blur(14px) saturate(140%);
   border: 1px solid rgba(255, 255, 255, 0.12);
+  /* An always-dark surface owns its text colour rather than inheriting one that
+     flips. Without this it took `--ink-invert` from the band around it, which in
+     dark mode is near-black — black text on a dark card. */
+  color: #f4f4f5;
+}
+
+/* A section that is dark in BOTH themes, for the cinematic showcase bands.
+   `bg-ink` cannot do this job: it inverts, so in dark mode the band turned pale
+   while the .glass-dark cards inside it stayed dark. */
+.band-dark {
+  background: #0b0b0f;
+  color: #f4f4f5;
 }
 
 /* ---- ambient backgrounds ---- */

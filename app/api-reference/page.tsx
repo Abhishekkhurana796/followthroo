@@ -21,7 +21,7 @@ export default function ApiReferencePage() {
 
       <section className="bg-canvas pb-8">
         <div className="mx-auto max-w-4xl px-6">
-          <div className="overflow-hidden rounded-2xl border border-line bg-white">
+          <div className="overflow-hidden rounded-2xl border border-line bg-surface">
             <table className="w-full text-left text-sm">
               <thead className="bg-tint font-mono text-xs uppercase tracking-wider text-ink-soft">
                 <tr>
@@ -46,7 +46,7 @@ export default function ApiReferencePage() {
 
       <section className="bg-canvas pb-24">
         <div className="mx-auto max-w-4xl px-6">
-          <pre className="overflow-x-auto rounded-2xl bg-ink p-6 font-mono text-sm text-white/90">{`curl -X POST localhost:3000/api/leads \\
+          <pre className="overflow-x-auto rounded-2xl bg-ink p-6 font-mono text-sm text-ink-invert/90">{`curl -X POST localhost:3000/api/leads \\
   -H 'content-type: application/json' \\
   -d '{"email":"jane@acme.com","firstName":"Jane","company":"Acme"}'`}</pre>
         </div>

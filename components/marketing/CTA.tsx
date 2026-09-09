@@ -11,7 +11,7 @@ export default function CTA() {
       {/* CTA band */}
       <section className="bg-canvas pb-24">
         <div className="mx-auto max-w-6xl px-6">
-          <div className="relative overflow-hidden rounded-[32px] bg-ink px-8 py-16 text-center text-white sm:px-14 sm:py-24">
+          <div className="relative overflow-hidden rounded-[32px] bg-ink px-8 py-16 text-center text-ink-invert sm:px-14 sm:py-24">
             <div className="pointer-events-none absolute inset-0 opacity-[0.08] grid-dots" style={{ filter: "invert(1)" }} />
             <div className="relative">
               <h2 className="font-display mx-auto max-w-2xl text-[clamp(2rem,5vw,3.6rem)] font-extrabold">

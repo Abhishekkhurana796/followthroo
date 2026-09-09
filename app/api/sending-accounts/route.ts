@@ -2,7 +2,7 @@ import { NextRequest } from "next/server";
 import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { ok, fail } from "@/lib/http";
-import { requireOrg } from "@/lib/tenant";
+import { requireOrg, requireRole } from "@/lib/tenant";
 import nodemailer from "nodemailer";
 
 export const runtime = "nodejs";
@@ -54,6 +54,11 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   const ctx = await requireOrg(req);
   if (ctx instanceof Response) return ctx;
+  // A mailbox is workspace infrastructure, not a rep's own setting: connecting
+  // one binds the org's sending reputation to a credential. Reading the list
+  // stays open (the campaign UI needs it); creating and deleting do not.
+  const gate = requireRole(ctx, ["owner", "admin"]);
+  if (gate) return gate;
 
   try {
     const body = await req.json().catch(() => null);
@@ -168,6 +173,8 @@ export async function POST(req: NextRequest) {
 export async function DELETE(req: NextRequest) {
   const ctx = await requireOrg(req);
   if (ctx instanceof Response) return ctx;
+  const gate = requireRole(ctx, ["owner", "admin"]);
+  if (gate) return gate;
 
   const id = req.nextUrl.searchParams.get("id");
   if (!id) return fail("Missing account 'id' parameter");

@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Fixture — Connect is an unlabelled span</title>
+<style>
+  /* The signal that makes these findable at all. LinkedIn sets it on the
+     wrapper; ordinary text does not have it. */
+  .ft-clickable { cursor: pointer; }
+</style>
+</head>
+<body>
+<!--
+  The markup that defeated seven rounds of fixes, copied from a live profile:
+
+    <span class="_9e7d82ae …">
+      <svg id="connect-small" aria-hidden="true">…</svg>
+      <div><span><span>Connect</span></span></div>
+    </span>
+
+  A bare <span>. No role, no aria-label, an aria-hidden icon, hashed class names
+  that cannot be selected. Every structural query — button, [role=button],
+  [role=menuitem] — finds nothing, so the button never appeared in the element
+  list, and the model kept truthfully reporting that there was no Connect in the
+  data it had been given.
+
+  ?ambiguous — two "Connect" controls and NEITHER in the profile's action row.
+               Text is weaker evidence than a name, and this span carries no
+               name, so the check that catches "Invite Wrong Person to connect"
+               has nothing to read. Refusing is the only safe answer.
+-->
+<aside id="rail">
+  <h2>People also viewed</h2>
+  <div class="rail-card">
+    <a href="/in/wrong-person-1">Wrong Person One</a>
+    <!-- The stranger's Connect is the same shape, and says the same word. -->
+    <span class="_aa11bb22 ft-clickable" data-who="wrong-1">
+      <svg id="connect-small" aria-hidden="true" viewBox="0 0 16 16"><path d="M9 4a3 3 0 1 1-3-3"/></svg>
+      <div><span><span>Connect</span></span></div>
+    </span>
+  </div>
+</aside>
+
+<main>
+  <section class="artdeco-card">
+    <div class="top-card">
+      <h1>Anirudh Bisht</h1>
+      <span class="dist-value">· 2nd</span>
+      <div class="text-body-medium">Marketing Manager at Welco Agencies</div>
+
+      <div class="actions">
+        <span class="_9e7d82ae _93ebcf8e ft-clickable" id="ownConnect" data-who="right">
+          <svg id="connect-small" fill="currentColor" aria-hidden="true" viewBox="0 0 16 16"><path d="M9 4a3 3 0 1 1-3-3 3 3 0 0 1 3 3"/></svg>
+          <div class="_9f31adb5"><span class="_183ca032"><span>Connect</span></span></div>
+        </span>
+        <button aria-label="Message Anirudh Bisht" data-who="right-msg">Message</button>
+      </div>
+    </div>
+  </section>
+
+  <section class="more-profiles">
+    <h2>More profiles for you</h2>
+    <div class="rail-card">
+      <a href="/in/wrong-person-3">Wrong Person Three</a>
+      <span class="_cc33dd44 ft-clickable" data-who="wrong-3">
+        <svg id="connect-small" aria-hidden="true" viewBox="0 0 16 16"><path d="M9 4a3 3 0 1 1-3-3"/></svg>
+        <div><span><span>Connect</span></span></div>
+      </span>
+    </div>
+  </section>
+</main>
+
+<script>
+  const q = new URLSearchParams(location.search);
+  window.__invited = null;
+
+  // Two "Connect" controls, neither in the action row. Nothing can tell them
+  // apart, so nothing should be clicked.
+  if (q.has("ambiguous")) document.getElementById("ownConnect").remove();
+
+  document.querySelectorAll("[data-who]").forEach((el) => {
+    el.addEventListener("click", () => {
+      if (!/^right$|^wrong/.test(el.dataset.who)) return;
+      window.__invited = el.dataset.who;
+      if (el.dataset.who === "right") openInviteModal();
+    });
+  });
+
+  function openInviteModal() {
+    if (document.querySelector('[role="dialog"]')) return;
+    const modal = document.createElement("div");
+    modal.className = "artdeco-modal";
+    modal.setAttribute("role", "dialog");
+    modal.innerHTML =
+      '<h2>Add a note to your invitation?</h2>' +
+      '<button id="addNote" aria-label="Add a note">Add a note</button>' +
+      '<button id="sendPlain" aria-label="Send without a note">Send without a note</button>' +
+      '<div id="noteWrap" hidden><textarea id="custom-message" maxlength="300"></textarea></div>' +
+      '<button id="sendInvite" aria-label="Send now">Send now</button>';
+    document.body.appendChild(modal);
+    modal.querySelector("#addNote").addEventListener("click", () => {
+      modal.querySelector("#noteWrap").hidden = false;
+    });
+    modal.querySelector("#sendPlain").addEventListener("click", () => {
+      window.__sentWithoutNote = true;
+      modal.remove();
+    });
+    modal.querySelector("#sendInvite").addEventListener("click", () => {
+      window.__note = modal.querySelector("#custom-message").value;
+      modal.remove();
+    });
+  }
+</script>
+</body>
+</html>

@@ -15,8 +15,8 @@ export default function ContactPage() {
             { icon: MessageCircle, title: "Support", detail: "support@followthroo.com" },
             { icon: Building2, title: "Sales", detail: "Book a 20-min demo" },
           ].map((c) => (
-            <div key={c.title} className="rounded-2xl border border-line bg-white p-6">
-              <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-ink text-white">
+            <div key={c.title} className="rounded-2xl border border-line bg-surface p-6">
+              <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-ink text-ink-invert">
                 <c.icon className="h-5 w-5" />
               </div>
               <div className="font-display mt-4 text-lg font-bold">{c.title}</div>
@@ -29,10 +29,10 @@ export default function ContactPage() {
       <section className="bg-canvas pb-24">
         <form className="mx-auto max-w-xl space-y-4 px-6">
           <div className="grid gap-4 sm:grid-cols-2">
-            <input className="w-full rounded-xl border border-line bg-white px-4 py-3 text-sm outline-none focus:border-ink" placeholder="Name" />
-            <input className="w-full rounded-xl border border-line bg-white px-4 py-3 text-sm outline-none focus:border-ink" placeholder="Work email" type="email" />
+            <input className="w-full rounded-xl border border-line bg-surface px-4 py-3 text-sm outline-none focus:border-ink" placeholder="Name" />
+            <input className="w-full rounded-xl border border-line bg-surface px-4 py-3 text-sm outline-none focus:border-ink" placeholder="Work email" type="email" />
           </div>
-          <textarea className="min-h-32 w-full rounded-xl border border-line bg-white px-4 py-3 text-sm outline-none focus:border-ink" placeholder="How can we help?" />
+          <textarea className="min-h-32 w-full rounded-xl border border-line bg-surface px-4 py-3 text-sm outline-none focus:border-ink" placeholder="How can we help?" />
           <button type="submit" className="btn btn-primary w-full justify-center">Send message</button>
         </form>
       </section>

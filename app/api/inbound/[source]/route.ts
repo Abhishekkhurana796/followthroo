@@ -4,6 +4,7 @@ import { ok, fail } from "@/lib/http";
 import { ingestMany } from "@/lib/ingest";
 import { INBOUND_ADAPTERS, metaLeadAdsAdapter, googleAdsAdapter, type InboundAdapterKey } from "@/lib/channels/inbound";
 import { ingestKeyFor } from "@/lib/ingest-key";
+import { safeEqual } from "@/lib/webhook-auth";
 
 export const runtime = "nodejs";
 
@@ -23,7 +24,8 @@ function authorize(req: NextRequest): { orgId: string } | Response {
   // The ingest key is derived from the app secret + org id, so it is stable,
   // revocable by rotating the secret, and needs no extra table.
   const expected = ingestKeyFor(orgId);
-  if (!key || key !== expected) return fail("Invalid ingest key.", 401);
+  // Constant-time, matching the Meta signature path in lib/channels/inbound.ts.
+  if (!safeEqual(key, expected)) return fail("Invalid ingest key.", 401);
   return { orgId };
 }
 

@@ -62,24 +62,3 @@ export async function logActivity(input: {
   });
 }
 
-export async function upsertLeadByEmail(
-  orgId: string,
-  data: {
-    email: string;
-    firstName?: string;
-    lastName?: string;
-    phone?: string;
-    linkedinUrl?: string;
-    company?: string;
-    title?: string;
-    tags?: string[];
-    custom?: Record<string, unknown>;
-  }
-) {
-  const { email, custom, ...rest } = data;
-  return prisma.lead.upsert({
-    where: { organizationId_email: { organizationId: orgId, email } },
-    create: { email, organizationId: orgId, ...rest, custom: (custom ?? {}) as Prisma.InputJsonValue },
-    update: { ...rest, ...(custom ? { custom: custom as Prisma.InputJsonValue } : {}) },
-  });
-}

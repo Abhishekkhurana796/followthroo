@@ -51,11 +51,11 @@ export default function PricingPage() {
             <div
               key={t.name}
               className={`relative flex flex-col rounded-[24px] border p-8 ${
-                t.highlighted ? "border-ink bg-ink text-white shadow-xl" : "border-line bg-white"
+                t.highlighted ? "border-ink bg-ink text-ink-invert shadow-xl" : "border-line bg-surface"
               }`}
             >
               {t.highlighted && (
-                <span className="absolute right-6 top-6 rounded-full bg-white px-3 py-1 font-mono text-[10px] uppercase tracking-widest text-ink">
+                <span className="absolute right-6 top-6 rounded-full bg-ink-invert px-3 py-1 font-mono text-[10px] uppercase tracking-widest text-ink">
                   Popular
                 </span>
               )}
@@ -78,7 +78,7 @@ export default function PricingPage() {
               <Link
                 href={t.name === "Scale" ? "/contact" : "/dashboard"}
                 className={`btn mt-8 justify-center ${
-                  t.highlighted ? "bg-white !text-ink hover:opacity-90" : "btn-primary"
+                  t.highlighted ? "bg-ink-invert !text-ink hover:opacity-90" : "btn-primary"
                 }`}
               >
                 {t.cta}

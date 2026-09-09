@@ -4,25 +4,41 @@
     <meta charset="utf-8" />
     <title>Followthroo · LinkedIn settings</title>
     <style>
-      :root { --ink:#0a0a0a; --soft:#6b6b6b; --line:#e5e5e5; --accent:#4b31e6; --soft-bg:#eeebfd; }
+      /* An extension page is a browser surface, so prefers-color-scheme is the
+         right signal here — the content script has to read LinkedIn's own theme
+         instead, because LinkedIn's dark mode is an account setting. */
+      :root {
+        --canvas:#f7f7f8; --surface:#ffffff; --ink:#0a0a0a; --soft:#5b5b66;
+        --line:#e3e3e6; --accent:#4b31e6; --on-accent:#ffffff; --soft-bg:#f3f1fe;
+        --accent-text:#3a20c4; --ok-bg:#ecfdf5; --ok-fg:#065f46;
+        --err-bg:#fef2f2; --err-fg:#b91c1c;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --canvas:#0f0f13; --surface:#17171c; --ink:#e8e8ea; --soft:#9a9aa4;
+          --line:rgba(255,255,255,.13); --accent:#8b7bff; --on-accent:#0a0a0a;
+          --soft-bg:rgba(139,123,255,.15); --accent-text:#b7adff;
+          --ok-bg:#052e22; --ok-fg:#6ee7b7; --err-bg:#2d1113; --err-fg:#fca5a5;
+        }
+      }
       * { box-sizing: border-box; font-family:-apple-system,Segoe UI,Roboto,sans-serif; }
-      body { margin:0; background:#f7f7f8; color:var(--ink); }
+      body { margin:0; background:var(--canvas); color:var(--ink); }
       .wrap { max-width:720px; margin:0 auto; padding:28px 20px 60px; }
       h1 { font-size:20px; margin:0 0 2px; }
       .sub { color:var(--soft); font-size:13px; margin:0 0 20px; }
-      .card { background:#fff; border:1px solid var(--line); border-radius:14px; padding:18px; margin-bottom:16px; }
+      .card { background:var(--surface); border:1px solid var(--line); border-radius:14px; padding:18px; margin-bottom:16px; }
       .card h2 { font-size:14px; margin:0 0 12px; }
       label { display:block; font-size:11px; text-transform:uppercase; letter-spacing:.05em; color:var(--soft); margin:12px 0 4px; }
-      input, select, textarea { width:100%; padding:8px 10px; border:1px solid var(--line); border-radius:8px; font-size:13px; outline:none; background:#fff; }
+      input, select, textarea { width:100%; padding:8px 10px; border:1px solid var(--line); border-radius:8px; font-size:13px; outline:none; background:var(--surface); color:var(--ink); }
       input:focus, select:focus, textarea:focus { border-color:var(--ink); }
       .row { display:flex; gap:12px; }
       .row > div { flex:1; }
       button { border:0; border-radius:8px; padding:9px 14px; font-size:13px; font-weight:600; cursor:pointer; }
-      .primary { background:var(--ink); color:#fff; }
-      .ghost { background:#fff; border:1px solid var(--line); color:var(--ink); }
-      .accent { background:var(--accent); color:#fff; }
+      .primary { background:var(--accent); color:var(--on-accent); }
+      .ghost { background:transparent; border:1px solid var(--line); color:var(--ink); }
+      .accent { background:var(--accent); color:var(--on-accent); }
       .muted { color:var(--soft); font-size:12px; }
-      .pill { display:inline-block; padding:2px 8px; border-radius:999px; background:var(--soft-bg); color:#3a20c4; font-size:11px; font-weight:600; }
+      .pill { display:inline-block; padding:2px 8px; border-radius:999px; background:var(--soft-bg); color:var(--accent-text); font-size:11px; font-weight:600; }
       .camp { border:1px solid var(--line); border-radius:10px; padding:10px 12px; margin-bottom:8px; }
       .camp-head { display:flex; align-items:center; gap:8px; }
       .camp-head input[type=checkbox] { width:auto; }
@@ -30,8 +46,8 @@
       .camp-cfg { display:flex; gap:10px; margin-top:8px; }
       .camp-cfg > div { flex:1; }
       .banner { border-radius:8px; padding:10px 12px; font-size:13px; margin-bottom:14px; }
-      .ok { background:#ecfdf5; color:#065f46; }
-      .err { background:#fef2f2; color:#b91c1c; }
+      .ok { background:var(--ok-bg); color:var(--ok-fg); }
+      .err { background:var(--err-bg); color:var(--err-fg); }
       .hide { display:none; }
       .flex { display:flex; align-items:center; justify-content:space-between; gap:12px; }
       a { color:var(--accent); }

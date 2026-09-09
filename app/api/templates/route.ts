@@ -19,13 +19,13 @@ export async function GET(req: NextRequest) {
   if (ctx instanceof Response) return ctx;
   const { orgId } = ctx;
 
-  let templates = await prisma.template.findMany({ where: { organizationId: orgId }, orderBy: { createdAt: "desc" } });
+  let templates = await prisma.template.findMany({ where: { organizationId: orgId, archivedAt: null }, orderBy: { createdAt: "desc" } });
 
   // Seed the org's first set of starter templates on first visit.
   if (templates.length === 0) {
     console.log(`[templates] Seeding starter templates for org ${orgId}...`);
     await prisma.template.createMany({ data: SEED_TEMPLATES.map((t) => ({ ...t, organizationId: orgId })) });
-    templates = await prisma.template.findMany({ where: { organizationId: orgId }, orderBy: { createdAt: "desc" } });
+    templates = await prisma.template.findMany({ where: { organizationId: orgId, archivedAt: null }, orderBy: { createdAt: "desc" } });
   }
 
   return ok(templates);

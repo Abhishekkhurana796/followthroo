@@ -9,6 +9,7 @@ import {
   ArrowDownLeft, ArrowUpRight, Sparkles, Pencil, type LucideIcon,
 } from "lucide-react";
 import { api } from "@/lib/client";
+import { TaskDialog } from "@/components/dashboard/TaskDialog";
 import { cn } from "@/lib/cn";
 import { Badge, Banner, Panel, Skeleton, Textarea, Select, useConfirm, usePrompt, useToast } from "@/components/ui";
 
@@ -197,9 +198,17 @@ function NextActionBand({
   lead, onChanged, onError,
 }: { lead: Lead; onChanged: () => Promise<void>; onError: (m: string | null) => void }) {
   const [busy, setBusy] = useState(false);
-  const prompt = usePrompt();
+  const [dialogOpen, setDialogOpen] = useState(false);
   const toast = useToast();
   const na = lead.nextAction;
+
+  // Work should stay with whoever owns the deal. Creating a follow-up on a
+  // colleague's lead used to silently assign it to whoever clicked — the
+  // automated reply-follow-up path already gets this right.
+  const dealOwnerId = lead.pipelineItems[0]?.ownerId ?? null;
+  // Editing needs the task's current values, and `nextAction` only carries a
+  // label; the full row is already on the lead.
+  const backingTask = na?.taskId ? lead.tasks.find((t) => t.id === na.taskId) ?? null : null;
 
   async function complete() {
     if (!na?.taskId) return;
@@ -211,44 +220,31 @@ function NextActionBand({
     } catch (e) { onError((e as Error).message); } finally { setBusy(false); }
   }
 
-  async function reschedule() {
-    if (!na?.taskId) return;
-    const days = await prompt({
-      title: "Push this out",
-      body: "How many days from now should it come back?",
-      label: "Days",
-      placeholder: "2",
-      confirmLabel: "Reschedule",
-      validate: (v) => (Number(v) > 0 && Number(v) <= 365 ? null : "Enter a number of days between 1 and 365."),
-    });
-    if (!days) return;
-    setBusy(true); onError(null);
-    try {
-      const dueAt = new Date(Date.now() + Number(days) * 86_400_000).toISOString();
-      await api("/api/tasks", { method: "PATCH", body: { id: na.taskId, action: "update", dueAt } });
-      await onChanged();
-      toast(`Back in ${days} day(s).`);
-    } catch (e) { onError((e as Error).message); } finally { setBusy(false); }
-  }
-
-  async function createFollowUp() {
-    const title = await prompt({
-      title: "Create a follow-up",
-      label: "What needs doing?",
-      placeholder: `Follow up with ${fullName(lead)}`,
-      defaultValue: `Follow up with ${fullName(lead)}`,
-      confirmLabel: "Create",
-    });
-    if (!title) return;
-    setBusy(true); onError(null);
-    try {
-      await api("/api/tasks", {
-        body: { leadId: lead.id, title, dueAt: new Date(Date.now() + 86_400_000).toISOString() },
-      });
-      await onChanged();
-      toast("Follow-up scheduled for tomorrow.");
-    } catch (e) { onError((e as Error).message); } finally { setBusy(false); }
-  }
+  const taskDialog = (
+    <TaskDialog
+      open={dialogOpen}
+      onClose={() => setDialogOpen(false)}
+      onSaved={() => {
+        onChanged();
+        toast(backingTask ? "Task updated." : "Follow-up created.");
+      }}
+      mode={backingTask ? "edit" : "create"}
+      taskId={backingTask?.id}
+      initial={
+        backingTask
+          ? {
+              title: backingTask.title,
+              dueAt: backingTask.dueAt,
+              ownerId: backingTask.ownerId,
+              kind: backingTask.kind as never,
+            }
+          : { title: `Follow up with ${fullName(lead)}` }
+      }
+      defaultOwnerId={dealOwnerId}
+      fixedLeadId={lead.id}
+      fixedLeadLabel={fullName(lead)}
+    />
+  );
 
   if (!na) {
     return (
@@ -257,9 +253,10 @@ function NextActionBand({
           <div className="font-mono text-[10px] uppercase tracking-[0.14em] text-ink-faint">Next action</div>
           <div className="mt-0.5 text-sm text-ink-soft">Nothing owed right now.</div>
         </div>
-        <button onClick={createFollowUp} disabled={busy} className="btn btn-ghost !py-2 !text-sm disabled:opacity-50">
+        <button onClick={() => setDialogOpen(true)} disabled={busy} className="btn btn-ghost !py-2 !text-sm disabled:opacity-50">
           <Plus className="h-4 w-4" /> Create follow-up
         </button>
+        {taskDialog}
       </div>
     );
   }
@@ -278,19 +275,20 @@ function NextActionBand({
       <div className="flex flex-wrap gap-2">
         {na.taskId ? (
           <>
-            <button onClick={reschedule} disabled={busy} className="btn btn-ghost !py-2 !text-sm disabled:opacity-50">
-              <Clock className="h-4 w-4" /> Reschedule
+            <button onClick={() => setDialogOpen(true)} disabled={busy} className="btn btn-ghost !py-2 !text-sm disabled:opacity-50">
+              <Clock className="h-4 w-4" /> Edit
             </button>
             <button onClick={complete} disabled={busy} className="btn btn-primary !py-2 !text-sm disabled:opacity-50">
               <Check className="h-4 w-4" /> Complete
             </button>
           </>
         ) : (
-          <button onClick={createFollowUp} disabled={busy} className="btn btn-ghost !py-2 !text-sm disabled:opacity-50">
+          <button onClick={() => setDialogOpen(true)} disabled={busy} className="btn btn-ghost !py-2 !text-sm disabled:opacity-50">
             <Plus className="h-4 w-4" /> Make it a task
           </button>
         )}
       </div>
+      {taskDialog}
     </div>
   );
 }

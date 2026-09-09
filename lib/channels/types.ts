@@ -12,6 +12,8 @@ export interface Lead {
 export interface SendResult {
   ok: boolean;
   providerId?: string;
+  /** The RFC-822 Message-ID actually placed on the wire, when the channel sets one. */
+  rfcMessageId?: string;
   /** set when the channel is not configured or the send was skipped */
   skipped?: boolean;
   reason?: string;
@@ -65,6 +67,27 @@ export interface InboundEvent {
 }
 
 /**
+ * Per-send metadata the campaign engine knows and an adapter needs, but which
+ * does not belong on the rendered message.
+ *
+ * It exists because `send` carried only the lead and the rendered text, so a
+ * LinkedIn action reached the queue with no idea which campaign or which gesture
+ * it came from — every one was written as `campaignId: null, type: "auto"`, and
+ * per-campaign caps silently applied to nothing.
+ *
+ * Optional and trailing on purpose: every existing caller (the agent, notify,
+ * inbox replies, template test-sends) keeps compiling untouched.
+ */
+export interface SendContext {
+  /** The campaign this send belongs to — LinkedIn's per-campaign caps key off it. */
+  campaignId?: string;
+  /** The sequence node, so an action can be traced back to the step that made it. */
+  nodeId?: string;
+  /** LinkedIn only: which gesture the extension should draft. */
+  linkedinAction?: "invite" | "message" | "auto";
+}
+
+/**
  * The adapter contract from the product PRD.
  *
  * Inbound-only sources (lead aggregators, ad platforms) implement `receive` and
@@ -80,7 +103,7 @@ export interface Adapter {
    * id alone is a bare uuid, so without the owning org in the lookup one tenant could
    * send through another's connected mailbox or number.
    */
-  send?(lead: Lead, rendered: RenderedMessage, account?: string, orgId?: string): Promise<SendResult>;
+  send?(lead: Lead, rendered: RenderedMessage, account?: string, orgId?: string, rfcMessageId?: string, ctx?: SendContext): Promise<SendResult>;
   /** Parse a provider payload into normalised events. */
   receive?(payload: unknown, headers?: Headers): Promise<InboundEvent[]>;
   /** Verify a webhook signature before anything is parsed or trusted. */
@@ -94,7 +117,7 @@ export interface Adapter {
 export interface Channel {
   name: "email" | "linkedin" | "whatsapp" | "social";
   isConfigured(): boolean;
-  send(lead: Lead, rendered: RenderedMessage, account?: string, orgId?: string): Promise<SendResult>;
+  send(lead: Lead, rendered: RenderedMessage, account?: string, orgId?: string, rfcMessageId?: string, ctx?: SendContext): Promise<SendResult>;
   capabilities?(): AdapterCapabilities;
   receive?(payload: unknown, headers?: Headers): Promise<InboundEvent[]>;
   verify?(rawBody: string, headers: Headers): boolean;

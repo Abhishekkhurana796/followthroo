@@ -15,7 +15,7 @@ export default function TemplatesPage() {
       />
       <section className="bg-canvas pb-4">
         <div className="mx-auto max-w-3xl px-6">
-          <pre className="overflow-x-auto rounded-2xl bg-ink p-6 font-mono text-sm text-white/90">{`Hi {{firstName|there}}, I noticed {{company}} is
+          <pre className="overflow-x-auto rounded-2xl bg-ink p-6 font-mono text-sm text-ink-invert/90">{`Hi {{firstName|there}}, I noticed {{company}} is
 scaling {{team|your team}} — thought this might help.`}</pre>
         </div>
       </section>

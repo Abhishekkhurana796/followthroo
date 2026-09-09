@@ -6,9 +6,9 @@ import { UserPlus, Trash2, Building2, Copy, Check, Shield } from "lucide-react";
 import { authClient, useSession } from "@/lib/auth-client";
 import { api } from "@/lib/client";
 import { Banner, DashHeader, Input, Label, Panel, Select, useConfirm, usePrompt } from "@/components/ui";
+import { ASSIGNABLE_ROLES, ROLE_INFO, roleLabel, canManageWorkspace, type Role } from "@/lib/roles";
 import { Skeleton } from "@/components/ui";
 
-type Role = "owner" | "admin" | "group_leader" | "member";
 type Department = "marketing" | "sales" | "support" | "collections" | "recruitment";
 type ApiMember = {
   id: string;
@@ -49,10 +49,12 @@ export default function TeamClient() {
   const confirm = useConfirm();
   const prompt = usePrompt();
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const invitations: any[] = ((org as any)?.invitations ?? []).filter((i: any) => i.status === "pending");
+  type PendingInvite = { id: string; email: string; role: string; status: string };
+  const invitations: PendingInvite[] = (
+    ((org as { invitations?: PendingInvite[] } | null)?.invitations ?? [])
+  ).filter((i) => i.status === "pending");
   const me = members.find((m) => m.userId === session?.user?.id);
-  const canManage = me?.role === "owner" || me?.role === "admin";
+  const canManage = canManageWorkspace(me?.role ?? "");
 
   async function updateHierarchy(
     memberId: string,
@@ -72,19 +74,19 @@ export default function TeamClient() {
     if (!email.trim()) return;
     setBusy(true);
     setMsg(null);
-    // better-auth's role type is closed to the roles configured on its `organization`
-    // plugin (owner/admin/member); `role` is a plain string column with a 4th value
-    // (group_leader) it has no static knowledge of, so the cast is required, not lazy.
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const res = await authClient.organization.inviteMember({ email: email.trim(), role: role as any });
+    // No cast needed any more: lib/auth.ts registers all four roles with the
+    // organization plugin, so group_leader is a value it actually knows.
+    const res = await authClient.organization.inviteMember({ email: email.trim(), role });
     setBusy(false);
     if (res.error) return setMsg({ kind: "error", text: res.error.message ?? "Failed to invite" });
     setEmail("");
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const id = (res.data as any)?.id;
+    const id = (res.data as { id?: string } | null)?.id;
     setMsg({
       kind: "success",
-      text: id ? `Invited ${email}. Share this link: ${appUrl}/accept-invitation/${id}` : `Invited ${email}.`,
+      text: id
+        ? `Invited ${email} — we've emailed them. If it doesn't arrive, share this link: ${appUrl}/accept-invitation/${id}`
+        : `Invited ${email} — we've emailed them.`,
     });
     refetch?.();
   }
@@ -108,8 +110,7 @@ export default function TeamClient() {
   }
 
   async function changeRole(memberId: string, newRole: Role) {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    await authClient.organization.updateMemberRole({ memberId, role: newRole as any });
+    await authClient.organization.updateMemberRole({ memberId, role: newRole });
     refetch?.();
     refetchMembers();
   }
@@ -130,8 +131,7 @@ export default function TeamClient() {
     if (!name) return;
     const slug = `${name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "")}-${Math.random().toString(36).slice(2, 6)}`;
     const res = await authClient.organization.create({ name, slug });
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const id = (res.data as any)?.id;
+    const id = (res.data as { id?: string } | null)?.id;
     if (id) await switchOrg(id);
   }
 
@@ -199,10 +199,11 @@ export default function TeamClient() {
               <div className="w-40">
                 <Label>Role</Label>
                 <Select value={role} onChange={(e) => setRole(e.target.value as Role)}>
-                  <option value="member">Member</option>
-                  <option value="group_leader">Group leader</option>
-                  <option value="admin">Admin</option>
+                  {ASSIGNABLE_ROLES.map((r) => (
+                    <option key={r} value={r}>{ROLE_INFO[r].label}</option>
+                  ))}
                 </Select>
+                <p className="mt-1 text-xs text-ink-faint">{ROLE_INFO[role].description}</p>
               </div>
               <button type="submit" disabled={busy} className="btn btn-primary text-sm">
                 {busy ? "Inviting…" : "Send invite"}
@@ -233,15 +234,15 @@ export default function TeamClient() {
                           <Select
                             value={m.role}
                             onChange={(e) => changeRole(m.id, e.target.value as Role)}
-                            className="w-32 !py-1.5 text-xs"
+                            className="w-36 !py-1.5 text-xs"
                           >
-                            <option value="member">Member</option>
-                            <option value="group_leader">Group leader</option>
-                            <option value="admin">Admin</option>
+                            {ASSIGNABLE_ROLES.map((r) => (
+                              <option key={r} value={r}>{ROLE_INFO[r].label}</option>
+                            ))}
                           </Select>
                         ) : (
                           <span className="flex items-center gap-1 rounded-lg bg-tint px-2.5 py-1 text-xs font-medium capitalize">
-                            {m.role === "owner" && <Shield className="h-3 w-3" />} {m.role.replace("_", " ")}
+                            {m.role === "owner" && <Shield className="h-3 w-3" />} {roleLabel(m.role)}
                           </span>
                         )}
                         {editable && (
@@ -312,7 +313,7 @@ export default function TeamClient() {
                   <div key={inv.id} className="flex items-center justify-between gap-3 py-3">
                     <div className="min-w-0">
                       <div className="truncate text-sm font-medium">{inv.email}</div>
-                      <div className="text-xs capitalize text-ink-soft">{inv.role} · pending</div>
+                      <div className="text-xs text-ink-soft">{roleLabel(inv.role)} · pending</div>
                     </div>
                     <div className="flex items-center gap-2">
                       <button

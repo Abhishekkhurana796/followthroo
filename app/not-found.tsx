@@ -20,7 +20,7 @@ function Mark() {
     <svg width="26" height="26" viewBox="0 0 26 26" fill="none" aria-hidden>
       <line x1="7" y1="13" x2="19" y2="13" stroke="var(--color-action)" strokeWidth="2.4" />
       <circle cx="7" cy="13" r="5" fill="var(--color-brand)" />
-      <circle cx="19" cy="13" r="5" fill="#fff" stroke="var(--color-brand)" strokeWidth="2.4" />
+      <circle cx="19" cy="13" r="5" fill="var(--color-canvas)" stroke="var(--color-brand)" strokeWidth="2.4" />
     </svg>
   );
 }
@@ -108,7 +108,7 @@ export default function NotFound() {
 
         {/* Hero / 404 */}
         <div className="flex flex-1 flex-col items-center justify-center px-6 py-16 text-center">
-          <span className="eyebrow inline-flex items-center gap-2 rounded-full border border-line bg-white px-3 py-1.5">
+          <span className="eyebrow inline-flex items-center gap-2 rounded-full border border-line bg-surface px-3 py-1.5">
             <span className="h-1.5 w-1.5 rounded-full" style={{ background: "var(--color-action)" }} />
             Error 404
           </span>

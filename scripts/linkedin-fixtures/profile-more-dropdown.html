@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Fixture — Connect hidden behind the More menu</title></head>
+<body>
+<!--
+  The failure this exists to catch: "it opens the 3 dots and then waits for me
+  to click the connection request button."
+
+  LinkedIn has moved Connect off the top card and into the overflow menu on most
+  profiles. Three things about that menu broke the old code, and each is modelled
+  here:
+
+    1. The item is a <div role="button">, not a <button>. A search for
+       'button, a[role="button"]' cannot see it at all.
+    2. Its accessible name is "Invite <Name> to connect" — it starts with
+       "Invite", not "Connect", so the old /^Connect\b/ retry could not match the
+       very item it had just opened the menu to find.
+    3. The menu is appended at DOCUMENT level when opened, outside the profile
+       card, so helpers scoped to the card's <section> do not reach it.
+
+  The menu also carries Follow, Save to PDF, Report and Remove Connection, so a
+  loose match picks the wrong item — "Remove Connection" in particular contains
+  the word "Connection" and must never be clicked.
+
+  ?cardconnect — the shape seen in the wild: Connect IS on the card, and the
+                overflow menu holds only Send profile / Save to PDF / Follow /
+                Report / About. The card's Connect must be clicked and the menu
+                must never be opened. Structure-anchored searching failed this
+                exactly: the visible button was outside the element scope()
+                picked, so it opened the menu looking for something already on
+                screen.
+  ?connected  — renders a 1st-degree profile: no Connect anywhere, a distance
+                badge, and Remove Connection in the menu.
+  ?nomenu     — no Connect and no evidence of connection: a selector miss, which
+                must be reported as failed rather than silently messaged.
+-->
+<aside id="rail">
+  <h2>People also viewed</h2>
+  <div class="rail-card">
+    <a href="/in/wrong-person-1">Wrong Person One</a>
+    <button aria-label="Invite Wrong Person One to connect" data-who="wrong-1">Connect</button>
+  </div>
+</aside>
+
+<main>
+  <section class="artdeco-card pv-top-card">
+    <h1>Anirudh Bisht</h1>
+    <span class="dist-value" id="dist"></span>
+    <div class="text-body-medium">Marketing Manager at Welco Agencies</div>
+    <button aria-label="Message Anirudh Bisht" data-who="right-msg">Message</button>
+    <button id="cardConnect" aria-label="Invite Anirudh Bisht to connect" data-who="right" style="display:none">Connect</button>
+    <div class="artdeco-dropdown">
+      <button id="moreBtn" aria-label="More actions" aria-expanded="false">More</button>
+    </div>
+  </section>
+
+  <section class="more-profiles">
+    <h2>More profiles for you</h2>
+    <div class="rail-card">
+      <a href="/in/wrong-person-3">Wrong Person Three</a>
+      <button aria-label="Invite Wrong Person Three to connect" data-who="wrong-3">Connect</button>
+    </div>
+  </section>
+</main>
+
+<script>
+  const q = new URLSearchParams(location.search);
+  const connected = q.has("connected");
+  const noMenu = q.has("nomenu");
+  const cardConnect = q.has("cardconnect");
+  if (cardConnect) document.getElementById("cardConnect").style.display = "";
+  else document.getElementById("cardConnect").remove();
+
+  if (connected) document.getElementById("dist").textContent = "· 1st";
+
+  window.__invited = null;
+  window.__menuOpened = false;
+  window.__clickedInMenu = null;
+
+  const moreBtn = document.getElementById("moreBtn");
+
+  moreBtn.addEventListener("click", () => {
+    if (document.querySelector(".artdeco-dropdown__content")) return;
+    window.__menuOpened = true;
+    moreBtn.setAttribute("aria-expanded", "true");
+
+    // Appended to <body>, not inside the card — the same place LinkedIn puts it,
+    // and the reason card-scoped selectors miss it.
+    const menu = document.createElement("div");
+    menu.className = "artdeco-dropdown__content";
+    menu.setAttribute("role", "menu");
+
+    const items = [];
+    // Decoys first, so anything matching loosely grabs the wrong one.
+    items.push(["Follow Anirudh Bisht", "follow"]);
+    items.push(["Save to PDF", "pdf"]);
+    if (connected) items.push(["Remove Connection", "remove"]);
+    if (!connected && !noMenu && !cardConnect) items.push(["Invite Anirudh Bisht to connect", "right"]);
+    items.push(["Report or block", "report"]);
+
+    for (const [aria, who] of items) {
+      const item = document.createElement("div");
+      item.setAttribute("role", "button");
+      item.setAttribute("aria-label", aria);
+      item.className = "artdeco-dropdown__item";
+      item.dataset.who = who;
+      item.textContent = aria.replace(/ Anirudh Bisht/, "");
+      item.addEventListener("click", () => {
+        window.__clickedInMenu = who;
+        if (who === "right") {
+          window.__invited = "right";
+          openInviteModal();
+        }
+      });
+      menu.appendChild(item);
+    }
+    document.body.appendChild(menu);
+  });
+
+  // The sidebar strangers still have working Connect buttons.
+  document.querySelectorAll("button[aria-label*='to connect']").forEach((b) => {
+    b.addEventListener("click", () => {
+      window.__invited = b.dataset.who;
+      openInviteModal();
+    });
+  });
+
+  function openInviteModal() {
+    if (document.querySelector('[role="dialog"]')) return;
+    const modal = document.createElement("div");
+    modal.className = "artdeco-modal";
+    modal.setAttribute("role", "dialog");
+    modal.innerHTML =
+      '<h2>Add a note to your invitation?</h2>' +
+      '<button id="addNote" aria-label="Add a note">Add a note</button>' +
+      '<div id="noteWrap" hidden><textarea id="custom-message" maxlength="300"></textarea></div>' +
+      '<button id="sendInvite" aria-label="Send now">Send now</button>';
+    document.body.appendChild(modal);
+    modal.querySelector("#addNote").addEventListener("click", () => {
+      modal.querySelector("#noteWrap").hidden = false;
+    });
+    modal.querySelector("#sendInvite").addEventListener("click", () => {
+      window.__note = modal.querySelector("#custom-message").value;
+      modal.remove();
+    });
+  }
+
+  // A message window, so the "already connected" path has somewhere to go and
+  // the "selector miss" path has a tempting wrong answer available.
+  const mk = (who) => {
+    const f = document.createElement("form");
+    f.className = "msg-form";
+    f.dataset.who = who;
+    f.innerHTML =
+      '<div class="msg-form__contenteditable" contenteditable="true" role="textbox"></div>' +
+      '<button type="button" class="msg-form__send-button" aria-label="Send">Send</button>';
+    f.querySelector("button").addEventListener("click", () => {
+      window.__sentIn = f.dataset.who;
+      window.__sentText = f.querySelector(".msg-form__contenteditable").textContent;
+      f.querySelector(".msg-form__contenteditable").textContent = "";
+    });
+    return f;
+  };
+  document.querySelector("button[aria-label^='Message']").addEventListener("click", () => {
+    if (document.querySelector(".msg-form[data-who='right']")) return;
+    document.body.appendChild(mk("right"));
+  });
+</script>
+</body>
+</html>

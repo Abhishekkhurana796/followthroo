@@ -22,7 +22,7 @@ export default function CareersPage() {
       />
       <section className="bg-canvas pb-16">
         <div className="mx-auto max-w-3xl px-6">
-          <ul className="divide-y divide-line overflow-hidden rounded-2xl border border-line bg-white">
+          <ul className="divide-y divide-line overflow-hidden rounded-2xl border border-line bg-surface">
             {ROLES.map((r) => (
               <li key={r.title} className="flex flex-wrap items-center justify-between gap-2 p-5">
                 <div>

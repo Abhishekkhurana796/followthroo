@@ -307,9 +307,15 @@ export async function runAgent(opts: {
   const threshold = Math.min(1, Math.max(0, opts.confidenceThreshold ?? 0.7));
 
   const AnthropicSDK = (await import("@anthropic-ai/sdk")).default;
+  const llm = provider();
   // Fail fast rather than hang past Vercel's function limit — 60s + one retry turns a
   // stuck call into a clear, catchable error instead of an opaque 500.
-  const client = new AnthropicSDK({ apiKey: env.anthropic.apiKey!, timeout: 60_000, maxRetries: 1 });
+  const client = new AnthropicSDK({
+    apiKey: llm.apiKey,
+    ...(llm.baseURL ? { baseURL: llm.baseURL } : {}),
+    timeout: 60_000,
+    maxRetries: 1,
+  });
 
   // Email availability is a per-workspace fact, not a platform one: mail goes out
   // through a SendingAccount this org connected, so the env SMTP flag says nothing
@@ -341,7 +347,8 @@ export async function runAgent(opts: {
 
   for (; steps < maxSteps; steps++) {
     const resp = await client.messages.create({
-      model: env.anthropic.model,
+      ...routingExtras(llm),
+      model: llm.model,
       max_tokens: 2048,
       system: systemPrompt(threshold, availableChannels),
       tools: TOOLS,
@@ -397,6 +404,40 @@ export async function runAgent(opts: {
   return { ok: true, summary: "max steps reached", steps };
 }
 
+/**
+ * The model provider for both the tool loop and the reply classifier.
+ *
+ * OpenRouter is preferred when its key is present: its Anthropic-compatible
+ * endpoint speaks the same Messages API, so one SDK and one wire format serve
+ * both providers. Falling back to Anthropic direct keeps existing deployments
+ * working without an env change.
+ *
+ * `fallbackModels` is OpenRouter's own routing, passed through as `models` —
+ * that is deliberately the only failover here. A second provider integration
+ * would mean a second agent loop in a different wire format, with weaker tool
+ * adherence exactly when it kicked in.
+ */
+function provider() {
+  const useOpenRouter = !!env.openrouter.apiKey;
+  return {
+    name: useOpenRouter ? "openrouter" : "anthropic",
+    apiKey: (useOpenRouter ? env.openrouter.apiKey : env.anthropic.apiKey)!,
+    baseURL: useOpenRouter ? env.openrouter.baseUrl : undefined,
+    model: useOpenRouter ? env.openrouter.model : env.anthropic.model,
+    classifierModel: useOpenRouter ? env.openrouter.classifierModel : env.anthropic.classifierModel,
+    fallbackModels: useOpenRouter ? env.openrouter.fallbackModels : [],
+  };
+}
+
+/**
+ * OpenRouter accepts a `models` array for automatic failover. It is not part of
+ * the Anthropic Messages schema, so it is attached as an extra body field and
+ * omitted entirely when talking to Anthropic direct.
+ */
+function routingExtras(p: ReturnType<typeof provider>): Record<string, unknown> {
+  return p.fallbackModels.length ? { models: [p.model, ...p.fallbackModels] } : {};
+}
+
 const INTENTS = ["interested", "objection", "ooo", "wrong_person", "unsubscribe", "other"] as const;
 export type ReplyIntent = (typeof INTENTS)[number];
 
@@ -409,9 +450,15 @@ export async function classifyReplyIntent(text: string): Promise<ReplyIntent | n
   if (!configured.anthropic || !text.trim()) return null;
   try {
     const AnthropicSDK = (await import("@anthropic-ai/sdk")).default;
-    const client = new AnthropicSDK({ apiKey: env.anthropic.apiKey!, timeout: 20_000, maxRetries: 1 });
+    const llm = provider();
+    const client = new AnthropicSDK({
+      apiKey: llm.apiKey,
+      ...(llm.baseURL ? { baseURL: llm.baseURL } : {}),
+      timeout: 20_000,
+      maxRetries: 1,
+    });
     const resp = await client.messages.create({
-      model: env.anthropic.classifierModel,
+      model: llm.classifierModel,
       max_tokens: 10,
       system:
         `Classify the intent of this email/message reply as exactly one of: ${INTENTS.join(", ")}. ` +

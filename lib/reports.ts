@@ -12,7 +12,13 @@ import type { Department } from "@prisma/client";
 
 export interface ReportData {
   days: number;
-  totals: { leads: number; sent: number; opened: number; clicked: number; replied: number; suppressed: number };
+  totals: {
+    leads: number; sent: number; opened: number; clicked: number; replied: number; suppressed: number;
+    /** Inbound mail from a known contact that did NOT answer a campaign send.
+     *  Counted separately so tightening the reply definition surfaces this
+     *  traffic rather than losing it. */
+    inbound: number;
+  };
   rates: { open: number; click: number; reply: number }; // percentages 0–100
   funnel: { stage: string; count: number }[];
   series: { date: string; sent: number; opened: number; clicked: number; replied: number }[];
@@ -33,7 +39,7 @@ export async function getReport(orgId: string, days = 30): Promise<ReportData> {
       select: { sentAt: true, campaignId: true },
     }),
     prisma.activityLog.findMany({
-      where: { organizationId: orgId, at: { gte: since }, type: { in: ["opened", "clicked", "replied"] } },
+      where: { organizationId: orgId, at: { gte: since }, type: { in: ["opened", "clicked", "replied", "inbound"] } },
       select: { at: true, type: true, messageId: true, campaignId: true },
     }),
     prisma.lead.groupBy({ by: ["stage"], where: { organizationId: orgId }, _count: { _all: true } }),
@@ -46,7 +52,12 @@ export async function getReport(orgId: string, days = 30): Promise<ReportData> {
 
   const openedMsgs = new Set(activities.filter((a) => a.type === "opened" && a.messageId).map((a) => a.messageId));
   const clickedMsgs = new Set(activities.filter((a) => a.type === "clicked" && a.messageId).map((a) => a.messageId));
+  // "replied" is now only ever written for a VERIFIED reply — one whose
+  // In-Reply-To/References names a message we sent (lib/inbox/store.ts). Mail
+  // from a known contact that starts a new thread lands in `inbound` instead, so
+  // the reply rate finally means what it says.
   const repliedCount = activities.filter((a) => a.type === "replied").length;
+  const inboundCount = activities.filter((a) => a.type === "inbound").length;
   const sent = messages.length;
 
   // Time series (fill every day in the window).
@@ -72,7 +83,7 @@ export async function getReport(orgId: string, days = 30): Promise<ReportData> {
 
   return {
     days,
-    totals: { leads, sent, opened: openedMsgs.size, clicked: clickedMsgs.size, replied: repliedCount, suppressed },
+    totals: { leads, sent, opened: openedMsgs.size, clicked: clickedMsgs.size, replied: repliedCount, suppressed, inbound: inboundCount },
     rates: { open: pct(openedMsgs.size, sent), click: pct(clickedMsgs.size, sent), reply: pct(repliedCount, sent) },
     funnel: stageGroups.map((g) => ({ stage: g.stage, count: g._count._all })),
     series,
@@ -203,4 +214,121 @@ export async function getResponseLeaderboard(orgId: string, days = 30): Promise<
       };
     })
     .sort((a, b) => a.avgResponseHours - b.avgResponseHours);
+}
+
+// ---------------------------------------------------------------------------
+// Team performance — the owner's view of who is doing what.
+// ---------------------------------------------------------------------------
+
+export interface TeamMemberPerformance {
+  userId: string;
+  name: string;
+  email: string;
+  role: string;
+  department: string | null;
+  leads: number;
+  outreach: number;
+  replies: number;
+  /** Percentage 0–100. Replies over messages sent, not over contacts. */
+  replyRate: number;
+  tasksDue: number;
+}
+
+/**
+ * Per-member totals for the workspace overview.
+ *
+ * Deliberately a handful of grouped queries rather than a loop over members: a
+ * twenty-person team would otherwise cost eighty round trips to render one
+ * table, and this sits on the dashboard's critical path.
+ *
+ * A member's numbers follow the *contact*, not the message: `Message` has no
+ * owner column, so outreach and replies are attributed through the lead's
+ * `ownerId`. That means reassigning a contact moves its history with it, which
+ * is the behaviour a manager expects when they hand an account to somebody else.
+ */
+export async function getTeamPerformance(orgId: string, days = 30, userIds?: string[] | null): Promise<TeamMemberPerformance[]> {
+  const since = new Date(Date.now() - days * DAY);
+
+  const members = await prisma.member.findMany({
+    where: { organizationId: orgId, ...(userIds ? { userId: { in: userIds } } : {}) },
+    select: {
+      userId: true,
+      role: true,
+      department: true,
+      user: { select: { name: true, email: true } },
+    },
+    orderBy: { createdAt: "asc" },
+  });
+  if (members.length === 0) return [];
+
+  const ids = members.map((m) => m.userId);
+
+  const [leadGroups, ownedLeads, taskGroups] = await Promise.all([
+    prisma.lead.groupBy({
+      by: ["ownerId"],
+      where: { organizationId: orgId, ownerId: { in: ids } },
+      _count: { _all: true },
+    }),
+    // Needed to map messages/activities back to an owner, since neither table
+    // carries one.
+    prisma.lead.findMany({
+      where: { organizationId: orgId, ownerId: { in: ids } },
+      select: { id: true, ownerId: true },
+    }),
+    prisma.task.groupBy({
+      by: ["ownerId"],
+      where: { organizationId: orgId, ownerId: { in: ids }, status: "open" },
+      _count: { _all: true },
+    }),
+  ]);
+
+  const ownerByLead = new Map(ownedLeads.map((l) => [l.id, l.ownerId!]));
+  const leadIds = [...ownerByLead.keys()];
+
+  const [messages, replies] = leadIds.length
+    ? await Promise.all([
+        prisma.message.groupBy({
+          by: ["leadId"],
+          where: { organizationId: orgId, leadId: { in: leadIds }, status: { in: ["sent", "delivered"] }, sentAt: { gte: since } },
+          _count: { _all: true },
+        }),
+        prisma.activityLog.groupBy({
+          by: ["leadId"],
+          where: { organizationId: orgId, leadId: { in: leadIds }, type: "replied", at: { gte: since } },
+          _count: { _all: true },
+        }),
+      ])
+    : [[], []];
+
+  const sum = (rows: { leadId: string; _count: { _all: number } }[]) => {
+    const out = new Map<string, number>();
+    for (const r of rows) {
+      const owner = ownerByLead.get(r.leadId);
+      if (!owner) continue;
+      out.set(owner, (out.get(owner) ?? 0) + r._count._all);
+    }
+    return out;
+  };
+
+  const outreachBy = sum(messages as { leadId: string; _count: { _all: number } }[]);
+  const repliesBy = sum(replies as { leadId: string; _count: { _all: number } }[]);
+  const leadsBy = new Map(leadGroups.map((g) => [g.ownerId!, g._count._all]));
+  const tasksBy = new Map(taskGroups.map((g) => [g.ownerId!, g._count._all]));
+
+  return members.map((m) => {
+    const outreach = outreachBy.get(m.userId) ?? 0;
+    const replied = repliesBy.get(m.userId) ?? 0;
+    return {
+      userId: m.userId,
+      name: m.user?.name || m.user?.email || "Unknown",
+      email: m.user?.email ?? "",
+      role: m.role,
+      department: m.department,
+      leads: leadsBy.get(m.userId) ?? 0,
+      outreach,
+      replies: replied,
+      replyRate: pct(replied, outreach),
+      tasksDue: tasksBy.get(m.userId) ?? 0,
+    };
+  });
 }

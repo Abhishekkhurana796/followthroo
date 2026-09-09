@@ -9,6 +9,7 @@
 import { prisma } from "./db";
 import { resolveContact, ensureSource } from "./identity";
 import { ensureDefaultPipeline, addToPipeline } from "./pipeline";
+import { resolveLeadOwner } from "./assignment";
 import { isSuppressed } from "./crm";
 import { invalidate } from "./cache";
 import { notifyOnCapture } from "./notify";
@@ -91,6 +92,18 @@ export async function ingestEvent(organizationId: string, event: InboundEvent): 
       leadId: resolved.leadId,
       sourceId,
     });
+
+    // Put the contact itself on someone, per the source's rule. The pipeline
+    // item has had an owner for a while; Lead.ownerId is what the scoped list
+    // and the member dashboard actually read, and without it a webhook lead is
+    // invisible to every rep now that there is no shared pool.
+    if (!alreadyInPipeline) {
+      const ownerId = item.ownerId ?? (await resolveLeadOwner(organizationId, { sourceKey: event.sourceKey }));
+      if (ownerId) {
+        await prisma.lead.update({ where: { id: resolved.leadId }, data: { ownerId } });
+      }
+    }
+
     if (!alreadyInPipeline) {
       await notifyOnCapture({ organizationId, leadId: resolved.leadId, ownerId: item.ownerId }).catch((e) =>
         console.error("[ingest] notifyOnCapture failed:", e),

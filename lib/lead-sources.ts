@@ -21,6 +21,36 @@ export type SourceInfo = { key: string; label: string; instructions: string };
 
 export const KNOWN_SOURCES: SourceInfo[] = [
   {
+    key: "manual",
+    label: "Manual",
+    instructions:
+      "Contacts you add by hand in Followthroo. Nothing to configure — this is the default source for the Add contact form.",
+  },
+  {
+    key: "csv",
+    label: "CSV import",
+    instructions:
+      "Contacts brought in by uploading a spreadsheet. Nothing to configure — imports are tagged with this source automatically.",
+  },
+  {
+    key: "linkedin_search",
+    label: "LinkedIn search",
+    instructions:
+      "Contacts pulled from a LinkedIn search, company page, group or event, via the Followthroo extension. Nothing to configure — paste a LinkedIn URL under Leads → Add Lead → Find leads.",
+  },
+  {
+    key: "linkedin_profile",
+    label: "LinkedIn profile",
+    instructions:
+      "A single LinkedIn profile you scraped directly. Nothing to configure.",
+  },
+  {
+    key: "linkedin_engagement",
+    label: "LinkedIn engagement",
+    instructions:
+      "People who liked or commented on a post — usually the warmest LinkedIn list, because they raised their hand in public. Nothing to configure.",
+  },
+  {
     key: "web_form",
     label: "Website form",
     instructions:
@@ -91,6 +121,10 @@ export async function listSources(organizationId: string) {
       label: s.label,
       monthlyCost: s.monthlyCost ? Number(s.monthlyCost) : null,
       active: s.active,
+      // Who contacts from this source land on — see lib/assignment.ts.
+      assignmentRule: s.assignmentRule,
+      assignedToId: s.assignedToId,
+      assignmentDept: s.assignmentDept,
       instructions: info?.instructions ?? "Custom source — map its payload fields in lib/channels/inbound.ts.",
       ingestUrl: ingestUrlFor(organizationId, s.key),
       // Most sources need only the URL; Meta and Google Ads additionally need env-level

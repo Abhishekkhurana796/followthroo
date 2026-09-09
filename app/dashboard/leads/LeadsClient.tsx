@@ -3,14 +3,17 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import useSWR from "swr";
+import { useRouter, useSearchParams } from "next/navigation";
 import {
   Trash2, Upload, Plus, Tag, FolderPlus, X, Pencil, Check, Users, Linkedin,
-  AlertTriangle, CircleDot, Search, Sparkles, ArrowRight,
+  AlertTriangle, CircleDot, Search, Sparkles, ArrowRight, Building2,
 } from "lucide-react";
 import { api } from "@/lib/client";
 import { cn } from "@/lib/cn";
-import { Badge, Banner, DashHeader, Dialog, EmptyState, Input, Label, NoResults, Panel, Select, Skeleton, useConfirm, usePrompt } from "@/components/ui";
+import { Badge, Banner, DashHeader, Dialog, EmptyState, Input, Label, NoResults, Panel, Select, Skeleton, Textarea, useConfirm, usePrompt } from "@/components/ui";
+import { INVITE_NOTE_MAX, worstCaseNoteLength } from "@/lib/linkedin/note";
 import { tourTarget } from "@/components/dashboard/tour/target";
+import { FindLeadsPanel } from "@/components/dashboard/FindLeadsPanel";
 
 type NextAction = { taskId: string | null; label: string; kind: string; dueAt: string | null; urgent: boolean; source: string };
 type Lead = {
@@ -30,6 +33,7 @@ type Lead = {
 };
 
 type LeadsResponse = { items: Lead[]; total: number; page: number; pageSize: number; totalPages: number };
+type Assignees = { self: string; members: { userId: string; name: string; email: string | null; isSelf: boolean }[] };
 type Segment = { id: string; name: string; kind: string; count: number; leadIds: string[] };
 type Campaign = { id: string; name: string };
 
@@ -63,6 +67,7 @@ export default function LeadsPage() {
   const [form, setForm] = useState({ firstName: "", email: "", company: "", tags: "", linkedinUrl: "" });
   const [busy, setBusy] = useState(false);
   const [managingGroup, setManagingGroup] = useState<Segment | null>(null);
+  const [inviteOpen, setInviteOpen] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -73,7 +78,15 @@ export default function LeadsPage() {
     return () => clearTimeout(t);
   }, [search]);
 
+  // ?view=unassigned is a distinct view, not a filter: those contacts are
+  // outside everyone's scope by design, so the server treats it as its own
+  // query and refuses it for anyone who is not an owner, admin or manager.
+  const view = useSearchParams().get("view");
+  const unassignedView = view === "unassigned";
+  const router = useRouter();
+
   const params = new URLSearchParams({ page: String(page), pageSize: String(PAGE_SIZE) });
+  if (unassignedView) params.set("view", "unassigned");
   if (book) params.set("book", book);
   if (debouncedSearch.trim()) params.set("q", debouncedSearch.trim());
   if (tagFilter.length) params.set("tags", tagFilter.join(","));
@@ -81,6 +94,9 @@ export default function LeadsPage() {
   const { data, isLoading, error, mutate } = useSWR<LeadsResponse>(`/api/leads?${params}`);
   const { data: segments, mutate: mutateSegments } = useSWR<Segment[]>("/api/segments");
   const { data: campaigns } = useSWR<Campaign[]>("/api/campaigns");
+  // Who this person may hand contacts to. Same source as task assignment, so the
+  // two can never disagree about who reports to whom.
+  const { data: assignees } = useSWR<Assignees>("/api/tasks/assignees");
   const confirm = useConfirm();
   const prompt = usePrompt();
 
@@ -128,7 +144,7 @@ export default function LeadsPage() {
     setMsg(null);
     try {
       const tags = form.tags.split(",").map((t) => t.trim()).filter(Boolean);
-      await api("/api/leads", {
+      const saved = await api<{ id: string; created: boolean }>("/api/leads", {
         body: {
           firstName: form.firstName || undefined,
           email: form.email.trim() || undefined,
@@ -139,7 +155,14 @@ export default function LeadsPage() {
       });
       setForm({ firstName: "", email: "", company: "", tags: "", linkedinUrl: "" });
       setAddOpen(false);
-      setMsg({ kind: "success", text: "Lead added." });
+      // An existing address is updated in place and keeps its original position
+      // in the newest-first list, so "Lead added" would send someone hunting for
+      // a new row at the top that was never going to be there.
+      setMsg(
+        saved.created
+          ? { kind: "success", text: "Lead added." }
+          : { kind: "info", text: "That contact already existed — we updated it instead of adding a duplicate." },
+      );
       mutate();
     } catch (e) {
       setMsg({ kind: "error", text: (e as Error).message });
@@ -183,6 +206,31 @@ export default function LeadsPage() {
 
   // ---- Bulk actions on the current selection ----
   const selectedIds = () => Array.from(selected);
+
+  /**
+   * Hand the selected contacts to a teammate.
+   *
+   * Options come from /api/tasks/assignees, which already encodes who you may
+   * give work to — owners and admins anyone, a manager their department, and
+   * everyone else only themselves. Reusing it means assignment cannot drift
+   * from task assignment, and the server re-checks it anyway.
+   */
+  async function bulkAssign(ownerId: string) {
+    const value = ownerId === "__unassign" ? null : ownerId;
+    try {
+      await api("/api/leads/bulk", { body: { leadIds: [...selected], ownerId: value } });
+      setMsg({
+        kind: "success",
+        text: value
+          ? `Assigned ${selected.size} contact(s).`
+          : `Returned ${selected.size} contact(s) to the team pool.`,
+      });
+      setSelected(new Set());
+      mutate();
+    } catch (e) {
+      setMsg({ kind: "error", text: (e as Error).message });
+    }
+  }
 
   async function bulkAddTag() {
     const tag = await prompt({
@@ -234,13 +282,31 @@ export default function LeadsPage() {
   return (
     <>
       <DashHeader
-        title="Leads"
-        subtitle={`${total.toLocaleString()} in your list`}
+        title={unassignedView ? "Unassigned leads" : "Leads"}
+        subtitle={
+          unassignedView
+            ? `${total.toLocaleString()} waiting for an owner — nobody sees these until they are assigned`
+            : `${total.toLocaleString()} in your list`
+        }
         action={
           <div className="flex items-center gap-2">
-            <button onClick={() => setGroupsOpen(true)} className="btn btn-ghost !py-2 !text-sm">
-              <FolderPlus className="h-4 w-4" /> Groups
-            </button>
+            {unassignedView ? (
+              <Link href="/dashboard/leads" className="btn btn-ghost !py-2 !text-sm">
+                Back to my leads
+              </Link>
+            ) : (
+              <>
+                {/* Companies lost its rail row: it is a way of looking at these
+                    same leads, grouped, rather than a separate thing. It keeps
+                    its screen, reached from here. */}
+                <Link href="/dashboard/companies" className="btn btn-ghost !py-2 !text-sm">
+                  <Building2 className="h-4 w-4" /> Companies
+                </Link>
+                <button onClick={() => setGroupsOpen(true)} className="btn btn-ghost !py-2 !text-sm">
+                  <FolderPlus className="h-4 w-4" /> Groups
+                </button>
+              </>
+            )}
             <button {...tourTarget("leads-import")} onClick={() => setAddOpen(true)} className="btn btn-primary !py-2 !text-sm">
               <Plus className="h-4 w-4" /> Add Lead
             </button>
@@ -326,6 +392,20 @@ export default function LeadsPage() {
               <option value="" className="text-ink">Enroll in campaign…</option>
               {(campaigns ?? []).map((c) => <option key={c.id} value={c.id} className="text-ink">{c.name}</option>)}
             </Select>
+            <Select onChange={(e) => { bulkAssign(e.target.value); e.target.value = ""; }} className="!w-44 !bg-ink-invert/15 !text-ink-invert !border-ink-invert/20 !py-1 text-xs" defaultValue="">
+              <option value="" className="text-ink">Assign to…</option>
+              {(assignees?.members ?? []).map((a) => <option key={a.userId} value={a.userId} className="text-ink">{a.isSelf ? `${a.name} (me)` : a.name}</option>)}
+              <option value="__unassign" className="text-ink">Unassign (team pool)</option>
+            </Select>
+            {/* The fast path. Building a campaign is the right tool for a
+                sequence; for "invite these forty" it was five steps too many,
+                and there was no other way to do it from the app at all. */}
+            <button
+              onClick={() => setInviteOpen(true)}
+              className="flex items-center gap-1 rounded-lg bg-ink-invert/15 px-2.5 py-1 hover:bg-ink-invert/25"
+            >
+              <Linkedin className="h-3.5 w-3.5" /> Connect on LinkedIn
+            </button>
             <button onClick={() => setSelected(new Set())} className="ml-auto text-ink-invert/70 hover:text-ink-invert">Clear</button>
           </div>
         )}
@@ -443,6 +523,13 @@ export default function LeadsPage() {
         )}
       </div>
 
+      <InviteDialog
+        open={inviteOpen}
+        onClose={() => setInviteOpen(false)}
+        leadIds={selectedIds()}
+        onDone={(text) => { setMsg({ kind: "success", text }); setSelected(new Set()); setInviteOpen(false); }}
+      />
+
       {/* ---- Add lead ---- */}
       <AddLeadDialog
         open={addOpen}
@@ -452,6 +539,13 @@ export default function LeadsPage() {
         busy={busy}
         onSubmit={addLead}
         onImport={() => fileRef.current?.click()}
+        onQueued={() => {
+          // LinkedIn has its own screen now, and that is where results live.
+          // Two homes for the same thing is how people end up unsure which one
+          // is real — so this hands off rather than duplicating it here.
+          setAddOpen(false);
+          router.push("/dashboard/linkedin");
+        }}
       />
 
       {/* ---- Groups ---- */}
@@ -481,8 +575,216 @@ export default function LeadsPage() {
 /* Add lead — three ways in, one short form                            */
 /* ------------------------------------------------------------------ */
 
+type InvitePerson = {
+  id: string;
+  firstName: string | null;
+  lastName: string | null;
+  company: string | null;
+  title: string | null;
+  linkedinUrl: string | null;
+  status: "will_queue" | "no_profile" | "already_queued" | "opted_out";
+};
+
+type InvitePreview = {
+  selected: number;
+  withProfile: number;
+  noProfile: number;
+  alreadyQueued: number;
+  optedOut: number;
+  outOfScope: number;
+  autoSend: boolean;
+  dailyCap: number;
+  remainingToday: number;
+  minDelaySec: number;
+  maxDelaySec: number;
+  people: InvitePerson[];
+  peopleTruncated: boolean;
+};
+
+const PERSON_NOTE: Record<InvitePerson["status"], string | null> = {
+  will_queue: null,
+  no_profile: "no LinkedIn profile",
+  already_queued: "already waiting",
+  opted_out: "opted out",
+};
+
+/**
+ * Queue connection requests for the selected contacts.
+ *
+ * The dialog asks the server what would happen before it happens. That ordering
+ * is the whole design: most leads in a CRM arrive from CSV or email and have no
+ * LinkedIn profile at all, so "queued 0" reported afterwards reads as a broken
+ * feature. Told beforehand — "19 of your 24 have a profile" — it reads as a fact
+ * about the data, which is what it is.
+ */
+function InviteDialog({
+  open,
+  onClose,
+  leadIds,
+  onDone,
+}: {
+  open: boolean;
+  onClose: () => void;
+  leadIds: string[];
+  onDone: (msg: string) => void;
+}) {
+  const [preview, setPreview] = useState<InvitePreview | null>(null);
+  const [note, setNote] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!open || !leadIds.length) return;
+    setPreview(null);
+    setError(null);
+    api<InvitePreview>("/api/linkedin/invite", { body: { leadIds, preview: true } })
+      .then(setPreview)
+      .catch((e) => setError((e as Error).message));
+  }, [open, leadIds]);
+
+  const noteLen = worstCaseNoteLength(note);
+  const overLimit = noteLen > INVITE_NOTE_MAX;
+  // The cap is a moving target — some of today's allowance may already be spent.
+  const willSendToday = preview ? Math.min(preview.withProfile - preview.alreadyQueued, preview.remainingToday) : 0;
+  const actionable = preview ? preview.withProfile - preview.alreadyQueued : 0;
+
+  async function queue() {
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await api<{ queued: number; noProfile: number; alreadyQueued: number }>(
+        "/api/linkedin/invite",
+        { body: { leadIds, note: note.trim() || undefined, type: "invite" } },
+      );
+      const bits = [`Queued ${res.queued} connection request${res.queued === 1 ? "" : "s"}`];
+      if (res.alreadyQueued) bits.push(`${res.alreadyQueued} already waiting`);
+      if (res.noProfile) bits.push(`${res.noProfile} without a LinkedIn profile`);
+      onDone(bits.join(" · ") + ".");
+      setNote("");
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Dialog open={open} onClose={onClose} title="Send connection requests">
+      {error && <Banner kind="error">{error}</Banner>}
+
+      {!preview ? (
+        <div className="h-24 animate-pulse rounded-xl bg-tint" />
+      ) : (
+        <div className="space-y-4">
+          <div className="rounded-xl border border-line bg-tint/40 p-3.5 text-sm">
+            <p className="font-medium">
+              {preview.withProfile} of {preview.selected} selected {preview.withProfile === 1 ? "has" : "have"} a
+              LinkedIn profile
+            </p>
+            <ul className="mt-1.5 space-y-0.5 text-xs text-ink-soft">
+              {preview.noProfile > 0 && (
+                <li>{preview.noProfile} will be skipped — no profile URL on the contact.</li>
+              )}
+              {preview.alreadyQueued > 0 && (
+                <li>{preview.alreadyQueued} already have a request waiting, so they will not be queued twice.</li>
+              )}
+              {preview.optedOut > 0 && <li>{preview.optedOut} opted out and will never be contacted.</li>}
+              {preview.outOfScope > 0 && <li>{preview.outOfScope} belong to someone else on your team.</li>}
+            </ul>
+          </div>
+
+          {/* The people themselves. A count cannot tell you whether the right
+              contacts were picked, selection persists across pages so the rows
+              are not all on screen, and an invitation cannot be recalled once
+              it has gone. */}
+          {preview.people.length > 0 && (
+            <div className="max-h-56 overflow-y-auto rounded-xl border border-line">
+              <ul className="divide-y divide-line">
+                {preview.people.map((p) => {
+                  const note = PERSON_NOTE[p.status];
+                  const name = [p.firstName, p.lastName].filter(Boolean).join(" ") || p.linkedinUrl || "Unnamed contact";
+                  return (
+                    <li
+                      key={p.id}
+                      className={`flex items-baseline gap-2 px-3 py-2 text-sm ${note ? "opacity-55" : ""}`}
+                    >
+                      <span className="min-w-0 flex-1 truncate">
+                        <span className="font-medium">{name}</span>
+                        {(p.title || p.company) && (
+                          <span className="text-ink-soft"> · {[p.title, p.company].filter(Boolean).join(" · ")}</span>
+                        )}
+                      </span>
+                      {note && <span className="shrink-0 text-xs text-ink-faint">{note}</span>}
+                    </li>
+                  );
+                })}
+              </ul>
+              {preview.peopleTruncated && (
+                <p className="border-t border-line px-3 py-2 text-xs text-ink-faint">
+                  Showing the first {preview.people.length}. The rest are queued the same way.
+                </p>
+              )}
+            </div>
+          )}
+
+          <div>
+            <Label>Note (optional)</Label>
+            <Textarea
+              rows={3}
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+              placeholder="Hi {{firstName}}, saw your work at {{company}} —"
+            />
+            <p className={`mt-1 text-xs ${overLimit ? "text-danger" : noteLen > 250 ? "text-warning" : "text-ink-faint"}`}>
+              About {noteLen} of {INVITE_NOTE_MAX} characters once personalised
+              {overLimit ? " — LinkedIn will refuse this. Shorten it." : ""}
+            </p>
+          </div>
+
+          <div className="rounded-xl border border-line p-3.5 text-xs text-ink-soft">
+            {actionable > preview.remainingToday ? (
+              <p>
+                <b className="text-ink">{willSendToday} today</b>, the remaining {actionable - willSendToday} tomorrow —
+                your cap is {preview.dailyCap} a day and {preview.remainingToday} {preview.remainingToday === 1 ? "is" : "are"} left.
+              </p>
+            ) : (
+              <p>
+                All <b className="text-ink">{actionable}</b> fit inside today&apos;s remaining {preview.remainingToday}.
+              </p>
+            )}
+            <p className="mt-1.5">
+              {preview.autoSend ? (
+                <>
+                  Sending is <b className="text-ink">automatic</b> — one every {preview.minDelaySec}–
+                  {preview.maxDelaySec} seconds, from the desktop app on your computer. They go out when it is
+                  running.
+                </>
+              ) : (
+                <>
+                  Automatic sending is <b className="text-ink">off</b>, so nothing will go out and the desktop app
+                  will refuse to start. <Link href="/dashboard/linkedin" className="underline">Turn it on</Link>.
+                </>
+              )}
+            </p>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <button onClick={queue} disabled={busy || overLimit || actionable === 0} className="btn btn-primary !py-2 !text-sm">
+              {busy ? "Queueing…" : actionable === 0 ? "Nothing to queue" : `Queue ${actionable}`}
+            </button>
+            <button onClick={onClose} className="btn btn-ghost !py-2 !text-sm">Cancel</button>
+            <Link href="/dashboard/campaigns" className="ml-auto text-xs text-ink-soft underline">
+              Following up afterwards? Build a sequence
+            </Link>
+          </div>
+        </div>
+      )}
+    </Dialog>
+  );
+}
+
 function AddLeadDialog({
-  open, onClose, form, setForm, busy, onSubmit, onImport,
+  open, onClose, form, setForm, busy, onSubmit, onImport, onQueued,
 }: {
   open: boolean;
   onClose: () => void;
@@ -491,23 +793,34 @@ function AddLeadDialog({
   busy: boolean;
   onSubmit: (e: React.FormEvent) => void;
   onImport: () => void;
+  onQueued: (jobId: string) => void;
 }) {
+  const [tab, setTab] = useState<"manual" | "find">("manual");
   if (!open) return null;
+
+  const tabClass = (active: boolean) =>
+    `rounded-xl border px-3 py-2 text-center text-xs font-semibold transition ${
+      active ? "border-ink bg-tint" : "border-line hover:bg-tint"
+    }`;
+
   return (
     <Dialog open onClose={onClose} title="Add Lead" size="md">
       <div className="grid gap-2 sm:grid-cols-3">
-        <div className="rounded-xl border border-ink bg-tint px-3 py-2 text-center text-xs font-semibold">Add manually</div>
-        <button onClick={onImport} className="rounded-xl border border-line px-3 py-2 text-center text-xs font-semibold transition hover:bg-tint">
+        <button onClick={() => setTab("manual")} className={tabClass(tab === "manual")}>
+          Add manually
+        </button>
+        <button onClick={onImport} className={tabClass(false)}>
           <Upload className="mx-auto mb-1 h-3.5 w-3.5" /> Import CSV
         </button>
-        <div
-          title="Prospect search is coming soon."
-          className="cursor-not-allowed rounded-xl border border-line px-3 py-2 text-center text-xs font-semibold text-ink-faint"
-        >
+        {/* Was a disabled "coming soon" placeholder. This is what it was waiting for. */}
+        <button onClick={() => setTab("find")} className={tabClass(tab === "find")}>
           <Sparkles className="mx-auto mb-1 h-3.5 w-3.5" /> Find leads
-        </div>
+        </button>
       </div>
 
+      {tab === "find" && <FindLeadsPanel onQueued={onQueued} />}
+
+      {tab === "manual" && (
       <form onSubmit={onSubmit} className="mt-5 space-y-3">
         <div>
           <Label>First name</Label>
@@ -539,6 +852,7 @@ function AddLeadDialog({
           </button>
         </div>
       </form>
+      )}
     </Dialog>
   );
 }

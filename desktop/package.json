@@ -1,0 +1,37 @@
+{
+  "name": "followthroo-linkedin-desktop",
+  "productName": "Followthroo for LinkedIn",
+  "version": "1.7.0",
+  "private": true,
+  "description": "Sends your Followthroo LinkedIn invitations from your own computer, at a human pace.",
+  "main": "main.js",
+  "author": "Followthroo",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --win",
+    "dist:portable": "electron-builder --win portable"
+  },
+  "dependencies": {
+    "playwright-core": "1.62.1"
+  },
+  "devDependencies": {
+    "electron": "^33.2.1",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "com.followthroo.linkedin",
+    "productName": "Followthroo for LinkedIn",
+    "files": ["main.js", "preload.js", "runner.js", "store.js", "page-actions.js", "pilot.js", "pilot-page.js", "renderer/**"],
+    "win": {
+      "target": [
+        { "target": "nsis", "arch": ["x64"] },
+        { "target": "portable", "arch": ["x64"] }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true
+    }
+  }
+}

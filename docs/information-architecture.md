@@ -37,19 +37,22 @@ mobile drawer both read it, so they cannot drift.
               Home         /dashboard
 SALES         Leads        /dashboard/leads
               Pipeline     /dashboard/pipeline
-              Companies    /dashboard/companies
 COMMUNICATE   Inbox        /dashboard/inbox
               Tasks        /dashboard/tasks
-              Calendar     (soon)
 AUTOMATE      Campaigns    /dashboard/campaigns
+              LinkedIn     /dashboard/linkedin
               Templates    /dashboard/templates
-              AI           /dashboard/agent
 ANALYZE       Reports      /dashboard/reports
               Settings     /dashboard/settings
 ```
 
-This replaced an 18-row, five-group rail. Nothing was deleted — the rail simply
-stopped being an index of the codebase:
+Ten rows, as of 2026-09-05. This replaced an 18-row, five-group rail, and then
+lost three more — Companies (a way of looking at leads, reached from Leads), Test
+emails (a model-testing harness, reached from Templates) and Calendar (a `soon`
+stub that could not be clicked). LinkedIn gained one, for sourcing only; see the
+narrowed exception in CLAUDE.md.
+
+Nothing was deleted — the rail simply stopped being an index of the codebase:
 
 | Was a top-level row | Now lives |
 |---|---|
@@ -117,8 +120,18 @@ them because there's no number" is useful; an absent button is not.
 ### Tasks — `/dashboard/tasks`
 
 Overdue / Today / Upcoming / Recently done. Rows carry the lead, the channel, the due
-time and an `auto` marker when the system created it. Not a project manager — the
-only job is that nothing falls through.
+time, the owner (in the Everyone view), a priority dot, and an `auto` marker when the
+system created it. Not a project manager — the only job is that nothing falls through.
+
+"Nothing falls through" is what justifies the 2026-08-24 additions and bounds them.
+A task can be given to a teammate (owner/admin anywhere, group leader within their
+department, member self-only), carries a real due date, and now actually reaches
+someone: the owner is emailed when it comes due, their manager if it is still open a
+day later, and everyone gets one morning digest at 8am **local** time. Priority and
+instruction exist because a task handed to someone else needs to say how urgent it is
+and what "done" means.
+
+Still deliberately absent: subtasks, dependencies, projects, recurring tasks.
 
 ### Inbox, Pipeline, Control tower
 

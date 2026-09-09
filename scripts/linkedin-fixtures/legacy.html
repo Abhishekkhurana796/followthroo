@@ -1,0 +1,45 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>Fixture — legacy people search</title></head>
+<body>
+<!--
+  LinkedIn's OLD markup, kept as a regression fixture: the extension must still
+  read pages that ship the `reusable-search__result-container` / `entity-result`
+  classes, because LinkedIn runs several variants at once.
+-->
+<main>
+  <div class="search-results-container">
+    <h2>About 410 results</h2>
+    <ul>
+      <li class="reusable-search__result-container">
+        <div class="entity-result">
+          <span class="entity-result__title-text">
+            <a href="/in/legacy-priya-99"><span aria-hidden="true">Priya Nair</span></a>
+          </span>
+          <div class="entity-result__primary-subtitle">Growth Lead at Zeta</div>
+          <div class="entity-result__secondary-subtitle">Pune, Maharashtra, India</div>
+        </div>
+      </li>
+      <li class="reusable-search__result-container">
+        <div class="entity-result">
+          <span class="entity-result__title-text">
+            <a href="/in/legacy-karan-42"><span aria-hidden="true">Karan Bose</span></a>
+          </span>
+          <div class="entity-result__primary-subtitle">VP Sales at Fintrail</div>
+          <div class="entity-result__secondary-subtitle">Delhi, India</div>
+        </div>
+      </li>
+      <li class="reusable-search__result-container">
+        <div class="entity-result">
+          <span class="entity-result__title-text">
+            <a href="/in/legacy-meera-07"><span aria-hidden="true">Meera Iyer</span></a>
+          </span>
+          <div class="entity-result__primary-subtitle">Founder at Loop Health</div>
+          <div class="entity-result__secondary-subtitle">Chennai, Tamil Nadu, India</div>
+        </div>
+      </li>
+    </ul>
+  </div>
+</main>
+</body>
+</html>

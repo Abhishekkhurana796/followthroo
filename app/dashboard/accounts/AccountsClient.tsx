@@ -39,7 +39,7 @@ export default function SendingAccountsPage() {
   const [testBusy, setTestBusy] = useState(false);
 
   useEffect(() => {
-    // Surface the result of the Google "Connect Gmail" redirect, then clean the URL.
+    // Surface the result of a mailbox-connect redirect (Gmail or Zoho), then clean the URL.
     const p = new URLSearchParams(window.location.search);
     if (p.get("connected")) {
       setMsg({ kind: "success", text: `Gmail connected: ${p.get("connected")}` });
@@ -142,6 +142,14 @@ export default function SendingAccountsPage() {
           >
             <Mail className="h-4 w-4 text-action" />
             Connect Gmail (one click, no password)
+          </a>
+
+          <a
+            href="/api/auth/zoho/start"
+            className="mt-2 flex w-full items-center justify-center gap-2 rounded-xl border border-line bg-canvas px-4 py-2.5 text-sm font-semibold transition hover:bg-tint"
+          >
+            <Mail className="h-4 w-4 text-action" />
+            Connect Zoho Mail (one click, no password)
           </a>
           <div className="my-4 flex items-center gap-3 text-[11px] font-medium uppercase tracking-wide text-ink-soft">
             <span className="h-px flex-1 bg-line" />

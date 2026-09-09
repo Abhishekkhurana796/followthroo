@@ -56,32 +56,42 @@ export interface ClaimAccount {
   mode: string;
   selectedCampaignIds: string[];
   campaignSettings: unknown;
+  /** Optional so existing callers and tests compile; absent reads as off. */
+  autoSend?: boolean;
 }
 
 /**
- * Hand the extension its next batch of actions, honoring the account's config:
- * selected campaigns, the global daily cap, per-campaign caps, and enabled flags.
- * Each returned action carries its effective `type` (auto/invite/message). Stale
- * in-progress actions are reclaimed first so a closed browser doesn't strand the queue.
+ * Which lead columns travel with an action.
+ *
+ * `peekActions` shows these to a person deciding whether to start a run, so it
+ * needs enough to recognise somebody — a bare first name is not enough to tell
+ * two Priyas apart. `claimActions` gets the same shape so both paths agree.
  */
-export async function claimActions(account: ClaimAccount, limit: number) {
+const LEAD_FOR_ACTION = {
+  id: true,
+  firstName: true,
+  lastName: true,
+  company: true,
+  title: true,
+  linkedinUrl: true,
+  stage: true,
+  optedOut: true,
+} as const;
+
+/**
+ * The actions that are eligible right now, in the order they would be worked.
+ *
+ * Shared by `claimActions` (which then marks them in_progress) and `peekActions`
+ * (which does not). That sharing is the whole point: the list shown to somebody
+ * before they press Start has to be the list that actually goes out. Two
+ * separate implementations of "which ones are eligible" would drift, and the
+ * drift would only ever be discovered as invitations sent to the wrong people.
+ */
+async function selectClaimable(account: ClaimAccount, limit: number) {
   const organizationId = account.organizationId;
   const startOfToday = startOfDay();
   const settings = (account.campaignSettings ?? {}) as Record<string, PerCampaign>;
   const selected = account.selectedCampaignIds ?? [];
-
-  await prisma.linkedInAction.updateMany({
-    where: {
-      organizationId,
-      OR: [
-        { status: "in_progress", updatedAt: { lt: new Date(Date.now() - STALE_MS) } },
-        // A human never came back to confirm or skip a drafted action — release it rather
-        // than let it block the queue forever.
-        { status: "drafted", updatedAt: { lt: new Date(Date.now() - DRAFT_STALE_MS) } },
-      ],
-    },
-    data: { status: "pending" },
-  });
 
   const usedGlobal = await prisma.linkedInAction.count({
     where: { organizationId, status: { in: ["sent", "in_progress", "drafted"] }, updatedAt: { gte: startOfToday } },
@@ -95,7 +105,7 @@ export async function claimActions(account: ClaimAccount, limit: number) {
     where: { organizationId, status: "pending" },
     orderBy: { createdAt: "asc" },
     take: take * 5 + 20,
-    include: { lead: { select: { firstName: true, lastName: true } } },
+    include: { lead: { select: LEAD_FOR_ACTION } },
   });
 
   const usedCache = new Map<string, number>();
@@ -111,6 +121,9 @@ export async function claimActions(account: ClaimAccount, limit: number) {
   const picked: typeof candidates = [];
   for (const a of candidates) {
     if (picked.length >= take) break;
+    // Consent outranks every other rule here. A lead who opted out must never be
+    // contacted, whatever a campaign says — and an invitation cannot be recalled.
+    if (a.lead?.optedOut) continue;
     const cid = a.campaignId;
     if (cid) {
       if (selected.length && !selected.includes(cid)) continue;
@@ -120,6 +133,57 @@ export async function claimActions(account: ClaimAccount, limit: number) {
     }
     picked.push(a);
   }
+  return picked;
+}
+
+/** Release actions stranded by a browser that closed mid-run. */
+async function reclaimStale(organizationId: string) {
+  await prisma.linkedInAction.updateMany({
+    where: {
+      organizationId,
+      OR: [
+        { status: "in_progress", updatedAt: { lt: new Date(Date.now() - STALE_MS) } },
+        // A human never came back to confirm or skip a drafted action — release it rather
+        // than let it block the queue forever.
+        { status: "drafted", updatedAt: { lt: new Date(Date.now() - DRAFT_STALE_MS) } },
+      ],
+    },
+    data: { status: "pending" },
+  });
+}
+
+/**
+ * Who is next, without touching anything.
+ *
+ * The desktop app shows this before a run so the person can see exactly who is
+ * about to be contacted. Deliberately read-only — no reclaim, no status change —
+ * because looking at the queue must never consume it or change what happens.
+ */
+export async function peekActions(account: ClaimAccount, limit: number) {
+  const picked = await selectClaimable(account, limit);
+  return picked.map((a) => ({
+    id: a.id,
+    type: a.type && a.type !== "auto" ? a.type : account.mode || "auto",
+    linkedinUrl: a.linkedinUrl,
+    note: a.note,
+    leadId: a.lead?.id ?? null,
+    leadName: [a.lead?.firstName, a.lead?.lastName].filter(Boolean).join(" ") || null,
+    company: a.lead?.company ?? null,
+    title: a.lead?.title ?? null,
+    stage: a.lead?.stage ?? null,
+  }));
+}
+
+/**
+ * Hand the desktop app its next batch of actions, honoring the account's config:
+ * selected campaigns, the global daily cap, per-campaign caps, and enabled flags.
+ * Each returned action carries its effective `type` (auto/invite/message). Stale
+ * in-progress actions are reclaimed first so a closed browser doesn't strand the queue.
+ */
+export async function claimActions(account: ClaimAccount, limit: number) {
+  await reclaimStale(account.organizationId);
+
+  const picked = await selectClaimable(account, limit);
   if (picked.length === 0) return [];
 
   await prisma.linkedInAction.updateMany({
@@ -127,9 +191,24 @@ export async function claimActions(account: ClaimAccount, limit: number) {
     data: { status: "in_progress" },
   });
 
+  const settings = (account.campaignSettings ?? {}) as Record<string, PerCampaign>;
+
   return picked.map((a) => ({
     ...a,
-    type: settings[a.campaignId ?? ""]?.mode || account.mode || a.type || "auto",
+    // Told per action rather than read from the extension's own settings, so the
+    // switch lives in one place. Turning it off in the app stops the very next
+    // action, with no need for the extension to notice a config change.
+    autoSend: account.autoSend === true,
+    // An explicit kind on the action is an instruction from the campaign step
+    // that created it; the account/campaign mode is only a preference for
+    // actions that never said. This used to read
+    // `settings[...]?.mode || account.mode || a.type`, and since
+    // LinkedInAccount.mode defaults to the non-empty string "auto", account.mode
+    // always won and `a.type` was unreachable — which would have made every
+    // step-level invite/message choice a silent no-op.
+    type: a.type && a.type !== "auto"
+      ? a.type
+      : settings[a.campaignId ?? ""]?.mode || account.mode || "auto",
     leadName: [a.lead?.firstName, a.lead?.lastName].filter(Boolean).join(" ") || null,
   }));
 }

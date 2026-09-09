@@ -3,6 +3,7 @@ import { prisma } from "@/lib/db";
 import { ok, fail } from "@/lib/http";
 import { requireOrg } from "@/lib/tenant";
 import { getLeadTimeline } from "@/lib/queries";
+import { leadScope } from "@/lib/scope";
 
 export const runtime = "nodejs";
 
@@ -22,5 +23,6 @@ export async function GET(req: NextRequest, { params }: Ctx) {
   if (!lead) return fail("not found", 404);
 
   const limit = Math.min(Math.max(Number(new URL(req.url).searchParams.get("limit") ?? 100), 1), 300);
-  return ok(await getLeadTimeline(ctx.orgId, id, limit));
+  const scope = await leadScope(ctx);
+  return ok(await getLeadTimeline(ctx.orgId, id, limit, scope.where));
 }

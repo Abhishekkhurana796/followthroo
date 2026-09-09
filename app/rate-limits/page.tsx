@@ -21,7 +21,7 @@ export default function RateLimitsPage() {
       />
       <section className="bg-canvas pb-8">
         <div className="mx-auto max-w-4xl px-6">
-          <div className="overflow-hidden rounded-2xl border border-line bg-white">
+          <div className="overflow-hidden rounded-2xl border border-line bg-surface">
             <table className="w-full text-left text-sm">
               <thead className="bg-tint font-mono text-xs uppercase tracking-wider text-ink-soft">
                 <tr>

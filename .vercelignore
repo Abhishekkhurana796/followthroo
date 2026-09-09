@@ -1,0 +1,32 @@
+# What NOT to upload to Vercel.
+#
+# Vercel does not read .gitignore, so anything excluded there has to be
+# excluded again here or it rides along in the deployment tarball.
+
+# The Windows desktop app's build output and dependencies — but NOT its source.
+#
+# Without these the upload was 351MB and the deploy failed outright: dist/
+# holds two 80MB installers plus an unpacked build, and node_modules/electron
+# ships its own ~180MB Chromium. Vercel rejects any single file over 100MB and
+# electron.exe is over it.
+#
+# Ignoring all of `desktop/` was the obvious next move and broke the build
+# instead: scripts/verify-desktop-runner.ts imports ../desktop/runner, and
+# `next build` typechecks the whole project. The source is ten small files —
+# it costs nothing to upload and keeps that import resolvable.
+#
+# The installer reaches customers through Vercel Blob, not this deployment —
+# see desktop/README.md, "Publishing it so customers can download".
+desktop/node_modules/
+desktop/dist/
+
+# Build output and local scratch.
+.next/
+out/
+coverage/
+playwright-report/
+test-results/
+.playwright-mcp/
+
+# Packaged extension artifacts, built by scripts/package-extension.ts.
+followthroo-linkedin-*.zip

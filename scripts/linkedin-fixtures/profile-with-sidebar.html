@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Fixture — profile with a recommendation sidebar</title></head>
+<body>
+<!--
+  The failure this exists to catch.
+
+  A real LinkedIn profile is not one Connect button. "People also viewed" and
+  "More profiles for you" each render a card per person, every one with its own
+  working Connect. A document-wide search for /^Connect/ finds a stranger from
+  that rail as readily as the person you meant — and clicking it sends a real
+  invitation to somebody who was never selected, which cannot be quietly undone.
+
+  The sidebar here deliberately comes FIRST in DOM order, so a naive
+  querySelectorAll finds the wrong person before the right one. If the extension
+  invites "Wrong Person", the scoping has regressed.
+-->
+<aside id="rail">
+  <h2>People also viewed</h2>
+  <div class="rail-card">
+    <a href="/in/wrong-person-1">Wrong Person One</a>
+    <button aria-label="Invite Wrong Person One to connect" data-who="wrong-1">Connect</button>
+  </div>
+  <div class="rail-card">
+    <a href="/in/wrong-person-2">Wrong Person Two</a>
+    <button aria-label="Invite Wrong Person Two to connect" data-who="wrong-2">Connect</button>
+  </div>
+</aside>
+
+<main>
+  <section class="artdeco-card pv-top-card">
+    <h1>Anirudh Bisht</h1>
+    <div class="text-body-medium">Marketing Manager at Welco Agencies</div>
+    <button aria-label="Invite Anirudh Bisht to connect" data-who="right" id="ownConnect">Connect</button>
+    <button aria-label="Message Anirudh Bisht" data-who="right-msg">Message</button>
+  </section>
+
+  <section class="more-profiles">
+    <h2>More profiles for you</h2>
+    <div class="rail-card">
+      <a href="/in/wrong-person-3">Wrong Person Three</a>
+      <button aria-label="Invite Wrong Person Three to connect" data-who="wrong-3">Connect</button>
+    </div>
+  </section>
+</main>
+
+<script>
+  const q = new URLSearchParams(location.search);
+  // The profile card offers no Connect of its own, so the only Connect buttons
+  // on the page belong to strangers in "More profiles for you" — which is inside
+  // <main>, so skipping <aside> is not on its own enough to stay safe.
+  if (q.has("noconnect")) document.getElementById("ownConnect").remove();
+  // Records who was actually invited, so the test can assert on identity rather
+  // than merely on "an invitation happened".
+  window.__invited = null;
+
+  document.querySelectorAll("button[aria-label*='to connect']").forEach((b) => {
+    b.addEventListener("click", () => {
+      window.__invited = b.dataset.who;
+      if (document.querySelector('[role="dialog"]')) return;
+      const modal = document.createElement("div");
+      modal.className = "artdeco-modal";
+      modal.setAttribute("role", "dialog");
+      // What LinkedIn puts up once the account is out of invitations for the
+      // week: a wall where the compose form should be. Every remaining action
+      // in the run would meet the same wall, so the run has to stop rather than
+      // keep knocking.
+      if (q.has("limitwall")) {
+        modal.innerHTML =
+          "<h2>You've reached the weekly invitation limit</h2>" +
+          "<p>Try again next week.</p><button aria-label='Got it'>Got it</button>";
+        document.body.appendChild(modal);
+        return;
+      }
+      modal.innerHTML =
+        '<h2>Add a note to your invitation?</h2>' +
+        '<button id="addNote" aria-label="Add a note">Add a note</button>' +
+        '<div id="noteWrap" hidden><textarea id="custom-message" maxlength="300"></textarea></div>' +
+        '<button id="sendInvite" aria-label="Send now">Send now</button>';
+      document.body.appendChild(modal);
+      modal.querySelector("#addNote").addEventListener("click", () => {
+        modal.querySelector("#noteWrap").hidden = false;
+      });
+      modal.querySelector("#sendInvite").addEventListener("click", () => {
+        // Captured here because the dialog is gone by the time a test can read it.
+        window.__note = modal.querySelector("#custom-message").value;
+        modal.remove();
+      });
+    });
+  });
+
+  // A stale conversation with somebody else, already docked before we arrive —
+  // which is the ordinary state of LinkedIn after a day's work, and the reason
+  // "the first message box on the page" is the wrong box.
+  const mk = (who) => {
+    const f = document.createElement("form");
+    f.className = "msg-form";
+    f.dataset.who = who;
+    f.innerHTML =
+      '<div class="msg-form__contenteditable" contenteditable="true" role="textbox"></div>' +
+      '<button type="button" class="msg-form__send-button" aria-label="Send">Send</button>';
+    f.querySelector("button").addEventListener("click", () => {
+      window.__sentIn = f.dataset.who;
+      window.__sentText = f.querySelector(".msg-form__contenteditable").textContent;
+      f.querySelector(".msg-form__contenteditable").textContent = "";
+    });
+    return f;
+  };
+  if (!q.get("single")) document.body.appendChild(mk("someone-else"));
+
+  document.querySelector("button[aria-label^='Message']").addEventListener("click", () => {
+    if (document.querySelector(".msg-form[data-who='right']")) return;
+    document.body.appendChild(mk("right"));
+  });
+</script>
+</body>
+</html>

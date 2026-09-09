@@ -5,6 +5,7 @@ import { requireOrg } from "@/lib/tenant";
 import { invalidate } from "@/lib/cache";
 import { recomputeAndSaveLeadScore } from "@/lib/scoring";
 import { getLeadDetail } from "@/lib/queries";
+import { leadScope } from "@/lib/scope";
 import { suppress } from "@/lib/crm";
 
 export const runtime = "nodejs";
@@ -27,7 +28,10 @@ export async function GET(req: NextRequest, { params }: Ctx) {
   const ctx = await requireOrg(req);
   if (ctx instanceof Response) return ctx;
   const { id } = await params;
-  const lead = await getLeadDetail(ctx.orgId, id);
+  const scope = await leadScope(ctx);
+  const lead = await getLeadDetail(ctx.orgId, id, scope.where);
+  // Out of scope reads as "not found" rather than "forbidden" on purpose:
+  // confirming a contact exists but belongs to a colleague is itself a leak.
   if (!lead) return fail("not found", 404);
   return ok(lead);
 }

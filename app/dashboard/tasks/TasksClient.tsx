@@ -5,11 +5,12 @@ import Link from "next/link";
 import useSWR from "swr";
 import {
   ListChecks, Check, Mail, MessageSquare, Linkedin, Phone, Video, CalendarClock,
-  Plus, Trash2, RotateCcw, type LucideIcon,
+  Plus, Trash2, RotateCcw, Pencil, type LucideIcon,
 } from "lucide-react";
 import { api } from "@/lib/client";
 import { cn } from "@/lib/cn";
-import { Badge, Banner, DashHeader, EmptyState, Panel, Skeleton, useConfirm, usePrompt, useToast } from "@/components/ui";
+import { Badge, Banner, DashHeader, EmptyState, Panel, Skeleton, useConfirm, useToast } from "@/components/ui";
+import { TaskDialog } from "@/components/dashboard/TaskDialog";
 
 type Task = {
   id: string;
@@ -20,9 +21,19 @@ type Task = {
   dueAt: string | null;
   createdKind: string;
   completedAt: string | null;
+  ownerId: string | null;
+  ownerName: string | null;
+  priority: string;
+  instruction: string | null;
   lead: { id: string; firstName: string | null; lastName: string | null; email: string | null; company: string | null } | null;
 };
 type Buckets = { overdue: Task[]; today: Task[]; upcoming: Task[]; done: Task[] };
+
+const PRIORITY_DOT: Record<string, string> = {
+  low: "bg-info",
+  medium: "bg-warning",
+  high: "bg-danger",
+};
 
 const KIND_ICON: Record<string, LucideIcon> = {
   email: Mail, whatsapp: MessageSquare, linkedin: Linkedin, call: Phone, meeting: Video, follow_up: CalendarClock,
@@ -47,7 +58,6 @@ export default function TasksClient() {
   const [msg, setMsg] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const confirm = useConfirm();
-  const prompt = usePrompt();
   const toast = useToast();
 
   async function act(id: string, action: "complete" | "reopen") {
@@ -68,20 +78,18 @@ export default function TasksClient() {
     } catch (e) { setMsg((e as Error).message); } finally { setBusy(null); }
   }
 
-  async function create() {
-    const title = await prompt({
-      title: "New task",
-      label: "What needs doing?",
-      placeholder: "Call Priya about the proposal",
-      confirmLabel: "Create",
-    });
-    if (!title) return;
-    setMsg(null);
-    try {
-      await api("/api/tasks", { body: { title, dueAt: new Date().toISOString() } });
-      await mutate();
-      toast("Added to Today.");
-    } catch (e) { setMsg((e as Error).message); }
+  // Editing reuses the same dialog; `editing` null means create.
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const [editing, setEditing] = useState<Task | null>(null);
+
+  function openCreate() {
+    setEditing(null);
+    setDialogOpen(true);
+  }
+
+  function openEdit(t: Task) {
+    setEditing(t);
+    setDialogOpen(true);
   }
 
   const total = data ? data.overdue.length + data.today.length + data.upcoming.length : 0;
@@ -108,7 +116,7 @@ export default function TasksClient() {
                 Mine
               </button>
             </div>
-            <button onClick={create} className="btn btn-primary !py-2 !text-sm">
+            <button onClick={openCreate} className="btn btn-primary !py-2 !text-sm">
               <Plus className="h-4 w-4" /> New task
             </button>
           </div>
@@ -129,7 +137,7 @@ export default function TasksClient() {
             icon={ListChecks}
             title="Nothing to chase"
             body="Follow-ups appear here automatically when someone replies and nobody has answered yet — and you can schedule your own from any lead."
-            action={<button onClick={create} className="btn btn-primary"><Plus className="h-4 w-4" /> New task</button>}
+            action={<button onClick={openCreate} className="btn btn-primary"><Plus className="h-4 w-4" /> New task</button>}
           />
         )}
 
@@ -163,6 +171,13 @@ export default function TasksClient() {
                           {done && <Check className="h-3 w-3" />}
                         </button>
 
+                        {PRIORITY_DOT[t.priority] && (
+                          <span
+                            className={cn("h-2 w-2 shrink-0 rounded-full", PRIORITY_DOT[t.priority])}
+                            title={`${t.priority} priority`}
+                          />
+                        )}
+
                         <Icon className="h-4 w-4 shrink-0 text-ink-faint" />
 
                         <div className="min-w-0 flex-1">
@@ -176,6 +191,7 @@ export default function TasksClient() {
                               </Link>
                             )}
                             {t.dueAt && <span>{new Date(t.dueAt).toLocaleString(undefined, { day: "numeric", month: "short", hour: "numeric", minute: "2-digit" })}</span>}
+                            {!mine && <span>{t.ownerName ?? "unassigned"}</span>}
                             {t.createdKind === "system" && <span>auto</span>}
                           </div>
                         </div>
@@ -185,6 +201,11 @@ export default function TasksClient() {
                             <Link href={`/dashboard/leads/${t.leadId}`} className="btn btn-ghost !px-2.5 !py-1.5 !text-xs">
                               Do it
                             </Link>
+                          )}
+                          {!done && (
+                            <button onClick={() => openEdit(t)} aria-label={`Edit ${t.title}`} className="p-1.5 text-ink-faint hover:text-ink">
+                              <Pencil className="h-3.5 w-3.5" />
+                            </button>
                           )}
                           {done && (
                             <button onClick={() => act(t.id, "reopen")} disabled={busy === t.id} aria-label="Reopen" className="p-1.5 text-ink-faint hover:text-ink disabled:opacity-40">
@@ -204,6 +225,31 @@ export default function TasksClient() {
           );
         })}
       </div>
+
+      <TaskDialog
+        open={dialogOpen}
+        onClose={() => setDialogOpen(false)}
+        onSaved={() => {
+          mutate();
+          toast(editing ? "Task updated." : "Task created.");
+        }}
+        mode={editing ? "edit" : "create"}
+        taskId={editing?.id}
+        initial={
+          editing
+            ? {
+                title: editing.title,
+                instruction: editing.instruction,
+                dueAt: editing.dueAt,
+                ownerId: editing.ownerId,
+                kind: editing.kind as never,
+                priority: editing.priority as never,
+              }
+            : undefined
+        }
+        fixedLeadId={editing?.leadId ?? undefined}
+        fixedLeadLabel={editing ? leadName(editing) : undefined}
+      />
     </>
   );
 }

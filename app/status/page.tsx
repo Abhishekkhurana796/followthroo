@@ -20,7 +20,7 @@ export default function StatusPage() {
       <PageHero kicker="Status" title="All systems operational" subtitle="Live health of Followthroo services. Configured integrations show under /api/status in your own instance." />
       <section className="bg-canvas pb-24">
         <div className="mx-auto max-w-3xl px-6">
-          <div className="overflow-hidden rounded-2xl border border-line bg-white">
+          <div className="overflow-hidden rounded-2xl border border-line bg-surface">
             {SYSTEMS.map((s) => (
               <div key={s} className="flex items-center justify-between border-b border-line px-5 py-4 last:border-0">
                 <span className="text-sm font-medium">{s}</span>

@@ -9,8 +9,10 @@ import {
 import { api } from "@/lib/client";
 import { Banner, DashHeader, Dialog, Input, Label, Panel, Select, useConfirm } from "@/components/ui";
 import { tourTarget } from "@/components/dashboard/tour/target";
+import Link from "next/link";
+import { INVITE_NOTE_MAX, INVITE_NOTE_WARN, worstCaseNoteLength } from "@/lib/linkedin/note";
 
-type Template = { id: string; channel: string; name: string };
+type Template = { id: string; channel: string; name: string; body?: string };
 type SendingAccount = { id: string; name: string; email: string };
 type Segment = { id: string; name: string; count: number };
 type Campaign = {
@@ -23,18 +25,95 @@ type Campaign = {
   _count?: { enrollments: number };
 };
 
-// Builder node shapes (UI). Converted to the engine graph on save.
-type SendNode = { type: "send"; channel: string; templateId: string; waitDays: number };
-type CondNode = { type: "condition"; on: "replied" | "opened" | "clicked"; yes: "stop" | "continue"; no: "stop" | "continue" };
-type BuilderNode = SendNode | CondNode;
+/**
+ * What a step does, as one choice.
+ *
+ * The builder used to ask for a channel, and LinkedIn's two very different
+ * gestures — asking to connect, and messaging someone you are already connected
+ * to — hid behind the single option "LinkedIn". Which one actually happened was
+ * decided later by a setting inside the Chrome extension, where nobody building
+ * a sequence would think to look.
+ *
+ * This is a composite key for the UI only. The saved graph keeps `channel` and
+ * `linkedinAction` as separate fields, because `channel` is a database enum
+ * shared with templates and messages.
+ */
+type StepType = "email" | "linkedin_invite" | "linkedin_message" | "whatsapp" | "social";
 
-const newSend = (waitDays = 0): SendNode => ({ type: "send", channel: "email", templateId: "", waitDays });
+const STEP_TYPES: { value: StepType; label: string; hint?: string }[] = [
+  { value: "email", label: "Email", hint: "Goes out from your connected mailbox." },
+  {
+    value: "linkedin_invite",
+    label: "LinkedIn connection request",
+    hint: "Drafted in your own LinkedIn tab. You read it and press send.",
+  },
+  {
+    value: "linkedin_message",
+    label: "LinkedIn message",
+    hint: "Only reaches people you are already connected to — put this after a connection request.",
+  },
+  { value: "whatsapp", label: "WhatsApp", hint: "Needs a template WhatsApp has approved." },
+];
+
+/** The channel a step type sends on, and the LinkedIn gesture if it is one. */
+function splitStepType(stepType: StepType): { channel: string; linkedinAction?: "invite" | "message" } {
+  if (stepType === "linkedin_invite") return { channel: "linkedin", linkedinAction: "invite" };
+  if (stepType === "linkedin_message") return { channel: "linkedin", linkedinAction: "message" };
+  return { channel: stepType };
+}
+
+/**
+ * The reverse. A stored LinkedIn step with no explicit kind is legacy "auto";
+ * it is shown as a connection request because that is what auto tries first,
+ * but the stored value is left alone unless the step is actually edited.
+ */
+function joinStepType(channel?: string, linkedinAction?: string | null): StepType {
+  if (channel !== "linkedin") return (channel ?? "email") as StepType;
+  return linkedinAction === "message" ? "linkedin_message" : "linkedin_invite";
+}
+
+// Builder node shapes (UI). Converted to the engine graph on save.
+type SendNode = {
+  type: "send";
+  stepType: StepType;
+  templateId: string;
+  /** Pin to a template snapshot. Carried through edits — dropping it silently
+   *  unpinned a pinned step every time somebody re-saved a campaign. */
+  templateVersionId?: string | null;
+  /** The stored kind, kept verbatim so an untouched legacy "auto" stays "auto". */
+  storedAction?: string | null;
+  waitDays: number;
+};
+type CondNode = { type: "condition"; on: "replied" | "opened" | "clicked"; yes: "stop" | "continue"; no: "stop" | "continue" };
+/**
+ * A node the builder cannot create but must not destroy.
+ *
+ * `wait` and `exit` nodes were previously rewritten into sends on load, so
+ * opening a campaign that had one and saving it silently changed what the
+ * campaign did. Round-trip them untouched instead: a node you can see being
+ * quietly corrupted is worse than a button you do not have.
+ */
+type OpaqueNode = { type: "opaque"; raw: Record<string, unknown> };
+type BuilderNode = SendNode | CondNode | OpaqueNode;
+
+const newSend = (waitDays = 0): SendNode => ({ type: "send", stepType: "email", templateId: "", waitDays });
 const newCond = (): CondNode => ({ type: "condition", on: "replied", yes: "stop", no: "continue" });
 
 const PRESETS: { name: string; blurb: string; nodes: BuilderNode[] }[] = [
   { name: "3-step email drip", blurb: "Three emails, spaced a few days apart.", nodes: [newSend(0), newSend(3), newSend(5)] },
   { name: "Stop on reply", blurb: "Email, then only follow up if they didn't reply.", nodes: [newSend(0), { type: "condition", on: "replied", yes: "stop", no: "continue" }, newSend(4)] },
-  { name: "Multichannel touch", blurb: "Email → LinkedIn → WhatsApp over a week.", nodes: [newSend(0), { type: "send", channel: "linkedin", templateId: "", waitDays: 2 }, { type: "send", channel: "whatsapp", templateId: "", waitDays: 3 }] },
+  { name: "Multichannel touch", blurb: "Email, then a connection request, then WhatsApp.", nodes: [newSend(0), { type: "send", stepType: "linkedin_invite", templateId: "", waitDays: 2 }, { type: "send", stepType: "whatsapp", templateId: "", waitDays: 3 }] },
+  // The LinkedIn step type existed for weeks and no campaign ever used it — a
+  // dropdown option is not discoverable, a preset is. This is the shape people
+  // actually want: ask to connect, wait, then message once they have accepted.
+  {
+    name: "LinkedIn: connect, then follow up",
+    blurb: "A connection request, then a message three days later.",
+    nodes: [
+      { type: "send", stepType: "linkedin_invite", templateId: "", waitDays: 0 },
+      { type: "send", stepType: "linkedin_message", templateId: "", waitDays: 3 },
+    ],
+  },
 ];
 
 // Turn the linear builder list into the engine's node graph.
@@ -42,7 +121,26 @@ function toGraph(nodes: BuilderNode[]) {
   const out = nodes.map((n, i) => {
     const id = `n${i}`;
     const nextId = i < nodes.length - 1 ? `n${i + 1}` : null;
-    if (n.type === "send") return { id, type: "send", channel: n.channel, templateId: n.templateId || undefined, waitDays: Number(n.waitDays) || 0, next: nextId };
+    if (n.type === "opaque") {
+      // Preserved verbatim apart from its position in the chain.
+      const { ...rest } = n.raw;
+      return rest.type === "exit" ? { ...rest, id } : { ...rest, id, next: nextId };
+    }
+    if (n.type === "send") {
+      const { channel, linkedinAction } = splitStepType(n.stepType);
+      return {
+        id,
+        type: "send",
+        channel,
+        // An untouched legacy step keeps the "auto" it was saved with; anything
+        // the person actually chose is written explicitly.
+        ...(channel === "linkedin" ? { linkedinAction: linkedinAction ?? n.storedAction ?? undefined } : {}),
+        templateId: n.templateId || undefined,
+        templateVersionId: n.templateVersionId ?? undefined,
+        waitDays: Number(n.waitDays) || 0,
+        next: nextId,
+      };
+    }
     return { id, type: "condition", on: n.on, onYes: n.yes === "continue" ? nextId : null, onNo: n.no === "continue" ? nextId : null };
   });
   return { nodes: out, startNodeId: nodes.length ? "n0" : null };
@@ -50,31 +148,62 @@ function toGraph(nodes: BuilderNode[]) {
 
 // Convert a stored graph back into the flat builder node list for editing.
 function fromGraph(seq: unknown): BuilderNode[] {
-  if (Array.isArray(seq)) {
-    return seq.map((s) => ({ type: "send", channel: s.channel ?? "email", templateId: s.templateId ?? "", waitDays: s.waitDays ?? 0 } as SendNode));
-  }
-  const g = seq as { nodes?: { type: string; channel?: string; templateId?: string; waitDays?: number; on?: string; onYes?: string | null; onNo?: string | null }[] };
+  const asSend = (s: Record<string, unknown>): SendNode => ({
+    type: "send",
+    stepType: joinStepType(s.channel as string | undefined, s.linkedinAction as string | null | undefined),
+    templateId: (s.templateId as string) ?? "",
+    templateVersionId: (s.templateVersionId as string | null) ?? null,
+    storedAction: (s.linkedinAction as string | null) ?? null,
+    waitDays: (s.waitDays as number) ?? 0,
+  });
+
+  if (Array.isArray(seq)) return seq.map((s) => asSend(s));
+
+  const g = seq as { nodes?: Record<string, unknown>[] };
   if (!g?.nodes) return [newSend(0)];
   return g.nodes.map((n) => {
     if (n.type === "condition") {
-      return { type: "condition", on: (n.on ?? "replied") as CondNode["on"], yes: n.onYes ? "continue" : "stop", no: n.onNo ? "continue" : "stop" } as CondNode;
+      return {
+        type: "condition",
+        on: ((n.on as string) ?? "replied") as CondNode["on"],
+        yes: n.onYes ? "continue" : "stop",
+        no: n.onNo ? "continue" : "stop",
+      } as CondNode;
     }
-    return { type: "send", channel: n.channel ?? "email", templateId: n.templateId ?? "", waitDays: n.waitDays ?? 0 } as SendNode;
+    // Anything that is not a send or a condition is kept as-is rather than being
+    // flattened into a send, which is what used to happen to wait and exit.
+    if (n.type !== "send") return { type: "opaque", raw: n } as OpaqueNode;
+    return asSend(n);
   });
 }
 
 // Extract a flat display list from a stored sequence (graph or legacy array).
-function displayNodes(seq: unknown): { kind: string; channel?: string; waitDays?: number; on?: string }[] {
-  if (Array.isArray(seq)) return seq.map((s) => ({ kind: "send", channel: s.channel, waitDays: s.waitDays }));
-  const g = seq as { nodes?: { type: string; channel?: string; waitDays?: number; on?: string }[] };
-  if (g?.nodes) return g.nodes.map((n) => ({ kind: n.type, channel: n.channel, waitDays: n.waitDays, on: n.on }));
+function displayNodes(seq: unknown): { kind: string; stepType?: StepType; waitDays?: number; on?: string }[] {
+  const label = (s: Record<string, unknown>) =>
+    joinStepType(s.channel as string | undefined, s.linkedinAction as string | null | undefined);
+  if (Array.isArray(seq)) return seq.map((s) => ({ kind: "send", stepType: label(s), waitDays: s.waitDays }));
+  const g = seq as { nodes?: Record<string, unknown>[] };
+  if (g?.nodes)
+    return g.nodes.map((n) => ({
+      kind: n.type as string,
+      stepType: n.type === "send" ? label(n) : undefined,
+      waitDays: n.waitDays as number | undefined,
+      on: n.on as string | undefined,
+    }));
   return [];
 }
 
-const channelIcon = (channel?: string) => {
-  switch (channel) {
+/** Short label for a chip, where "LinkedIn" alone would not say which gesture. */
+const stepLabel = (stepType?: StepType) =>
+  stepType === "linkedin_invite" ? "invite"
+  : stepType === "linkedin_message" ? "LinkedIn DM"
+  : stepType ?? "";
+
+const channelIcon = (stepType?: StepType) => {
+  switch (stepType) {
     case "email": return <Mail className="h-5 w-5 text-accent" />;
-    case "linkedin": return <LinkIcon className="h-5 w-5 text-info" />;
+    case "linkedin_invite":
+    case "linkedin_message": return <LinkIcon className="h-5 w-5 text-info" />;
     case "whatsapp": return <MessageSquare className="h-5 w-5 text-success" />;
     default: return <Sparkles className="h-5 w-5 text-warning" />;
   }
@@ -85,6 +214,11 @@ export default function CampaignsPage() {
   const { data: templates = [] } = useSWR<Template[]>("/api/templates");
   const { data: sendingAccounts = [] } = useSWR<SendingAccount[]>("/api/sending-accounts");
   const { data: segments = [] } = useSWR<Segment[]>("/api/segments");
+  // Whether LinkedIn steps will actually run. Fetched here so the builder can say
+  // so while the sequence is being written, rather than letting steps queue up
+  // against an account that was never connected.
+  const { data: linkedinConn } = useSWR<{ account?: { state?: string } }>("/api/linkedin/connect");
+  const linkedinReady = linkedinConn ? linkedinConn.account?.state !== "disconnected" : undefined;
   const confirm = useConfirm();
 
   const [mode, setMode] = useState<"list" | "choose" | "build">("list");
@@ -113,10 +247,18 @@ export default function CampaignsPage() {
     setMode("build");
   }
 
+  /** Does this sequence actually send email? Only then is a mailbox required. */
+  const needsMailbox = nodes.some((n) => n.type === "send" && n.stepType === "email");
+
   async function save(e: React.FormEvent) {
     e.preventDefault();
     if (!name.trim()) return setMsg({ kind: "error", text: "Campaign name is required." });
-    if (!selectedAccount) return setMsg({ kind: "error", text: "Choose the mailbox this campaign sends from." });
+    // A mailbox is only needed if something in the sequence actually sends email.
+    // Requiring one on a LinkedIn-only campaign asked people to nominate an
+    // address that would never be used, and blocked the sequence until they did.
+    if (needsMailbox && !selectedAccount) {
+      return setMsg({ kind: "error", text: "Choose the mailbox the email steps send from." });
+    }
     setBusy(true); setMsg(null);
     try {
       const body = { name, sequence: toGraph(nodes), sendingAccountId: selectedAccount || null };
@@ -265,9 +407,13 @@ export default function CampaignsPage() {
                         <div className="pl-4">
                           <div className="mb-4 flex items-center justify-between">
                             <div className="flex items-center gap-2">
-                              {n.type === "send" ? channelIcon(n.channel) : <GitBranch className="h-5 w-5 text-warning" />}
+                              {n.type === "send" ? channelIcon(n.stepType) : n.type === "opaque" ? <Clock className="h-5 w-5 text-ink-soft" /> : <GitBranch className="h-5 w-5 text-warning" />}
                               <span className="font-display text-xs font-bold uppercase tracking-wide">
-                                {n.type === "send" ? `${n.channel} message` : "Condition"}
+                                {n.type === "send"
+                                  ? STEP_TYPES.find((s) => s.value === n.stepType)?.label ?? n.stepType
+                                  : n.type === "opaque"
+                                    ? String(n.raw.type)
+                                    : "Condition"}
                               </span>
                             </div>
                             <button type="button" onClick={() => setNodes((ns) => ns.filter((_, idx) => idx !== i))} className="rounded p-1 text-ink-soft transition hover:bg-danger-soft hover:text-danger">
@@ -285,23 +431,74 @@ export default function CampaignsPage() {
                               </div>
                               <div className="grid grid-cols-2 gap-2">
                                 <div>
-                                  <Label>Channel</Label>
-                                  <Select value={n.channel} onChange={(e) => patchNode(i, { channel: e.target.value, templateId: "" })}>
-                                    <option value="email">Email</option>
-                                    <option value="linkedin">LinkedIn</option>
-                                    <option value="whatsapp">WhatsApp</option>
-                                    <option value="social">Social</option>
+                                  <Label>Step</Label>
+                                  <Select
+                                    value={n.stepType}
+                                    onChange={(e) =>
+                                      patchNode(i, {
+                                        stepType: e.target.value as StepType,
+                                        templateId: "",
+                                        templateVersionId: null,
+                                        // The person has now said what they want, so the
+                                        // legacy "auto" no longer applies.
+                                        storedAction: null,
+                                      })
+                                    }
+                                  >
+                                    {STEP_TYPES.map((s) => (
+                                      <option key={s.value} value={s.value}>{s.label}</option>
+                                    ))}
                                   </Select>
                                 </div>
                                 <div>
                                   <Label>Template</Label>
-                                  <Select value={n.templateId} onChange={(e) => patchNode(i, { templateId: e.target.value })}>
+                                  <Select value={n.templateId} onChange={(e) => patchNode(i, { templateId: e.target.value, templateVersionId: null })}>
                                     <option value="">No template</option>
-                                    {templates.filter((t) => t.channel === n.channel).map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+                                    {templates
+                                      .filter((t) => t.channel === splitStepType(n.stepType).channel)
+                                      .map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
                                   </Select>
                                 </div>
                               </div>
+
+                              {STEP_TYPES.find((s) => s.value === n.stepType)?.hint && (
+                                <p className="text-xs text-ink-soft">{STEP_TYPES.find((s) => s.value === n.stepType)!.hint}</p>
+                              )}
+
+                              {/* The 300-character ceiling only exists on a connection
+                                  note, so the meter only appears on that step. It is
+                                  measured against the longest the variables could render
+                                  to, since a note that fits only when {{company}} is
+                                  empty is one that fails on a real lead. */}
+                              {n.stepType === "linkedin_invite" && (() => {
+                                const body = templates.find((t) => t.id === n.templateId)?.body ?? "";
+                                if (!body) return null;
+                                const len = worstCaseNoteLength(body);
+                                const over = len > INVITE_NOTE_MAX;
+                                return (
+                                  <p className={`text-xs ${over ? "text-danger" : len > INVITE_NOTE_WARN ? "text-warning" : "text-ink-soft"}`}>
+                                    About {len} of {INVITE_NOTE_MAX} characters once personalised
+                                    {over ? " — LinkedIn will refuse this. Shorten the template." : ""}
+                                  </p>
+                                );
+                              })()}
+
+                              {n.stepType.startsWith("linkedin_") && linkedinReady === false && (
+                                <p className="text-xs text-warning">
+                                  Your LinkedIn account isn&apos;t connected yet, so these steps will sit in the queue.{" "}
+                                  <Link href="/dashboard/linkedin" className="underline">Set it up</Link>.
+                                </p>
+                              )}
                             </div>
+                          ) : n.type === "opaque" ? (
+                            /* A step this builder cannot edit. Shown so it is
+                               visible and kept so saving does not rewrite it. */
+                            <p className="text-xs text-ink-soft">
+                              {n.raw.type === "exit"
+                                ? "Ends the sequence here."
+                                : `Waits ${String(n.raw.waitDays ?? 1)} day(s).`}{" "}
+                              Kept as it is — this builder can show it but not change it.
+                            </p>
                           ) : (
                             <div className="grid gap-3">
                               <div>
@@ -355,18 +552,28 @@ export default function CampaignsPage() {
                       <Label>Campaign title *</Label>
                       <Input required value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Q3 Sales Follow-up" />
                     </div>
-                    <div>
-                      <Label>Send from *</Label>
-                      <Select value={selectedAccount} onChange={(e) => setSelectedAccount(e.target.value)}>
-                        <option value="">Select a mailbox…</option>
-                        {sendingAccounts.map((acc) => <option key={acc.id} value={acc.id}>{acc.name} ({acc.email})</option>)}
-                      </Select>
-                      {sendingAccounts.length === 0 && (
-                        <p className="mt-1.5 text-xs text-danger">
-                          No mailbox connected. Campaigns can&apos;t send until you connect one in Sending accounts.
-                        </p>
-                      )}
-                    </div>
+                    {/* Only shown when the sequence actually contains an email
+                        step. A LinkedIn-only campaign has no use for a mailbox,
+                        and asking for one implied invites go out through it. */}
+                    {needsMailbox ? (
+                      <div>
+                        <Label>Send email from *</Label>
+                        <Select value={selectedAccount} onChange={(e) => setSelectedAccount(e.target.value)}>
+                          <option value="">Select a mailbox…</option>
+                          {sendingAccounts.map((acc) => <option key={acc.id} value={acc.id}>{acc.name} ({acc.email})</option>)}
+                        </Select>
+                        {sendingAccounts.length === 0 && (
+                          <p className="mt-1.5 text-xs text-danger">
+                            No mailbox connected. The email steps can&apos;t send until you connect one in Sending accounts.
+                          </p>
+                        )}
+                      </div>
+                    ) : (
+                      <p className="text-xs text-ink-soft">
+                        No mailbox needed — nothing here sends email. LinkedIn steps go out through your connected
+                        LinkedIn account.
+                      </p>
+                    )}
                   </div>
                 </Panel>
                 <div className="flex gap-2">
@@ -406,7 +613,7 @@ export default function CampaignsPage() {
                           <div key={i} className="flex items-center gap-1.5">
                             <div className="h-0.5 w-3 bg-line" />
                             <div className="flex items-center gap-1 rounded border border-line bg-surface px-2 py-1 font-mono text-[10px] font-medium">
-                              {s.kind === "condition" ? <><GitBranch className="h-3.5 w-3.5 text-warning" /><span>{s.on}?</span></> : s.kind === "exit" ? <><StopCircle className="h-3.5 w-3.5" /><span>exit</span></> : <>{channelIcon(s.channel)}<span>{s.channel}</span>{(s.waitDays ?? 0) > 0 && <span className="ml-0.5 font-bold text-accent">+{s.waitDays}d</span>}</>}
+                              {s.kind === "condition" ? <><GitBranch className="h-3.5 w-3.5 text-warning" /><span>{s.on}?</span></> : s.kind === "exit" ? <><StopCircle className="h-3.5 w-3.5" /><span>exit</span></> : <>{channelIcon(s.stepType)}<span>{stepLabel(s.stepType)}</span>{(s.waitDays ?? 0) > 0 && <span className="ml-0.5 font-bold text-accent">+{s.waitDays}d</span>}</>}
                             </div>
                           </div>
                         ))}

@@ -631,6 +631,8 @@ export async function getBoard(organizationId: string, pipelineId?: string, depa
  *  caller to their own department, same as getAgeing. */
 export async function getEscalations(organizationId: string, limit = 100, department?: Department) {
   const events = await prisma.escalationEvent.findMany({
+    // A department filter is inherently pipeline-scoped, so it must not also
+    // hide every task escalation — those have no pipeline to filter on.
     where: { organizationId, ...(department && { item: { pipeline: { department } } }) },
     orderBy: { sentAt: "desc" },
     take: limit,
@@ -641,6 +643,15 @@ export async function getEscalations(organizationId: string, limit = 100, depart
           lead: { select: { id: true, firstName: true, lastName: true, email: true } },
           stage: { select: { name: true } },
           pipeline: { select: { id: true, name: true, department: true } },
+        },
+      },
+      task: {
+        select: {
+          id: true,
+          title: true,
+          dueAt: true,
+          leadId: true,
+          lead: { select: { id: true, firstName: true, lastName: true, email: true } },
         },
       },
     },
@@ -659,6 +670,9 @@ export async function getEscalations(organizationId: string, limit = 100, depart
     meta: e.meta,
     to: e.toUserId ? userById.get(e.toUserId) ?? null : null,
     item: e.item,
+    task: e.task
+      ? { ...e.task, dueAt: e.task.dueAt ? e.task.dueAt.toISOString() : null }
+      : null,
   }));
 }
 

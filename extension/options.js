@@ -100,6 +100,19 @@ function collectCampaignSettings() {
 $("connect").addEventListener("click", async () => {
   const apiBase = $("apiBase").value.trim().replace(/\/$/, "");
   const token = $("token").value.trim();
+
+  // localhost is an optional permission, not a granted one — the Web Store
+  // rightly questions a published extension that can reach your own machine.
+  // Requesting it here keeps the prompt attached to a real click, which is the
+  // only context Chrome will allow it in.
+  if (/^https?:\/\/(localhost|127\.0\.0\.1):3000/i.test(apiBase)) {
+    const granted = await chrome.permissions.request({ origins: ["http://localhost:3000/*"] }).catch(() => false);
+    if (!granted) {
+      banner("Local development needs permission to reach localhost. Press Connect again and choose Allow.", "err");
+      return;
+    }
+  }
+
   await new Promise((r) => chrome.storage.local.set({ apiBase, token }, r));
   banner("Connected.", "ok");
   loadConfig();
@@ -143,7 +156,11 @@ $("run").addEventListener("click", async () => {
 
 (async function init() {
   const { apiBase, token } = await store();
-  $("apiBase").value = apiBase || "https://www.followthroo.com";
+  // The product host, not the marketing one. This defaulted to
+  // www.followthroo.com, which background.js explicitly rejects — so a fresh
+  // install that pressed Connect on the prefilled value got a permanent error
+  // telling it to use the address it should have been given in the first place.
+  $("apiBase").value = apiBase || "https://app.followthroo.com";
   $("token").value = token || "";
   loadConfig();
 })();

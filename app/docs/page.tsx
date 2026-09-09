@@ -23,7 +23,7 @@ export default function DocsPage() {
       <section className="bg-canvas pb-24">
         <div className="mx-auto grid max-w-6xl gap-4 px-6 sm:grid-cols-2 lg:grid-cols-4">
           {LINKS.map((l) => (
-            <Link key={l.title} href={l.href} className="group rounded-2xl border border-line bg-white p-6 transition-all hover:-translate-y-0.5 hover:shadow-md">
+            <Link key={l.title} href={l.href} className="group rounded-2xl border border-line bg-surface p-6 transition-all hover:-translate-y-0.5 hover:shadow-md">
               <l.icon className="h-6 w-6 text-ink" />
               <div className="font-display mt-4 text-lg font-bold">{l.title}</div>
               <p className="mt-1 text-sm text-ink-soft">{l.body}</p>

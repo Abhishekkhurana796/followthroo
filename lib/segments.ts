@@ -44,7 +44,3 @@ export async function resolveSegmentLeadIds(orgId: string, segmentId: string): P
   return leads.map((l) => l.id);
 }
 
-/** Count members of a segment (for UI badges). */
-export async function countSegment(orgId: string, segmentId: string): Promise<number> {
-  return (await resolveSegmentLeadIds(orgId, segmentId)).length;
-}

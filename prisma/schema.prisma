@@ -78,6 +78,23 @@ model Lead {
   timelineMentioned      Boolean?
   decisionMakerConfirmed Boolean?
 
+  // ---- ownership (who this contact belongs to) ----
+  // Raw userIds with no foreign key, matching the Task.ownerId / PipelineItem.ownerId
+  // convention: memberships are per-org and a person can be removed from one without
+  // their historical work needing to vanish.
+  //
+  // Before these existed, ownership had to be inferred at read time from the lead's
+  // open PipelineItem — fine for display, useless for a `where`, which is what a
+  // member-scoped view actually needs.
+  /// Assigned rep. Null means unassigned — a claimable pool, not hidden.
+  ownerId     String?
+  /// Who added the contact. Distinct from ownerId: importing 500 leads does not
+  /// make you the rep working all 500.
+  createdById String?
+  /// user | import | webhook | ai — so "you added this" and "IndiaMART sent this"
+  /// stay distinguishable in reporting.
+  createdKind String  @default("user")
+
   messages           Message[]
   activities         ActivityLog[]
   enrollments        Enrollment[]
@@ -94,6 +111,9 @@ model Lead {
   @@unique([organizationId, email])
   @@index([organizationId])
   @@index([organizationId, linkedinUrl])
+  // Drives the per-member lead scope (lib/scope.ts) without a table scan.
+  @@index([organizationId, ownerId])
+  @@index([organizationId, createdById])
   @@index([stage])
   @@index([optedOut])
 }
@@ -118,17 +138,52 @@ model Campaign {
 }
 
 model Template {
-  id             String   @id @default(uuid())
+  id             String    @id @default(uuid())
   organizationId String? // tenant scope
   channel        Channel
   name           String
+  /// The live copy. Kept on the row (rather than only on TemplateVersion) so
+  /// every existing read path — seeding, the campaign send, the list — keeps
+  /// working untouched; a version is a snapshot of these two fields.
   subject        String?
   body           String
-  variables      Json     @default("[]") // declared vars + required fallbacks
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  variables      Json      @default("[]") // declared vars + required fallbacks
+  createdById    String?
+  /// Soft delete. A hard delete would leave Message.templateId dangling, and
+  /// because processSendJob resolves the body at send time, a missing template
+  /// resolves to null and sends an EMPTY email rather than failing.
+  archivedAt     DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  versions TemplateVersion[]
 
   @@index([organizationId])
+  @@index([organizationId, archivedAt])
+}
+
+/// An immutable snapshot of a template's wording.
+///
+/// The reason this exists: lib/job-processor.ts resolves a template's body at
+/// the moment of sending, from templateId alone. So editing a template silently
+/// rewrote every unsent step of every in-flight sequence — someone mid-way
+/// through a five-touch campaign would receive touches 1-2 in the old wording
+/// and 3-5 in the new. A campaign step can now pin the version it was built
+/// with, which is what makes "apply to future campaigns only" mean anything.
+model TemplateVersion {
+  id          String   @id @default(uuid())
+  templateId  String
+  template    Template @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  /// 1-based, per template.
+  version     Int
+  subject     String?
+  body        String
+  variables   Json     @default("[]")
+  createdById String?
+  createdAt   DateTime @default(now())
+
+  @@unique([templateId, version])
+  @@index([templateId])
 }
 
 model Message {
@@ -142,6 +197,11 @@ model Message {
   renderedBody    String?
   status          MessageStatus @default(queued)
   providerId      String? // external message id (Twilio SID, SMTP id, …)
+  /// The RFC-822 Message-ID header we set on the way out, e.g.
+  /// "<uuid.orgId@sending.domain>". This is what makes a reply provably a reply:
+  /// an inbound mail whose In-Reply-To or References names it is answering THIS
+  /// message, on this campaign, rather than merely coming from the same address.
+  rfcMessageId    String?
   idempotencyKey  String        @unique
   sentAt          DateTime?
   createdAt       DateTime      @default(now())
@@ -152,6 +212,8 @@ model Message {
   @@index([organizationId])
   @@index([leadId])
   @@index([status])
+  // The reply poller looks messages up by header on every inbound mail.
+  @@index([organizationId, rfcMessageId])
 }
 
 model ActivityLog {
@@ -235,6 +297,8 @@ model User {
   tourVersion           Int? // TOUR_VERSION they finished; a bump re-offers the tour
   checklistState        Json? // { dismissedAt } — completion itself is always derived
   themePreference       String? // "light" | "dark" | "system"
+  notificationPrefs     Json? // { taskReminders, dailyDigest } — null = defaults on
+  lastDigestAt          DateTime? // guards the daily digest against double-sending
 
   @@map("user")
 }
@@ -415,6 +479,12 @@ model Invitation {
   expiresAt      DateTime
   inviterId      String
   inviter        User         @relation(fields: [inviterId], references: [id], onDelete: Cascade)
+  // better-auth's organization plugin writes this on every invite. Its absence
+  // made `prisma.invitation.create()` fail with "Unknown argument createdAt",
+  // surfacing as a bare 500 from /api/auth/organization/invite-member — the
+  // adapter passes the whole parsed object through, so a column it expects and
+  // we do not have is a hard failure, not a silently ignored field.
+  createdAt      DateTime     @default(now())
 
   @@map("invitation")
 }
@@ -501,6 +571,18 @@ model InboxMessage {
   subject           String?
   body              String?
   providerMessageId String? // Gmail message id / IMAP UID / SMTP id
+  /// RFC-822 threading headers, kept verbatim. providerMessageId above is the
+  /// provider's opaque id and is useless for correlation across mailboxes;
+  /// these are the ones every mail client actually threads on.
+  rfcMessageId      String?
+  inReplyTo         String?
+  references        String[] @default([])
+  /// How this message was tied to a campaign — see lib/inbox/store.ts.
+  /// header  = In-Reply-To/References matched a Message we sent (a real reply)
+  /// thread  = continues a thread we already know
+  /// address = the From address matched a contact, nothing more
+  /// none    = unmatched
+  matchKind         String   @default("none")
   sentAt            DateTime @default(now())
   createdAt         DateTime @default(now())
 
@@ -509,6 +591,7 @@ model InboxMessage {
   @@index([organizationId])
   @@index([threadId])
   @@index([providerMessageId])
+  @@index([organizationId, rfcMessageId])
 }
 
 // ---- LinkedIn: companion Chrome-extension automation (see docs/channels.md, extension/) ----
@@ -523,12 +606,41 @@ model LinkedInAccount {
   liMemberName        String? // display name the extension reports on check-in
   dailyInviteCap      Int       @default(20)
   dailyMessageCap     Int       @default(40)
+  /// Rows a rep may pull from LinkedIn in a day. 80 profile loads is the
+  /// community-safe ceiling (docs/phantombuster.md); reading a search results
+  /// page is far cheaper than loading 80 profiles, so this counts ROWS rather
+  /// than page loads and sits well above it.
+  dailyScrapeCap      Int       @default(500)
   minDelaySec         Int       @default(45) // humanized pacing floor
   maxDelaySec         Int       @default(120)
   mode                String    @default("auto") // auto | invite | message — default action type
+  /// Whether the extension clicks Send itself, or fills the box and waits.
+  ///
+  /// Off by default, deliberately: automated sending is against LinkedIn's User
+  /// Agreement and the consequence lands on the member's own account. It runs in
+  /// their own browser, on their own IP — not from our servers holding their
+  /// session, which is the shape that gets accounts restricted fastest — but it
+  /// is still their call to make rather than a default we make for them.
+  autoSend            Boolean   @default(false)
   selectedCampaignIds String[]  @default([]) // empty = drain all campaigns' LinkedIn actions
   campaignSettings    Json      @default("{}") // per-campaign override: { [campaignId]: { cap, minDelaySec, maxDelaySec, mode, enabled } }
   lastSeenAt          DateTime?
+
+  // ---- Official LinkedIn OAuth ----
+  // Sign In with LinkedIn (OpenID Connect) + Share on LinkedIn. This is the
+  // member's real, consented connection: LinkedIn tells us who they are and
+  // lets us post as them. It does NOT grant search, invites or messaging —
+  // no LinkedIn API tier sells those, which is why the extension still exists
+  // alongside this rather than being replaced by it. See lib/linkedin/oauth.ts.
+  liMemberId          String? // OIDC `sub` — LinkedIn's stable id for the person
+  liPictureUrl        String?
+  liEmail             String?
+  liAccessToken       String? // ENCRYPTED — lib/db-encryption.ts
+  liRefreshToken      String? // ENCRYPTED — partner-gated, usually absent
+  liTokenExpiresAt    DateTime? // 60 days from consent; no refresh for most apps
+  liScopes            String[]  @default([])
+  liConnectedAt       DateTime?
+
   createdAt           DateTime  @default(now())
   updatedAt           DateTime  @updatedAt
 
@@ -588,6 +700,52 @@ enum IdentityKind {
   external
 }
 
+/// A request to read something off LinkedIn, run by the rep's own browser.
+///
+/// PhantomBuster's equivalent takes a session cookie and runs on their servers.
+/// This carries no credential at all: the extension already IS the rep's logged-in
+/// session, so a job is just "open this URL and tell me what you see". Which is
+/// also why the queue is claim-based — the work happens on a machine we do not
+/// control and may stop at any moment.
+model LinkedInScrapeJob {
+  id             String  @id @default(uuid())
+  organizationId String
+  /// Whose LinkedIn session will run it. Results belong to them.
+  userId         String
+  /// search_export | profile_scrape | company_employees | … (lib/linkedin/detect.ts)
+  /// Derived from the URL rather than chosen, so this is recorded, not requested.
+  kind           String
+  /// The page to open, normalised (tracking params stripped, query kept).
+  inputUrl       String
+  /// What the person typed, when they searched by keyword rather than pasting.
+  inputQuery     String?
+  maxResults     Int     @default(100)
+
+  /// queued → running → done | failed | cancelled
+  status        String    @default("queued")
+  /// Rows seen so far, so a long scrape shows progress rather than a spinner.
+  progress      Int       @default(0)
+  resultCount   Int       @default(0)
+  /// Distinguishes "LinkedIn changed its markup" from "this search is empty" —
+  /// they look identical (zero rows) and need completely different responses.
+  failureKind   String?
+  error         String?
+  /// The scraped rows, pre-import. Reviewed before anything becomes a contact:
+  /// a wrong search URL should not put 2,000 wrong people in the database.
+  results       Json      @default("[]")
+  /// Set once the rep has chosen rows and imported them.
+  importedAt    DateTime?
+  importedCount Int       @default(0)
+
+  createdAt  DateTime  @default(now())
+  startedAt  DateTime?
+  finishedAt DateTime?
+
+  // The extension polls for its own next job; the UI lists recent ones.
+  @@index([organizationId, userId, status])
+  @@index([organizationId, createdAt])
+}
+
 /// ---- Identity graph -------------------------------------------------------
 /// Resolves a person across email, phone, LinkedIn handle and any future
 /// identifier onto ONE Lead. The unique constraint is what makes a second
@@ -640,7 +798,28 @@ model LeadSource {
   /// rather than a separate BI exercise.
   monthlyCost    Decimal? @db.Decimal(12, 2)
   active         Boolean  @default(true)
-  createdAt      DateTime @default(now())
+
+  // ---- auto-assignment (lib/assignment.ts) ----
+  // Which rep a contact from this source lands on. Lives here rather than in a
+  // separate rule table because one source has one rule — and Settings → Sources
+  // is already where people manage sources, so the rule sits with the thing it
+  // describes.
+  //
+  // manual      — leave unassigned (it shows in the Unassigned view)
+  // round_robin — rotate through the pool, cursor below
+  // workload    — fewest open contacts in the pool wins
+  // fixed       — always assignedToId
+  assignmentRule     String      @default("manual")
+  /// Only meaningful for `fixed`. A raw userId, matching Task.ownerId's
+  /// convention: memberships are per-org and change without the work moving.
+  assignedToId       String?
+  /// Which department's members form the pool. Null = the whole workspace.
+  assignmentDept     Department?
+  /// Round-robin cursor. Stored per source, so IndiaMART and Meta Ads each
+  /// rotate independently rather than fighting over one shared position.
+  lastAssignedUserId String?
+
+  createdAt DateTime @default(now())
 
   leads Lead[]
   items PipelineItem[]
@@ -745,20 +924,25 @@ model StageTransition {
 }
 
 model EscalationEvent {
-  id             String       @id @default(cuid())
+  id             String        @id @default(cuid())
   organizationId String
-  itemId         String
-  item           PipelineItem @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  /// Exactly one of itemId / taskId is set. Prisma cannot express that, so it is
+  /// enforced by the two callers that write here.
+  itemId         String?
+  item           PipelineItem? @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  taskId         String?
+  task           Task?         @relation(fields: [taskId], references: [id], onDelete: Cascade)
   /// 1 = owner, 2 = group leader, 3 = admin — follows the org hierarchy.
   level          Int
   toUserId       String?
   /// in_app | email | whatsapp | sms | push
-  channel        String       @default("in_app")
-  sentAt         DateTime     @default(now())
-  meta           Json         @default("{}")
+  channel        String        @default("in_app")
+  sentAt         DateTime      @default(now())
+  meta           Json          @default("{}")
 
   @@index([organizationId, sentAt])
   @@index([itemId])
+  @@index([taskId])
 }
 
 /// ---- Unified conversation -------------------------------------------------
@@ -801,6 +985,16 @@ enum TaskKind {
   other
 }
 
+/// Ordered low to high so `orderBy: { priority: "desc" }` sorts the way a human
+/// expects. `none` is the default because most tasks genuinely are not ranked,
+/// and a required priority just trains people to pick one at random.
+enum TaskPriority {
+  none
+  low
+  medium
+  high
+}
+
 enum TaskStatus {
   open
   done
@@ -808,31 +1002,76 @@ enum TaskStatus {
 }
 
 model Task {
-  id             String     @id @default(cuid())
+  id             String       @id @default(cuid())
   organizationId String
   /// Nullable so a standalone reminder is possible, but in practice every task
   /// created by the product hangs off a contact.
   leadId         String?
-  lead           Lead?      @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  lead           Lead?        @relation(fields: [leadId], references: [id], onDelete: Cascade)
   pipelineItemId String?
   title          String
-  kind           TaskKind   @default(follow_up)
-  status         TaskStatus @default(open)
+  /// Longer context for whoever picks this up — "what exactly do you want said".
+  /// Separate from Note, which is a human's words about the *contact*.
+  instruction    String?
+  kind           TaskKind     @default(follow_up)
+  priority       TaskPriority @default(none)
+  status         TaskStatus   @default(open)
   dueAt          DateTime?
   /// Assigned rep. Raw userId — memberships are per-org and may change.
   ownerId        String?
   createdBy      String?
   /// user | ai | system — so "we created this follow-up for you" stays visible
   /// rather than looking like something the rep forgot they typed.
-  createdKind    String     @default("user")
+  createdKind    String       @default("user")
   completedAt    DateTime?
-  createdAt      DateTime   @default(now())
-  updatedAt      DateTime   @updatedAt
+  /// The one nudge sent to the owner. Null-guarded so a retry cannot re-send.
+  remindedAt     DateTime?
+  /// The one escalation sent to the owner's manager — mirrors PipelineItem.slaBreachedAt.
+  escalatedAt    DateTime?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  escalations EscalationEvent[]
 
   // Drives the Today/Overdue/Upcoming buckets without a table scan.
   @@index([organizationId, status, dueAt])
   @@index([organizationId, ownerId, status])
+  // The reminder sweep runs across every org, so it needs an index that is not
+  // org-scoped.
+  @@index([status, dueAt])
   @@index([leadId])
+}
+
+/// In-app notifications.
+///
+/// Assigning work used to be silent: createTask wrote ownerId and returned, and
+/// the only thing that ever reached a person was a due-date reminder (which
+/// fires when it is already too late to plan) and the 8am digest. So work could
+/// sit on someone for days before they knew it existed.
+///
+/// Email alone was not enough either — it lands in the same inbox as the
+/// outreach the product sends, and the person is usually already in the app.
+model Notification {
+  id             String    @id @default(cuid())
+  organizationId String
+  /// Recipient. A raw userId, matching Task.ownerId's convention.
+  userId         String
+  /// task_assigned | lead_assigned | … — what happened, for grouping and icons.
+  kind           String
+  title          String
+  body           String?
+  /// Where clicking it goes.
+  href           String?
+  /// What it is about, so a stale notification can be resolved against reality.
+  entityType     String?
+  entityId       String?
+  /// Null until read. Nullable rather than a boolean so "when" is recoverable.
+  readAt         DateTime?
+  createdAt      DateTime  @default(now())
+
+  // Unread-first, newest-first, for one person — the only query the bell makes.
+  @@index([userId, readAt, createdAt])
+  @@index([organizationId])
 }
 
 /// A human's own words on a contact. Separate from ConversationEvent, which is

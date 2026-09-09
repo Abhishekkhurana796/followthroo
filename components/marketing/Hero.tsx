@@ -3,10 +3,8 @@
 import React, { useEffect, useRef } from "react";
 import Link from "next/link";
 import { ArrowRight, Mail, Linkedin, MessageCircle } from "lucide-react";
-import gsap from "gsap";
-import { ScrollTrigger } from "gsap/ScrollTrigger";
+import { gsap } from "./gsap";
 
-gsap.registerPlugin(ScrollTrigger);
 
 /**
  * Connection graph: three channel nodes thread into one lead node, with pulses
@@ -41,13 +39,13 @@ function ConnectionGraph() {
       {/* channel nodes */}
       {CHANNELS.map((c, i) => (
         <g key={`n${i}`} className="lk-node" transform={`translate(${c.from.x - 20} ${c.from.y - 20})`}>
-          <rect width="40" height="40" rx="12" fill="#fff" stroke={c.color} strokeWidth="2" />
+          <rect width="40" height="40" rx="12" fill="var(--color-surface)" stroke={c.color} strokeWidth="2" />
         </g>
       ))}
       {/* lead node */}
       <g className="lk-lead" transform={`translate(${LEAD.x - 26} ${LEAD.y - 26})`}>
         <rect width="52" height="52" rx="16" fill="var(--color-ink)" />
-        <text x="26" y="33" textAnchor="middle" fill="#fff" fontSize="20" fontFamily="var(--font-display)" fontWeight="700">
+        <text x="26" y="33" textAnchor="middle" fill="var(--color-ink-invert)" fontSize="20" fontFamily="var(--font-display)" fontWeight="700">
           JD
         </text>
       </g>
@@ -169,7 +167,7 @@ export default function Hero() {
             </div>
             <div className="mt-4 grid grid-cols-3 gap-2">
               {CHANNELS.map((c) => (
-                <div key={c.label} className="flex items-center gap-2 rounded-xl border border-line bg-white/70 px-3 py-2">
+                <div key={c.label} className="flex items-center gap-2 rounded-xl border border-line bg-surface/70 px-3 py-2">
                   <c.icon className="h-4 w-4" style={{ color: c.color }} />
                   <span className="text-xs font-medium">{c.label}</span>
                 </div>

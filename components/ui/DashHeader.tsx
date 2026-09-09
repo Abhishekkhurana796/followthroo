@@ -2,6 +2,8 @@
 
 import React from "react";
 
+import { NotificationBell } from "@/components/dashboard/NotificationBell";
+
 export function DashHeader({
   title,
   subtitle,
@@ -21,7 +23,13 @@ export function DashHeader({
         <h1 className="font-display text-2xl font-extrabold">{title}</h1>
         {subtitle && <p className="mt-1 text-sm text-ink-soft">{subtitle}</p>}
       </div>
-      {action}
+      {/* The bell lives here rather than in the sidebar: the rail is navigation,
+          and a notification count is not a destination. Every screen renders a
+          DashHeader, so putting it here makes it global without adding a row. */}
+      <div className="flex items-center gap-2">
+        {action}
+        <NotificationBell />
+      </div>
     </div>
   );
 }

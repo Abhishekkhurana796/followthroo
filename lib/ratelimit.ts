@@ -46,43 +46,6 @@ export interface Quota {
 }
 
 /**
- * Generic sliding-window counter. Callers that aren't a (channel, account) pair
- * use this directly — notably the domain registrar, whose quota is 60/minute
- * against ONE credential shared by every tenant, so its key must be global
- * rather than org-scoped (see lib/domains/godaddy.ts).
- */
-export async function acquireWindow(key: string, limit: number, windowMs: number): Promise<Quota> {
-  const now = Date.now();
-
-  const r = await getRedis();
-  if (r) {
-    // Sorted-set sliding window
-    const cutoff = now - windowMs;
-    await r.zremrangebyscore(key, 0, cutoff);
-    const count = await r.zcard(key);
-    if (count >= limit) {
-      const oldest = await r.zrange(key, 0, 0, "WITHSCORES");
-      const retryAfterMs = oldest.length ? Number(oldest[1]) + windowMs - now : windowMs;
-      return { ok: false, remaining: 0, retryAfterMs: Math.max(retryAfterMs, 0) };
-    }
-    await r.zadd(key, now, `${now}-${Math.random()}`);
-    await r.pexpire(key, windowMs);
-    return { ok: true, remaining: limit - count - 1, retryAfterMs: 0 };
-  }
-
-  // In-memory fallback
-  const arr = (memory.get(key) ?? []).filter((t) => t > now - windowMs);
-  if (arr.length >= limit) {
-    const retryAfterMs = arr[0] + windowMs - now;
-    memory.set(key, arr);
-    return { ok: false, remaining: 0, retryAfterMs: Math.max(retryAfterMs, 0) };
-  }
-  arr.push(now);
-  memory.set(key, arr);
-  return { ok: true, remaining: limit - arr.length, retryAfterMs: 0 };
-}
-
-/**
  * Try to consume one unit of quota for (channel, account).
  * Returns { ok, remaining, retryAfterMs }.
  */
@@ -129,4 +92,3 @@ export function jitterMs(minMs = 30_000, maxMs = 90_000): number {
   return Math.floor(minMs + Math.random() * (maxMs - minMs));
 }
 
-export const sleep = (ms: number) => new Promise((res) => setTimeout(res, ms));

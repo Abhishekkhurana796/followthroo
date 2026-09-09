@@ -1,7 +1,10 @@
 import { betterAuth } from "better-auth";
 import { prismaAdapter } from "better-auth/adapters/prisma";
-import { organization } from "better-auth/plugins";
+import { organization, genericOAuth } from "better-auth/plugins";
+import { ac, orgRoles } from "./access-control";
 import { prisma } from "./db";
+import { sendSystemEmail } from "./channels/email";
+import { roleLabel } from "./roles";
 
 /**
  * better-auth — email/password + "Sign in with Google" social login.
@@ -11,6 +14,18 @@ import { prisma } from "./db";
  * — distinct from the gmail.send sending-account flow at /api/auth/google/callback.
  */
 const googleConfigured = !!(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET);
+
+/**
+ * "Sign in with Zoho". better-auth has no built-in Zoho provider, so this rides
+ * the genericOAuth plugin — its callback is {baseURL}/oauth2/callback/zoho,
+ * which is the redirect URI registered in the Zoho API console.
+ *
+ * Zoho is region-partitioned (see lib/zoho.ts): an Indian account's tokens are
+ * only valid against .in endpoints. ZOHO_DC picks the region these sign-in
+ * endpoints point at, defaulting to India.
+ */
+const zohoConfigured = !!(process.env.ZOHO_CLIENT_ID && process.env.ZOHO_CLIENT_SECRET);
+const zohoDc = process.env.ZOHO_DC || "in";
 
 const baseUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
 
@@ -104,12 +119,73 @@ export const auth = betterAuth({
     },
   },
   plugins: [
+    ...(zohoConfigured
+      ? [
+          genericOAuth({
+            config: [
+              {
+                providerId: "zoho",
+                clientId: process.env.ZOHO_CLIENT_ID!,
+                clientSecret: process.env.ZOHO_CLIENT_SECRET!,
+                authorizationUrl: `https://accounts.zoho.${zohoDc}/oauth/v2/auth`,
+                tokenUrl: `https://accounts.zoho.${zohoDc}/oauth/v2/token`,
+                userInfoUrl: `https://accounts.zoho.${zohoDc}/oauth/user/info`,
+                // Identity only. Permission to SEND as this person is a separate,
+                // later consent (/api/auth/zoho/start) — asking for mail access
+                // just to sign up would be the wrong trade for a new user.
+                scopes: ["email", "profile", "AaaServer.profile.READ"],
+                authorizationUrlParams: { access_type: "offline", prompt: "consent" },
+                mapProfileToUser: (profile: Record<string, unknown>) => ({
+                  email: String(profile.Email ?? profile.email ?? ""),
+                  name: String(profile.Display_Name ?? profile.displayName ?? profile.First_Name ?? ""),
+                }),
+              },
+            ],
+          }),
+        ]
+      : []),
     organization({
-      // Invitations are created and surfaced in the Team settings UI with a shareable
-      // accept link. Wire a real transactional email sender here later.
+      /**
+       * better-auth validates every invite and role change against the roles it
+       * knows about, which by default are owner/admin/member only. `group_leader`
+       * is a fourth value on the same column, so without registering it here the
+       * plugin threw "Role not found: group_leader" at runtime — while the Team
+       * screen happily offered it in both dropdowns and an `as any` cast kept the
+       * type checker quiet. Selecting Manager simply failed.
+       *
+       * A group leader gets a member's permissions plus the ability to invite,
+       * which is what running a department actually requires.
+       */
+      ac,
+      roles: orgRoles,
+
       async sendInvitationEmail(data) {
-        const url = `${process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000"}/accept-invitation/${data.id}`;
-        console.log(`[auth] invitation for ${data.email} to org ${data.organization.name}: ${url}`);
+        const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
+        const url = `${appUrl}/accept-invitation/${data.id}`;
+        const org = data.organization.name;
+        const inviter = data.inviter?.user?.name || data.inviter?.user?.email || "A teammate";
+        const role = roleLabel(data.role ?? "member");
+
+        const sent = await sendSystemEmail(
+          data.email,
+          `${inviter} invited you to ${org} on Followthroo`,
+          `You've been invited to Followthroo
+
+` +
+            `${inviter} has invited you to join ${org}'s outreach workspace as a ${role}.
+
+` +
+            `Accept the invitation: ${url}
+
+` +
+            `If you weren't expecting this, you can ignore this email — the invitation ` +
+            `expires on its own and nothing happens until you accept it.`
+        );
+
+        // The Team screen still shows a copy-link button, which is the fallback
+        // when mail is not configured or the address bounces. Log either way so a
+        // failed invite is diagnosable rather than invisible.
+        if (!sent) console.warn(`[auth] invitation email not sent to ${data.email}; share the link instead: ${url}`);
       },
     }),
   ],
