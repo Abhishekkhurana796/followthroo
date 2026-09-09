@@ -161,11 +161,15 @@ function observe() {
     if (closestDeep(el, 'header, nav, footer, [role="banner"], [role="navigation"], .global-nav, #global-nav')) {
       return true;
     }
+    // Never interact with activity feed posts, comments, or post links
+    if (closestDeep(el, '[data-view-name*="feed"], [data-view-name*="activity"], [data-view-name*="post"], .feed-shared-update-v2, .profile-creator-shared-feed-update__container, #content_collections_base_feed')) {
+      return true;
+    }
+    const href = el.getAttribute("href") || closestDeep(el, "a")?.getAttribute("href") || "";
+    if (href.includes("/feed/update/") || href.includes("/posts/") || href.includes("/recent-activity/")) {
+      return true;
+    }
     const t = (el.getAttribute("aria-label") || el.textContent || "").trim();
-    // The activity feed further down a profile contributes a control menu, a
-    // reaction button and a repost button per post, which crowded the list with
-    // a dozen "Open control menu for post by …" entries and pushed the action
-    // row out of sight. None of it can send an invitation.
     return (
       /^skip to |^close jump menu/i.test(t) ||
       /^open control menu for post|^reaction button|^open reactions menu|^repost |^…\s*more$|^see more$/i.test(t)
@@ -348,12 +352,28 @@ function observe() {
     return dy >= -80 && dy <= 320 && r.left >= nameBox.left - 80 && r.left <= nameBox.left + 520;
   };
 
-  const ownsAction = (el) => {
+  /**
+   * Strong ownership: the element is the profile's own by evidence that does not
+   * depend on where the viewport happens to be scrolled — it is inside the top
+   * card, or under a heading that is the person's name. This is what a caller
+   * should act on.
+   */
+  const ownStrongOf = (el) => {
     if (el.closest("aside") || recommendation(el)) return false;
     if (topCard && topCard.contains(el)) return true;
     const sec = norm(sectionOf(el));
-    if (sec && personName && (sec.includes(personName) || personName.includes(sec))) return true;
-    return nearTheName(el);
+    return !!(sec && personName && (sec.includes(personName) || personName.includes(sec)));
+  };
+
+  /**
+   * Weak ownership: geometry. Useful as a tiebreak and as a hint to the model,
+   * but on its own it will happily claim the sticky action bar that rides at the
+   * top of the page — so a caller choosing what to click must not rely on it
+   * alone. Kept out of `ownStrong` for exactly that reason.
+   */
+  const ownsAction = (el) => {
+    if (el.closest("aside") || recommendation(el)) return false;
+    return ownStrongOf(el) || nearTheName(el);
   };
 
   /**
@@ -380,7 +400,8 @@ function observe() {
     el.setAttribute("data-ft-idx", String(idx));
     // Stamped on the element itself so text resolution can prefer the profile's
     // own action row without recomputing which container that is.
-    const own = ownsAction(el);
+    const strong = ownStrongOf(el);
+    const own = strong || ownsAction(el);
     if (own) el.setAttribute("data-ft-top", "1");
     else el.removeAttribute("data-ft-top");
     const r = el.getBoundingClientRect();
@@ -400,9 +421,12 @@ function observe() {
           el,
           '[role="dialog"], [aria-modal="true"], .artdeco-modal, .artdeco-modal-overlay, #artdeco-modal-outlet, .send-invite, [data-view-name*="modal"], [data-view-name*="invite"], div[data-artdeco-is-focused="true"]',
         ) || /without a note|add a note/i.test(l),
-      inAside: !!closestDeep(el, "aside"),
+      inAside: !!closestDeep(el, "aside") || recommendation(el),
       // The three that disambiguate two identical "More" buttons.
       inTopCard: own,
+      // Owned by evidence that survives scrolling — what a deterministic caller
+      // acts on, as opposed to `inTopCard` which also includes geometry.
+      ownStrong: strong,
       section: sectionOf(el),
       y: Math.round(r.top + window.scrollY),
     });
@@ -702,6 +726,16 @@ function act({ decision, expectedName, forbiddenSource, goal, autoSend }) {
 
     const topCardEls = outside.filter((el) => el.getAttribute("data-ft-top") === "1");
     if (topCardEls.length) return { el: topCardEls[0] };
+
+    // For "More", prioritize the button in the profile's top card containing the h1 heading
+    if (/^more\b|more actions/i.test(want)) {
+      const topCardMore = outside.find((el) => {
+        const sec = closestDeep(el, '.pv-top-card, main section, [data-view-name*="profile"], header');
+        return sec && sec.querySelector('h1');
+      });
+      if (topCardMore) return { el: topCardMore };
+    }
+
     if (outside.length === 1) return { el: outside[0] };
 
     const where = outside
@@ -811,6 +845,13 @@ function act({ decision, expectedName, forbiddenSource, goal, autoSend }) {
   if (closestDeep(el, "aside")) return { ok: false, error: `refused: "${label}" is in the sidebar` };
   if (recommendation(el)) {
     return { ok: false, error: `refused: "${label}" is on somebody else's card, not this profile's` };
+  }
+  const href = el.getAttribute("href") || closestDeep(el, "a")?.getAttribute("href") || "";
+  if (href.includes("/feed/update/") || href.includes("/posts/") || href.includes("/recent-activity/")) {
+    return { ok: false, error: `refused: "${label}" is an activity post link` };
+  }
+  if (closestDeep(el, '[data-view-name*="feed"], .feed-shared-update-v2, #content_collections_base_feed')) {
+    return { ok: false, error: `refused: "${label}" is in the activity feed, not the profile action row` };
   }
   if (closestDeep(el, "[data-followthroo-overlay]")) return { ok: false, error: "refused: that is our own banner" };
   if (FORBIDDEN_RE.test(label)) return { ok: false, error: `refused: "${label}" is destructive` };

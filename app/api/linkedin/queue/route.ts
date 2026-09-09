@@ -91,6 +91,10 @@ const Report = z.object({
   // own Send click — reported so the queue's daily cap and stale-reclaim both see it.
   status: z.enum(["sent", "failed", "skipped", "drafted"]),
   result: z.string().optional(),
+  // A machine-readable reason from the desktop app (outcome-codes.js). Optional
+  // and additive — stored in activity metadata, nothing branches on it yet, so a
+  // client that omits it or sends an unknown one is handled the same as today.
+  code: z.string().max(64).optional(),
   liMemberName: z.string().optional(),
 });
 

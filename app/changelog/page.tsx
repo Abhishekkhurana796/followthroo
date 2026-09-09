@@ -9,6 +9,17 @@ export const metadata = { title: "Changelog — Followthroo" };
  */
 const ENTRIES = [
   {
+    version: "0.16.0",
+    date: "Sep 2026",
+    items: [
+      "Connection requests are now sent by a fixed, predictable procedure rather than left to the assistant to work out click by click. The app already knows which Connect button is the person’s own; from there, opening it, adding the note and pressing Send is not a judgement call, so it is no longer made as one. The assistant is kept in reserve for a profile laid out in a way the procedure does not recognise—and only before anything has been clicked, so a handover can never turn into a second invitation",
+      "It will not stand in for Connect with something else. If it cannot find the person’s own Connect—on the card or inside their “More” menu—it stops and says so. Follow is never pressed in its place, a stranger’s Connect is never pressed, and when two Connect buttons cannot be told apart it refuses rather than guess",
+      "An invitation counts as sent only when the page confirms it—the button turning to “Pending” or a “sent” notice appearing. Pressing Send and hoping is not enough: if the page does not confirm, the run reports that plainly instead of recording a request that may never have gone",
+      "Every outcome now carries a specific reason—already connected, invitation pending, no Connect found, could not confirm the send, wrong profile—so the record shows what actually happened rather than a bare “failed”",
+      "Removed a set of shortcuts that could press Connect or Send by matching the word alone, sidestepping the checks that keep an invitation off the wrong person. Every click, including inside the menu and the send dialog, now goes through those checks",
+    ],
+  },
+  {
     version: "0.15.0",
     date: "Sep 2026",
     items: [

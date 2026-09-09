@@ -17,6 +17,7 @@
  * failed action and nothing more.
  */
 const { observe, act, FORBIDDEN } = require("./pilot-page");
+const { CODES } = require("./outcome-codes");
 
 const MAX_STEPS = 8;
 /**
@@ -118,7 +119,7 @@ async function pilotAction({ page, action, apiBase, token, onStep = () => {}, us
   }
 
   if (seen.signedOut) {
-    return { status: "failed", result: "not logged in to LinkedIn in this browser", fatal: "login" };
+    return { status: "failed", code: CODES.LINKEDIN_SESSION_INVALID, result: "not logged in to LinkedIn in this browser", fatal: "login" };
   }
 
   // The identity guard, unchanged and non-negotiable: a renamed vanity URL or a
@@ -128,6 +129,7 @@ async function pilotAction({ page, action, apiBase, token, onStep = () => {}, us
   if (wantSlug && haveSlug && decodeURIComponent(wantSlug) !== decodeURIComponent(haveSlug)) {
     return {
       status: "failed",
+      code: CODES.TARGET_PROFILE_MISMATCH,
       result: `landed on /in/${haveSlug} but this action is for /in/${wantSlug} — not acting on the wrong profile`,
     };
   }
@@ -135,21 +137,29 @@ async function pilotAction({ page, action, apiBase, token, onStep = () => {}, us
   // Decided here rather than by the model: it is a fact on the page, and an
   // explicit invitation to an existing connection has nothing to do.
   if (goal === "invite" && seen.firstDegree) {
-    return { status: "skipped", result: "already connected — no invitation to send" };
+    return { status: "skipped", code: CODES.ALREADY_CONNECTED, result: "already connected — no invitation to send" };
   }
 
   // Somebody already invited them and it has not been accepted yet. Sending a
   // second one is not possible and would not be wanted.
   if (goal === "invite" && seen.pending) {
-    return { status: "skipped", result: "an invitation to this person is already pending" };
+    return { status: "skipped", code: CODES.INVITATION_PENDING, result: "an invitation to this person is already pending" };
   }
 
   let sawScreenshot = false;
   let forceScreenshot = false;
 
   for (let step = 0; step < MAX_STEPS; step++) {
+    // If the browser was navigated away from the profile (e.g. into an activity post), return immediately
+    const currentUrl = page.url();
+    if (!currentUrl.includes("/in/")) {
+      await page.goto(action.linkedinUrl, { waitUntil: "domcontentloaded" });
+      await sleep(1500);
+      seen = await page.evaluate(observe);
+    }
+
     if (seen.limitWall) {
-      return { status: "failed", result: seen.limitWall, fatal: "limit" };
+      return { status: "failed", code: CODES.LINKEDIN_LIMIT_REACHED, result: seen.limitWall, fatal: "limit" };
     }
 
     const wantShot = forceScreenshot || step >= SCREENSHOT_AFTER_STEP;
@@ -197,7 +207,7 @@ async function pilotAction({ page, action, apiBase, token, onStep = () => {}, us
     if (decision.action === "give_up") {
       const why = String(decision.reason || "").toLowerCase();
       if (/already connected/.test(why)) {
-        return { status: "skipped", result: "already connected — no invitation to send" };
+        return { status: "skipped", code: CODES.ALREADY_CONNECTED, result: "already connected — no invitation to send" };
       }
       // "No Connect button" is not a conclusion until the overflow menu has been
       // opened. On a follow-primary profile Connect is only in that menu, and
@@ -235,7 +245,7 @@ async function pilotAction({ page, action, apiBase, token, onStep = () => {}, us
       // invitation did not go, and recording a send that did not happen moves
       // the lead to contacted and lets a sequence follow up on silence.
       const after = await page.evaluate(observe);
-      if (after.limitWall) return { status: "failed", result: after.limitWall, fatal: "limit" };
+      if (after.limitWall) return { status: "failed", code: CODES.LINKEDIN_LIMIT_REACHED, result: after.limitWall, fatal: "limit" };
 
       // "done" is a claim, not evidence. A model that answers done on the first
       // step without touching anything would otherwise be recorded as a sent
@@ -245,6 +255,7 @@ async function pilotAction({ page, action, apiBase, token, onStep = () => {}, us
       if (goal === "invite" && !history.some((h) => /clicked "(invite|connect|send)/i.test(h))) {
         return {
           status: "failed",
+          code: CODES.INVITATION_SUBMISSION_UNCONFIRMED,
           result: "the assistant said it was done without ever clicking Connect — nothing was sent",
         };
       }
@@ -252,14 +263,16 @@ async function pilotAction({ page, action, apiBase, token, onStep = () => {}, us
       if (goal === "invite" && after.dialogOpen) {
         return {
           status: "failed",
+          code: CODES.INVITATION_SUBMISSION_UNCONFIRMED,
           result: "the assistant said it was done, but the invite dialog is still open — treating as not sent",
         };
       }
       if (!autoSend) {
-        return { status: "drafted", result: "filled in and left for you to send", kind: goal };
+        return { status: "drafted", code: null, result: "filled in and left for you to send", kind: goal };
       }
       return {
         status: "sent",
+        code: CODES.INVITATION_SUBMITTED,
         result: goal === "invite" ? "invitation sent" : "message sent",
         kind: goal,
         // Only a note that was actually typed spends the day's allowance.
@@ -270,7 +283,7 @@ async function pilotAction({ page, action, apiBase, token, onStep = () => {}, us
     // `act` is passed by reference so Playwright serializes its source into the
     // page. An arrow function calling act() would not work: act does not exist
     // in the page, only here.
-    let outcome = await page.evaluate(act, {
+    const outcome = await page.evaluate(act, {
       decision,
       expectedName: seen.personName,
       forbiddenSource: FORBIDDEN.source,
@@ -278,125 +291,6 @@ async function pilotAction({ page, action, apiBase, token, onStep = () => {}, us
       // Not advice. With this false, act() refuses anything that would send.
       autoSend,
     });
-
-    // PLAYWRIGHT NATIVE RESCUE:
-    // If the in-page evaluate could not find the element or refused due to overlay/shadow-DOM encapsulation,
-    // and the requested action is a legitimate invitation workflow step (Send without a note, Add a note, Send now),
-    // we use Playwright's native CDP locator engine. Playwright locators automatically pierce shadow roots,
-    // bypass overlay backdrops, and perform trusted OS-level clicks.
-    if (!outcome.ok && decision.action === "click" && autoSend) {
-      const lbl = String(decision.label || "").toLowerCase();
-      const rsn = String(decision.reason || "").toLowerCase();
-      const chosenEl = decision.index !== undefined && seen.elements ? seen.elements.find((e) => e.i === decision.index) : null;
-      const combined = [lbl, rsn, chosenEl ? chosenEl.label : ""].join(" ").toLowerCase();
-
-      // Case A: "Send without a note"
-      if (/without a note/i.test(combined) || (!outcome.ok && !useNote && /send/i.test(combined))) {
-        const locators = [
-          page.locator('button:has-text("Send without a note")'),
-          page.locator('button[aria-label*="without a note" i]'),
-          page.getByRole('button', { name: /send without a note/i }),
-          page.locator('.artdeco-modal button.artdeco-button--primary'),
-          page.locator('[role="dialog"] button.artdeco-button--primary'),
-          page.locator('div[role="dialog"] button:has-text("Send")'),
-          page.locator('#artdeco-modal-outlet button.artdeco-button--primary'),
-        ];
-        for (const loc of locators) {
-          const target = loc.first();
-          if (await target.isVisible({ timeout: 1200 }).catch(() => false)) {
-            await target.scrollIntoViewIfNeeded().catch(() => {});
-            await sleep(100);
-            try {
-              await target.click({ timeout: 2500 });
-            } catch (_) {
-              await target.click({ timeout: 2000, force: true }).catch(() => {});
-            }
-            outcome = {
-              ok: true,
-              action: "click",
-              did: 'clicked "Send without a note"',
-              rescued: true,
-            };
-            break;
-          }
-        }
-      }
-
-      // Case B: "Add a note"
-      if (!outcome.ok && /add a note/i.test(combined)) {
-        const locators = [
-          page.locator('button:has-text("Add a note")'),
-          page.locator('button[aria-label*="add a note" i]'),
-          page.getByRole('button', { name: /add a note/i }),
-          page.locator('.artdeco-modal button.artdeco-button--secondary'),
-          page.locator('[role="dialog"] button.artdeco-button--secondary'),
-        ];
-        for (const loc of locators) {
-          const target = loc.first();
-          if (await target.isVisible({ timeout: 1200 }).catch(() => false)) {
-            await target.scrollIntoViewIfNeeded().catch(() => {});
-            await sleep(100);
-            try {
-              await target.click({ timeout: 2500 });
-            } catch (_) {
-              await target.click({ timeout: 2000, force: true }).catch(() => {});
-            }
-            outcome = {
-              ok: true,
-              action: "click",
-              did: 'clicked "Add a note"',
-              rescued: true,
-            };
-            break;
-          }
-        }
-      }
-
-      // Case C: "Send" / "Send now" / "Send invitation"
-      if (!outcome.ok && (/send( now| invitation)?/i.test(combined) || /^send\b/i.test(combined) || /click.*send\b/i.test(combined))) {
-        const locators = [
-          page.locator('button:has-text("Send now")'),
-          page.locator('button:has-text("Send invitation")'),
-          page.locator('button:has-text("Send")'),
-          page.locator('.artdeco-modal button.artdeco-button--primary'),
-          page.locator('[role="dialog"] button.artdeco-button--primary'),
-        ];
-        for (const loc of locators) {
-          const target = loc.first();
-          if (await target.isVisible({ timeout: 1200 }).catch(() => false)) {
-            await target.scrollIntoViewIfNeeded().catch(() => {});
-            await sleep(100);
-            try {
-              await target.click({ timeout: 2500 });
-            } catch (_) {
-              await target.click({ timeout: 2000, force: true }).catch(() => {});
-            }
-            outcome = {
-              ok: true,
-              action: "click",
-              did: 'clicked "Send"',
-              rescued: true,
-            };
-            break;
-          }
-        }
-      }
-    }
-
-    if (!outcome.ok && decision.action === "type") {
-      const textarea = page.locator(
-        'textarea#custom-message, textarea[name="message"], .artdeco-modal textarea, [role="dialog"] textarea'
-      ).first();
-      if (await textarea.isVisible({ timeout: 1200 }).catch(() => false)) {
-        await textarea.fill(String(decision.text ?? ""));
-        outcome = {
-          ok: true,
-          action: "type",
-          did: `typed note (${String(decision.text ?? "").length} chars)`,
-          rescued: true,
-        };
-      }
-    }
 
     if (!outcome.ok) {
       // A refusal is worth recording in history: it stops the model proposing
@@ -408,7 +302,7 @@ async function pilotAction({ page, action, apiBase, token, onStep = () => {}, us
       }
     } else {
       // Execute the click using Playwright's native trusted mouse input pipeline if not already clicked by rescue.
-      if (outcome.action === "click" && !outcome.rescued) {
+      if (outcome.action === "click") {
         let clicked = false;
         if (outcome.selector) {
           try {
@@ -459,6 +353,7 @@ async function pilotAction({ page, action, apiBase, token, onStep = () => {}, us
     ) {
       return {
         status: "sent",
+        code: CODES.INVITATION_SUBMITTED,
         result: "invitation sent",
         kind: "invite",
         noteUsed: history.some((h) => /^typed/.test(h)),

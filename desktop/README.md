@@ -127,23 +127,51 @@ at all. So the marker was false for every element of every run, nothing could be
 attributed, and the app spent four releases reporting that it could see Connect
 and was refusing to press it.
 
-There are two signals now, and either is enough:
+Attribution has three signals, ranked. `observe()` exposes two markers:
+`ownStrong` (the first two) and `inTopCard` (all three):
 
-- **the card**, climbing from the `<h1>` with no depth limit and testing against
-  the candidate list that already includes unlabelled spans, stopping before
-  `<main>` — `<main>` also holds "More profiles for you";
+- **the card** — climb from the `<h1>` with no depth limit, testing against the
+  candidate list that already includes unlabelled spans, stopping before `<main>`
+  (`<main>` also holds "More profiles for you"); *strong*.
 - **the heading** each control sits under, compared against the profile owner's
-  name. This is the one that survives LinkedIn re-nesting things.
+  name — the one that survives LinkedIn re-nesting things; *strong*.
+- **geometry** — the action row sits just under the name, in the same column;
+  *weak*, because a short window puts the sticky top bar right under the name too.
 
-Sections that recommend other people are excluded from both, which is what stops
-"Others named <owner>" — whose heading *is* the owner's name — from qualifying.
-That exclusion also runs after resolution, so it covers a decision given as screen
-coordinates; that path never went through the text resolver and so was never
-checked, and the strangers' spans carry no name for the name check to read.
+Sections that recommend other people are excluded from all three, which is what
+stops "Others named <owner>" — whose heading *is* the owner's name — from
+qualifying. The exclusion also runs after resolution, so it covers a decision
+given as screen coordinates.
 
-With no evidence either way the answer is still a refusal, not a guess. The
-refusal now names the candidates and says to answer with an index or a point, so
-one dead-end suggestion repeated three times no longer ends the action.
+## The deterministic driver
+
+Choosing what to click is not a judgement call once attribution exists, so it is
+not made as one. `connect-flow.js`'s `sendConnectionRequest` drives the whole
+invite — find the profile's own Connect (by `ownStrong`, **not** the weaker
+`inTopCard`, so the sticky bar can never be mistaken for the action row), open it,
+add the note, Send, and confirm — clicking each control **by index through
+`act()`**, which still refuses the sidebar, a stranger, a destructive label,
+Follow-for-an-invite, and any Send during a test run.
+
+Dialog buttons are resolved by index from the observed list, never by their
+words: LinkedIn's invite modal is a `<div>` whose text *contains* "Send without a
+note" and "Add a note", so a text search lands on the container and clicks a dead
+element. The element list carries each button with its own label, which the word
+does not.
+
+The model (`pilot.js`) stays as the fallback for a layout the driver does not
+recognise — but only *before* any click, so a hand-off can never become a second
+invitation. Messages still go through the model. Every outcome carries a
+machine-readable `code` (`outcome-codes.js`) alongside the human `result`:
+`CONNECT_BUTTON_NOT_FOUND`, `CONNECT_BUTTON_AMBIGUOUS`,
+`INVITATION_SUBMISSION_UNCONFIRMED`, `TARGET_PROFILE_MISMATCH`, and the rest. A
+send counts only when the page confirms it — the button turning to "Pending" or a
+"sent" toast — never because Send was clicked.
+
+`scripts/verify-connect-flow.ts` exercises the nine cases: one Connect, two with
+one attributed, two with none (refuse), Follow-only (never Follow), Connect in the
+More menu, wrong profile, dialog-without-Send, Send-without-confirmation, and
+automatic-sending-off.
 
 ## When a run stops
 

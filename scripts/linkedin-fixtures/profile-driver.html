@@ -1,0 +1,209 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Fixture — the deterministic connection driver</title>
+<style>
+  .ft-clickable { cursor: pointer; }
+  svg { width: 16px; height: 16px; }
+  #sticky { position: sticky; top: 0; }
+</style>
+</head>
+<body>
+<!--
+  Drives scripts/verify-connect-flow.ts. Every variant is one profile shape the
+  deterministic driver in desktop/connect-flow.js has to get right, and "sent"
+  always means the page confirmed it — the card flips to "Pending" (or a toast
+  appears), never merely "the button was clicked".
+
+  Query flags:
+    (none)      CASE 1 — one Connect on the card. Click it, send, Pending.
+    ?followonly CASE 4 — Follow on the card, no Connect, no More. Never click
+                Follow; return CONNECT_BUTTON_NOT_FOUND.
+    ?more       CASE 5 — no Connect on the card; it lives in the profile's own
+                More menu (appended to <body>, as LinkedIn does), beside decoys.
+    ?nosend     CASE 7 — Connect opens a dialog with no Send control.
+    ?nopending  CASE 8 — Send is clicked but the page never confirms.
+    ?note       like CASE 1 but exercises Add-a-note → type → Send.
+
+  A sticky duplicate Connect and an aside stranger are always present, so the
+  driver is always choosing among several — never handed a single obvious match.
+-->
+<header class="global-nav"><a href="/feed">Skip to main content</a></header>
+
+<div id="sticky">
+  <!-- The duplicate action bar that rides the top of the page. It mirrors the
+       card's primary action — Connect when the card offers Connect, Follow on a
+       follow-primary profile — and sits under no heading, so it is a genuine
+       unattributable twin of whatever the card shows. Injected by the script. -->
+</div>
+
+<main>
+  <section class="pv-top-card artdeco-card">
+    <div class="a"><div class="b">
+      <h1>Anirudh Bisht</h1>
+      <span class="dist-value">· 2nd</span>
+      <div class="text-body-medium">Marketing Manager at Welco Agencies</div>
+    </div></div>
+    <div class="actions">
+      <button aria-label="Message Anirudh Bisht" data-who="msg">Message</button>
+      <!-- Connect / Follow / More are injected by the script per flag. -->
+      <div class="artdeco-dropdown"><button id="moreBtn" aria-label="More actions" aria-expanded="false" hidden>More</button></div>
+    </div>
+  </section>
+
+  <section class="more-profiles">
+    <h2>People you may know</h2>
+    <div class="rail-card">
+      <a href="/in/wrong-person-1">Wrong Person One</a>
+      <button aria-label="Invite Wrong Person One to connect" data-who="stranger">Connect</button>
+    </div>
+  </section>
+</main>
+
+<aside id="rail">
+  <h2>Others named Anirudh Bisht</h2>
+  <div class="rail-card">
+    <a href="/in/wrong-person-2">Anirudh Bisht</a>
+    <button aria-label="Invite Anirudh Bisht to connect" data-who="aside-stranger">Connect</button>
+  </div>
+</aside>
+
+<script>
+  const q = new URLSearchParams(location.search);
+  const followOnly = q.has("followonly");
+  const inMore = q.has("more");
+  const noSend = q.has("nosend");
+  const noPending = q.has("nopending");
+
+  window.__invited = null;   // who received an invitation click
+  window.__followed = false; // set only if a Follow was clicked
+  window.__sent = null;      // who was actually sent (Send pressed)
+  window.__note = null;
+
+  const actions = document.querySelector(".actions");
+  const moreBtn = document.getElementById("moreBtn");
+  const sticky = document.getElementById("sticky");
+
+  // The sticky bar mirrors the card's primary action — a Connect twin only when
+  // the card itself offers Connect. On follow-primary / Connect-in-menu profiles
+  // it shows Follow, exactly as LinkedIn's does.
+  const stickyBtn = document.createElement("button");
+  stickyBtn.dataset.who = "sticky";
+  if (followOnly || inMore) {
+    stickyBtn.setAttribute("aria-label", "Follow Anirudh Bisht");
+    stickyBtn.textContent = "Follow";
+    stickyBtn.addEventListener("click", () => { window.__followed = true; });
+  } else {
+    stickyBtn.setAttribute("aria-label", "Invite Anirudh Bisht to connect");
+    stickyBtn.textContent = "Connect";
+    stickyBtn.addEventListener("click", () => { window.__invited = "sticky"; });
+  }
+  sticky.appendChild(stickyBtn);
+
+  // The primary control on the card.
+  if (followOnly) {
+    const f = document.createElement("button");
+    f.setAttribute("aria-label", "Follow Anirudh Bisht");
+    f.dataset.who = "follow";
+    f.textContent = "Follow";
+    f.addEventListener("click", () => { window.__followed = true; });
+    actions.insertBefore(f, actions.firstChild);
+    // no More on this variant
+  } else if (inMore) {
+    moreBtn.hidden = false; // Connect is only inside here
+  } else {
+    moreBtn.hidden = false;
+    const c = document.createElement("button");
+    c.id = "cardConnect";
+    c.setAttribute("aria-label", "Invite Anirudh Bisht to connect");
+    c.dataset.who = "right";
+    c.textContent = "Connect";
+    c.addEventListener("click", () => { window.__invited = "right"; openInviteModal(); });
+    actions.insertBefore(c, actions.firstChild);
+  }
+
+  // The profile's own More menu (LinkedIn appends it to <body>).
+  moreBtn.addEventListener("click", () => {
+    if (document.querySelector(".artdeco-dropdown__content")) return;
+    moreBtn.setAttribute("aria-expanded", "true");
+    const menu = document.createElement("div");
+    menu.className = "artdeco-dropdown__content";
+    menu.setAttribute("role", "menu");
+    const items = [["Follow Anirudh Bisht", "follow"], ["Save to PDF", "pdf"]];
+    if (inMore) items.push(["Invite Anirudh Bisht to connect", "right"]);
+    items.push(["Report or block", "report"]);
+    for (const [aria, who] of items) {
+      const item = document.createElement("div");
+      item.setAttribute("role", "button");
+      item.setAttribute("aria-label", aria);
+      item.className = "artdeco-dropdown__item";
+      item.dataset.who = who;
+      item.textContent = aria.replace(/ Anirudh Bisht/, "");
+      item.addEventListener("click", () => {
+        if (who === "follow") window.__followed = true;
+        if (who === "right") { window.__invited = "right"; openInviteModal(); }
+      });
+      menu.appendChild(item);
+    }
+    document.body.appendChild(menu);
+  });
+
+  // Strangers keep working Connects, to prove the driver never reaches for them.
+  document.querySelectorAll('[data-who="stranger"], [data-who="aside-stranger"]').forEach((b) => {
+    b.addEventListener("click", () => { window.__invited = b.dataset.who; });
+  });
+  document.querySelector('[data-who="msg"]').addEventListener("click", () => {});
+
+  function markPending() {
+    // The card confirms the invitation the way LinkedIn does: the action becomes
+    // "Pending". Injected as a real control so observe() sees it.
+    const existing = document.getElementById("cardConnect");
+    if (existing) {
+      existing.setAttribute("aria-label", "Pending");
+      existing.textContent = "Pending";
+    } else {
+      const p = document.createElement("button");
+      p.setAttribute("aria-label", "Pending");
+      p.textContent = "Pending";
+      actions.insertBefore(p, actions.firstChild);
+    }
+  }
+
+  function openInviteModal() {
+    if (document.querySelector('[role="dialog"]')) return;
+    const modal = document.createElement("div");
+    modal.className = "artdeco-modal";
+    modal.setAttribute("role", "dialog");
+
+    if (noSend) {
+      // A dialog with no Send control at all.
+      modal.innerHTML = "<h2>Add a note to your invitation?</h2>";
+      document.body.appendChild(modal);
+      return;
+    }
+
+    modal.innerHTML =
+      '<h2>Add a note to your invitation?</h2>' +
+      '<button id="addNote" aria-label="Add a note">Add a note</button>' +
+      '<div id="noteWrap" hidden><textarea id="custom-message" maxlength="300"></textarea></div>' +
+      '<button id="sendPlain" aria-label="Send without a note">Send without a note</button>' +
+      '<button id="sendNow" aria-label="Send" hidden>Send</button>';
+    document.body.appendChild(modal);
+
+    modal.querySelector("#addNote").addEventListener("click", () => {
+      modal.querySelector("#noteWrap").hidden = false;
+      modal.querySelector("#sendPlain").hidden = true;
+      modal.querySelector("#sendNow").hidden = false;
+    });
+
+    const finish = (withNote) => {
+      window.__sent = "right";
+      if (withNote) window.__note = modal.querySelector("#custom-message").value;
+      modal.remove();
+      if (!noPending) markPending(); // ?nopending: send, but never confirm
+    };
+    modal.querySelector("#sendPlain").addEventListener("click", () => finish(false));
+    modal.querySelector("#sendNow").addEventListener("click", () => finish(true));
+  }
+</script>
+</body>
+</html>

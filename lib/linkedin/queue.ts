@@ -221,7 +221,7 @@ export async function claimActions(account: ClaimAccount, limit: number) {
  */
 export async function completeAction(
   organizationId: string,
-  input: { actionId: string; status: "sent" | "failed" | "skipped" | "drafted"; result?: string }
+  input: { actionId: string; status: "sent" | "failed" | "skipped" | "drafted"; result?: string; code?: string }
 ) {
   const action = await prisma.linkedInAction.findFirst({ where: { id: input.actionId, organizationId } });
   if (!action) return null;
@@ -271,7 +271,7 @@ export async function completeAction(
     campaignId: action.campaignId ?? undefined,
     type: input.status === "sent" ? "linkedin_sent" : `linkedin_${input.status}`,
     channel: "linkedin",
-    meta: { actionId: action.id, result: input.result },
+    meta: { actionId: action.id, result: input.result, code: input.code },
   });
 
   return updated;
