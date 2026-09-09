@@ -9,6 +9,13 @@ export const metadata = { title: "Changelog — Followthroo" };
  */
 const ENTRIES = [
   {
+    version: "0.16.1",
+    date: "Sep 2026",
+    items: [
+      "Fixed: v1.10.0 of the Windows app would not open at all—it stopped on a startup error about a missing file. The installer was built from a list of files written by hand, and two new ones added in that release were never added to the list, so they were left out of the package. The list is now worked out automatically, which is what stops the next new file going missing the same way. If you downloaded v1.10.0, download again—v1.10.1 is the working build",
+    ],
+  },
+  {
     version: "0.16.0",
     date: "Sep 2026",
     items: [
