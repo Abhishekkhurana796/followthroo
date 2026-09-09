@@ -209,6 +209,44 @@ async function main() {
       await sctx.close();
     }
 
+    console.log("\n1c2. the profile's own Connect is attributed with no help from the DOM");
+    {
+      const sctx = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+      await sctx.route("**/*", (route) =>
+        route.fulfill({ status: 200, contentType: "text/html; charset=utf-8", body: SPAN_FIXTURE }),
+      );
+      // Both containment signals defeated, as they are on the live site: the
+      // action row is not inside a container that also holds the <h1>, and its
+      // nearest heading is not the person's name. Every real run was in exactly
+      // this position — inTopCard false for all 286 elements — so the two
+      // Connects looked equally anonymous and the run refused three times and
+      // gave up on a page whose Connect was plainly visible.
+      const page = await sctx.newPage();
+      await page.goto(RIGHT + "?nostructure");
+      await page.waitForTimeout(400);
+
+      const seen = await page.evaluate(observe);
+      const connects = seen.elements.filter((e) => /^Connect$/i.test(e.label));
+      ok(connects.length >= 2, `several controls read "Connect" (${connects.length})`);
+      ok(
+        connects.filter((c) => c.inTopCard).length === 1,
+        `exactly one is attributed to this profile (${connects.filter((c) => c.inTopCard).length})`,
+      );
+
+      const res = await page.evaluate(act, {
+        decision: { action: "click", label: "Connect" },
+        expectedName: seen.personName,
+        forbiddenSource: FORBIDDEN.source,
+        goal: "invite",
+        autoSend: true,
+      });
+      ok(res.ok === true, `so it can be clicked rather than refused (${res.error ?? res.did})`);
+      const invited = await page.evaluate(() => (window as never as { __invited?: string }).__invited ?? null);
+      ok(invited === "right", `and it is the profile owner's (invited: ${invited})`);
+      await page.close();
+      await sctx.close();
+    }
+
     console.log("\n1d. a test run cannot send, whatever the model decides");
     {
       const sctx = await browser.newContext();

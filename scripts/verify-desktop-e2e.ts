@@ -151,6 +151,8 @@ async function main() {
       limit: 1,
       launch: fixtureLauncher(browser),
       onEvent: ((e: { type: string; message?: string }) => {
+        // Refusals surface as status messages too; without them a repeated
+        // failure shows only the decision and not why it was rejected.
         if (e.type === "status" && e.message) console.log(`    · ${e.message}`);
       }) as () => void,
     });

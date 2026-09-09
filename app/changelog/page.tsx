@@ -9,6 +9,16 @@ export const metadata = { title: "Changelog — Followthroo" };
  */
 const ENTRIES = [
   {
+    version: "0.15.0",
+    date: "Sep 2026",
+    items: [
+      "Fixed the last thing standing between a written invitation and a sent one. The app filled in the note, went to press Send, and stopped — because the button on that dialog says “Send now”, and it would only accept a button whose wording matched to the letter. Near-misses like that are now understood, so an invitation that has been prepared actually goes out",
+      "The app now identifies the person’s own Connect button by where it sits on the screen — directly under their name — rather than by how LinkedIn nests the page. On real profiles the nesting gives no usable clue at all: the action row is not inside anything that also holds the name. Geometry is the one signal LinkedIn does not rewrite",
+      "Fixed: references to buttons from a previous look at the page were never cleared, so an instruction meant for one control could land on whatever had since taken its place. Every look now starts clean",
+      "Aiming at a point on the screen now requires something that is actually a control there. Previously it could settle on the block of text containing that point — which is how a click once landed on an entire profile — and a run that failed printed that whole profile into the log",
+    ],
+  },
+  {
     version: "0.14.0",
     date: "Sep 2026",
     items: [

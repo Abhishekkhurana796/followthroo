@@ -9,6 +9,14 @@
      shape — which is exactly what happened, and the model correctly reported
      that it could not see anything. */
   svg { width: 16px; height: 16px; }
+  /* Laid out like the real page: the name, then the action row directly under
+     it, and the strangers far away. Attribution by containment was false for
+     every element of every real run, so geometry has to carry it. */
+  body { margin: 0; font: 14px sans-serif; }
+  #rail { position: absolute; left: 900px; top: 0; width: 300px; }
+  .top-card { position: absolute; left: 40px; top: 40px; width: 600px; }
+  .actions { margin-top: 12px; }
+  .more-profiles { position: absolute; left: 40px; top: 900px; width: 600px; }
 </style>
 </head>
 <body>
@@ -79,6 +87,21 @@
   // Two "Connect" controls, neither in the action row. Nothing can tell them
   // apart, so nothing should be clicked.
   if (q.has("ambiguous")) document.getElementById("ownConnect").remove();
+
+  // The live page defeats both containment signals: the action row is not
+  // inside a container that also holds the <h1>, and its nearest heading is not
+  // the person's name. Reparenting the actions to <body> reproduces that, so
+  // the geometric signal is the only one left — which is the situation every
+  // real run was in when it refused three times and gave up.
+  if (q.has("nostructure")) {
+    const actions = document.querySelector(".actions");
+    const card = document.querySelector(".top-card");
+    const box = card.getBoundingClientRect();
+    actions.style.position = "absolute";
+    actions.style.left = box.left + "px";
+    actions.style.top = box.bottom + 8 + "px";
+    document.body.appendChild(actions);
+  }
 
   document.querySelectorAll("[data-who]").forEach((el) => {
     el.addEventListener("click", () => {

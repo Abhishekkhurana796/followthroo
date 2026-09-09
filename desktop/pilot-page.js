@@ -254,12 +254,52 @@ function observe() {
    * that there be some evidence — an element with none stays unmarked, and
    * act() still refuses to guess.
    */
+  /**
+   * Where the name actually is on screen, which no amount of re-nesting changes.
+   *
+   * Both existing signals are about containment, and on the live page both were
+   * false for all 286 elements of every run — including the profile's own
+   * Connect and the profile's own name. So nothing could ever be attributed, the
+   * two Connects looked equally anonymous, and the run refused three times and
+   * gave up on a page whose Connect was plainly visible.
+   *
+   * Geometry is the signal that does not depend on how LinkedIn nests things:
+   * the action row sits just under the person's name, in the same column. The
+   * strangers' Connects are hundreds of pixels away, in the right-hand rail or
+   * far down the page.
+   */
+  const nameBox = h1 ? h1.getBoundingClientRect() : null;
+  const nearTheName = (el) => {
+    if (!nameBox) return false;
+    const r = el.getBoundingClientRect();
+    // Below the name, within the height of a card, and starting no further right
+    // than the name does by more than a card's width — which excludes the rail.
+    const dy = r.top - nameBox.bottom;
+    return dy >= -80 && dy <= 320 && r.left >= nameBox.left - 80 && r.left <= nameBox.left + 520;
+  };
+
   const ownsAction = (el) => {
     if (el.closest("aside") || recommendation(el)) return false;
     if (topCard && topCard.contains(el)) return true;
     const sec = norm(sectionOf(el));
-    return !!(sec && personName && (sec.includes(personName) || personName.includes(sec)));
+    if (sec && personName && (sec.includes(personName) || personName.includes(sec))) return true;
+    return nearTheName(el);
   };
+
+  /**
+   * Clear the previous observation's stamps before making new ones.
+   *
+   * Indices are the position in this run's array, so they are reused on every
+   * observe — and nothing ever removed the old attributes. A stale
+   * `data-ft-idx="20"` left on an element from an earlier page state stayed in
+   * the document, and `querySelector` returns the first match in document
+   * order, so index 20 could resolve to something else entirely. That is how a
+   * click landed on an element whose text was the whole profile.
+   */
+  for (const stale of document.querySelectorAll("[data-ft-idx], [data-ft-top]")) {
+    stale.removeAttribute("data-ft-idx");
+    stale.removeAttribute("data-ft-top");
+  }
 
   const elements = [];
   nodes.forEach((el, idx) => {
@@ -280,6 +320,11 @@ function observe() {
       role: el.getAttribute("role"),
       label: l,
       disabled: el.hasAttribute("disabled") || el.getAttribute("aria-disabled") === "true",
+      // Whether the box already holds what we typed. Without it the model
+      // re-reads a textarea it has just filled, sees only its label, and types
+      // the note again — a wasted step out of eight, and on a real page that is
+      // the difference between finishing and running out of them.
+      filled: "value" in el && String(el.value || "").trim() !== "" ? true : undefined,
       inDialog: !!el.closest('[role="dialog"], .artdeco-modal'),
       inAside: !!el.closest("aside"),
       // The three that disambiguate two identical "More" buttons.
@@ -402,7 +447,38 @@ function act({ decision, expectedName, forbiddenSource, goal, autoSend }) {
       );
       seen = all.filter((el) => !all.some((other) => other !== el && other.contains(el)));
     }
-    if (!seen.length) return { error: `nothing on the page reads exactly "${wanted}"` };
+    /**
+     * Near-misses, when nothing matches word for word.
+     *
+     * The model answers "Send" for a button that reads "Send now", or "Connect"
+     * for one that reads "Connect with Sofia" — both perfectly reasonable
+     * descriptions of what is on screen, and exact matching rejected them. The
+     * fixture's "Send now" is why an invitation that had been filled in
+     * correctly then failed at the last step.
+     *
+     * Kept tight: only short labels, and only where the wanted words appear at a
+     * word boundary, so "Send" cannot match a paragraph mentioning sending.
+     */
+    if (!seen.length) {
+      const letterOrDigit = (c) => /[a-z0-9]/.test(c);
+      const holdsTheWords = (words) => {
+        const hay = words.toLowerCase();
+        for (let i = hay.indexOf(want); i !== -1; i = hay.indexOf(want, i + 1)) {
+          const before = i === 0 ? " " : hay[i - 1];
+          const after = i + want.length >= hay.length ? " " : hay[i + want.length];
+          if (!letterOrDigit(before) && !letterOrDigit(after)) return true;
+        }
+        return false;
+      };
+      const near = Array.from(document.querySelectorAll("button, a, span, div, li, [role]")).filter((el) => {
+        if (el.closest("[data-followthroo-overlay]")) return false;
+        const words = (el.textContent || "").replace(/\s+/g, " ").trim();
+        return words.length <= 40 && holdsTheWords(words);
+      });
+      seen = near.filter((el) => !near.some((other) => other !== el && other.contains(el)));
+    }
+
+    if (!seen.length) return { error: `nothing on the page reads "${wanted}"` };
 
     const inDialog = seen.filter((el) => el.closest('[role="dialog"], .artdeco-modal'));
     if (inDialog.length) return { el: inDialog[0] };
@@ -458,8 +534,29 @@ function act({ decision, expectedName, forbiddenSource, goal, autoSend }) {
     if (!hit) return { error: `nothing is at (${px}, ${py})` };
     if (hit.closest("[data-followthroo-overlay]")) return { error: "that point is on our own banner" };
     // Prefer the control we already catalogued over whatever fragment of text
-    // happens to be topmost at that pixel.
-    return { el: hit.closest("[data-ft-idx]") || hit };
+    // happens to be topmost at that pixel — but only if it is plausibly a
+    // control. A stale stamp on a container resolved a point on the Connect
+    // button to an element whose text was the entire profile, and the refusal
+    // that followed printed all of it.
+    const plausible = (node) => {
+      if (!node || node === document.body || node === document.documentElement) return false;
+      const words = (node.textContent || "").replace(/\s+/g, " ").trim();
+      if (words.length > 60) return false;
+      const box = node.getBoundingClientRect();
+      // A control is not most of the window.
+      return box.width < window.innerWidth * 0.8 && box.height < window.innerHeight * 0.5;
+    };
+
+    const catalogued = hit.closest("[data-ft-idx]");
+    if (plausible(catalogued)) return { el: catalogued };
+    if (plausible(hit)) return { el: hit };
+    // Walk up a little in case the point landed on an icon inside the control.
+    let node = hit.parentElement;
+    for (let i = 0; i < 4 && node; i++) {
+      if (plausible(node)) return { el: node };
+      node = node.parentElement;
+    }
+    return { error: `(${px}, ${py}) is not on a control — it lands on a container` };
   };
 
   let el;
@@ -489,7 +586,11 @@ function act({ decision, expectedName, forbiddenSource, goal, autoSend }) {
 
   const label = (el.getAttribute("aria-label") || el.getAttribute("placeholder") || el.textContent || "")
     .replace(/\s+/g, " ")
-    .trim();
+    .trim()
+    // Capped. Uncapped, a refusal on a container printed the entire profile —
+    // several thousand characters of somebody's career history — into the
+    // activity log and the failure message.
+    .slice(0, 120);
 
   if (el.closest("aside")) return { ok: false, error: `refused: "${label}" is in the sidebar` };
   if (recommendation(el)) {
@@ -560,7 +661,30 @@ function act({ decision, expectedName, forbiddenSource, goal, autoSend }) {
     return { ok: true, did: `typed into "${label}"` };
   }
 
-  el.click();
+  const targetNode =
+    el.closest('button, a, [role="button"], [role="menuitem"], .artdeco-button, .artdeco-dropdown__item, .ft-clickable') || el;
+
+  try {
+    targetNode.scrollIntoView({ block: "center", inline: "nearest" });
+  } catch (_) {}
+
+  try {
+    if (typeof targetNode.focus === "function") targetNode.focus();
+  } catch (_) {}
+
+  const opts = { bubbles: true, cancelable: true, view: window, composed: true, buttons: 1 };
+  try {
+    targetNode.dispatchEvent(new PointerEvent("pointerdown", opts));
+    targetNode.dispatchEvent(new MouseEvent("mousedown", opts));
+    targetNode.dispatchEvent(new PointerEvent("pointerup", opts));
+    targetNode.dispatchEvent(new MouseEvent("mouseup", opts));
+    targetNode.dispatchEvent(new MouseEvent("click", opts));
+  } catch (_) {}
+
+  try {
+    if (typeof targetNode.click === "function") targetNode.click();
+  } catch (_) {}
+
   return { ok: true, did: `clicked "${label}"` };
 }
 

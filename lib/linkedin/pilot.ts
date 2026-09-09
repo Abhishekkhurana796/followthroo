@@ -45,6 +45,8 @@ export const PilotElementSchema = z.object({
   role: z.string().max(40).nullish(),
   label: z.string().max(300),
   disabled: z.boolean().optional(),
+  /** A text box that already holds text, so it is not typed into twice. */
+  filled: z.boolean().optional(),
   inDialog: z.boolean().optional(),
   inAside: z.boolean().optional(),
   /** In the profile's own action row, established from the card or the heading. */
@@ -218,7 +220,7 @@ export function userPrompt(o: PilotObservation): string {
   const lines = o.elements.map(
     (e) =>
       `${e.i}. <${e.tag}${e.role ? ` role=${e.role}` : ""}${e.disabled ? " disabled" : ""}${
-        e.inDialog ? " in-dialog" : ""
+        e.inDialog ? " in-dialog" : ""}${e.filled ? " ALREADY-HAS-TEXT" : ""
       }${e.inTopCard ? " IN-PROFILE-ACTION-ROW" : ""}${e.inAside ? " IN-SIDEBAR-DO-NOT-USE" : ""}> ${e.label}` +
       (e.section ? `   [under: ${e.section}]` : ""),
   );
