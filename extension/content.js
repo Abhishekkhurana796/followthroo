@@ -109,13 +109,13 @@
          results as soon as the page scrolled (and over other tools' bars),
          covering the very people it asks you to pick. Once it scrolls away,
          the launcher's count badge and its panel carry the selection. */
-      #${BAR_ID}{position:relative;z-index:1;display:flex;align-items:center;gap:12px;
+      #${BAR_ID}{position:relative;z-index:999;display:flex;align-items:center;gap:12px;
         margin:0 0 12px;padding:9px 14px;border:1px solid var(--ft-line);border-radius:12px;
         background:var(--ft-surface);box-shadow:0 1px 2px var(--ft-shadow);
         font-family:-apple-system,Segoe UI,Roboto,sans-serif;font-size:13px;color:var(--ft-ink);
-        transition:box-shadow .18s ease,border-color .18s ease}
-      #${BAR_ID}.ft-active{border-color:color-mix(in srgb,${ACCENT} 45%,transparent);
-        box-shadow:0 2px 14px color-mix(in srgb,${ACCENT} 18%,transparent)}
+        transition:box-shadow .18s ease,border-color .18s ease;width:100%;box-sizing:border-box}
+      #${BAR_ID}.ft-active{position:sticky;top:60px;z-index:9999;border-color:color-mix(in srgb,${ACCENT} 45%,transparent);
+        box-shadow:0 4px 20px color-mix(in srgb,${ACCENT} 22%,transparent)}
       #${BAR_ID} .ft-brand{display:flex;align-items:center;gap:7px;font-weight:700;flex:0 0 auto}
       #${BAR_ID} .ft-mark{width:18px;height:18px;border-radius:5px;background:${ACCENT};
         color:var(--ft-on-accent);display:grid;place-items:center;font-size:11px;font-weight:800}
@@ -138,9 +138,9 @@
       /* The checkbox sits INSIDE the row's own padding. At -30px it lived
          outside the card, which is why it collided with LinkedIn's layout at
          some widths and vanished at others. */
-      .${CHECK_CLASS}{position:absolute;left:8px;top:12px;width:17px;height:17px;cursor:pointer;
-        accent-color:${ACCENT};z-index:399;margin:0}
-      .ft-anchor{position:relative}
+      .${CHECK_CLASS}{position:absolute;left:8px;top:12px;width:18px;height:18px;cursor:pointer;
+        accent-color:${ACCENT};z-index:2147483645;margin:0;pointer-events:auto}
+      .ft-anchor{position:relative!important;display:block}
       .ft-anchor:has(.${CHECK_CLASS}:checked){background:var(--ft-tint);border-radius:8px}
 
       /* ---- Floating launcher ----------------------------------------
@@ -241,6 +241,8 @@
    * class names, so they lead.
    */
   const ROW_SELECTORS = [
+    'a[href*="/in/"][componentkey]',
+    '[componentkey*="SearchResults"]',
     '[data-view-name="search-entity-result"]',
     "[data-chameleon-result-urn]",
     "li.reusable-search__result-container",
@@ -249,7 +251,10 @@
     ".scaffold-finite-scroll__content > ul > li",
   ];
 
-  const isPerson = (el) => !!el.querySelector('a[href*="/in/"]');
+  const getProfileAnchor = (el) =>
+    el ? (el.matches && el.matches('a[href*="/in/"]') ? el : el.querySelector('a[href*="/in/"]')) : null;
+
+  const isPerson = (el) => !!getProfileAnchor(el);
 
   /**
    * Find rows without knowing any class names.
@@ -287,7 +292,7 @@
       // point at the same profile is a card's internals, not the list.
       const distinct = new Set(
         rows.map((r) => {
-          const a = r.querySelector('a[href*="/in/"]');
+          const a = getProfileAnchor(r);
           return a ? a.getAttribute("href").split("?")[0] : "";
         }),
       );
@@ -394,7 +399,7 @@
   }
 
   function rowData(card) {
-    const a = card.querySelector('a[href*="/in/"]');
+    const a = getProfileAnchor(card);
     if (!a) return null;
     let profileUrl;
     try {
@@ -449,17 +454,14 @@
       ".entity-result__title-text a span",
       "span[dir='ltr'] span[aria-hidden='true']",
       ".artdeco-entity-lockup__title",
-      // Last resort: the profile link's own text. Three of the four selectors
-      // above are class names this file's own comment calls dead, which left one
-      // live path — and when the current markup stopped matching it, every row
-      // returned null while rowCards() still counted ten. scrapers.js has always
-      // had this line; content.js was a copy that dropped it.
       'a[href*="/in/"] span[aria-hidden="true"]',
       'a[href*="/in/"]',
+      'div[id]',
+      'h3',
     ])) ||
       // A card whose only profile link is a photo, with no name text anywhere:
       // the avatar's alt text is the person's name.
-      cleanName((card.querySelector('a[href*="/in/"] img[alt]') || {}).alt);
+      cleanName((card.querySelector('img[alt]') || {}).alt);
     const fullName = raw.replace(/\b(1st|2nd|3rd)\b/g, "").replace(/[·•|]/g, " ").replace(/\s+/g, " ").trim();
     if (!fullName) return null;
 
@@ -609,7 +611,12 @@
      * chrome above the list (a filter row, a result count), a little less
      * snug against it than "right above the list" would be.
      */
-    const scope = document.querySelector("main");
+    const scope =
+      document.querySelector(".scaffold-layout__list") ||
+      document.querySelector(".search-results-container") ||
+      document.querySelector(".scaffold-finite-scroll") ||
+      document.querySelector("main") ||
+      document.body;
     if (!scope) return false;
     const el = bar();
     if (el.parentElement !== scope || scope.firstChild !== el) scope.insertBefore(el, scope.firstChild);
@@ -699,6 +706,8 @@
       box.title = `Add ${data.fullName} to Followthroo`;
       box.checked = state.selected.has(data.profileUrl);
       box.addEventListener("click", (e) => e.stopPropagation());
+      box.addEventListener("mousedown", (e) => e.stopPropagation());
+      box.addEventListener("pointerdown", (e) => e.stopPropagation());
       box.addEventListener("change", () => {
         if (box.checked) state.selected.set(data.profileUrl, data);
         else state.selected.delete(data.profileUrl);
@@ -943,7 +952,7 @@
   function pageKind() {
     const p = location.pathname;
     if (p.startsWith("/in/")) return "profile";
-    if (p.startsWith("/search/results/people") || p.startsWith("/sales/search/people")) return "search";
+    if (p.startsWith("/search/results") || p.startsWith("/sales/search")) return "search";
     // Before the general /mynetwork: your own connections are a list of people;
     // the rest of My Network (suggestions, invitations) is not.
     if (p.startsWith("/mynetwork/invite-connect/connections")) return "connections";

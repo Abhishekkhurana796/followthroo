@@ -9,6 +9,27 @@ export const metadata = { title: "Changelog — Followthroo" };
  */
 const ENTRIES = [
   {
+    version: "0.19.6",
+    date: "Sep 2026",
+    items: [
+      "Chrome extension 3.1.4: updated bar mounting scope to target LinkedIn's left search results column container (.scaffold-layout__list, .search-results-container), preventing layout conflicts with 2-column scaffold grids and preview side panes",
+    ],
+  },
+  {
+    version: "0.19.5",
+    date: "Sep 2026",
+    items: [
+      "Chrome extension 3.1.3: broadened search URL matching so the top bar mounts automatically on all LinkedIn search result views (/search/results/all, /search/results/, etc.), and made the active bar sticky to the top of the viewport when items are selected on scroll",
+    ],
+  },
+  {
+    version: "0.19.4",
+    date: "Sep 2026",
+    items: [
+      "Chrome extension 3.1.2: fixed profile card parsing and checkbox overlay alignment for LinkedIn search results where cards use top-level link containers",
+    ],
+  },
+  {
     version: "0.19.3",
     date: "Sep 2026",
     items: [

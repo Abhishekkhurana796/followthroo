@@ -35,11 +35,8 @@ function ftDetect(raw) {
   const as = (kind) => ({ kind, url: u.toString(), ...FT_KINDS[kind] });
 
   if (path.startsWith("/mynetwork/invite-connect/connections")) return as("connections_export");
-  if (path.startsWith("/search/results/people")) return as("search_export");
-  // A jobs or content search has no people in it — better to say nothing than
-  // to offer an import that returns zero rows.
-  if (path.startsWith("/search/results")) return null;
-  if (path.startsWith("/sales/search/people")) return as("search_export");
+  if (path.startsWith("/search/results")) return as("search_export");
+  if (path.startsWith("/sales/search")) return as("search_export");
 
   // Order matters: the specific path must be tested before the general one.
   if (/^\/company\/[^/]+\/people/.test(path)) return as("company_employees");
