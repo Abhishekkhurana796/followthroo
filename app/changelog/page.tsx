@@ -9,6 +9,13 @@ export const metadata = { title: "Changelog — Followthroo" };
  */
 const ENTRIES = [
   {
+    version: "0.19.3",
+    date: "Sep 2026",
+    items: [
+      "Chrome extension 3.1.1: fixed the Followthroo bar still landing on top of the first search result on some LinkedIn layouts, with clicks on Add going to the result underneath instead of the button. It no longer tries to insert itself right above the results list — it always sits at the very top of the page's content area instead, which nothing on LinkedIn's side can render over",
+    ],
+  },
+  {
     version: "0.19.2",
     date: "Sep 2026",
     items: [

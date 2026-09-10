@@ -590,22 +590,29 @@
       }
       return false;
     }
-    const cards = rowCards();
 
-    if (!cards.length) {
-      // Inside <main>, at the top — never beside it. As a sibling of <main> the
-      // bar became a cell in LinkedIn's page grid and took a column's width.
-      const scope = document.querySelector("main");
-      if (!scope) return false;
-      const el = bar();
-      if (el.parentElement !== scope) scope.insertBefore(el, scope.firstChild);
-      return true;
-    }
-
-    const list = cards[0].closest("ul") || cards[0].parentElement;
-    if (!list || !list.parentElement) return false;
+    /**
+     * Always the very first thing inside <main> — never a sibling of the
+     * results list itself, even when we can see it.
+     *
+     * That used to be "insert before whatever `.closest("ul")` finds above
+     * the first card, or its parent" — right when the list is an ordinary
+     * flow of siblings, wrong whenever it isn't: `.closest("ul")` can climb
+     * straight past the actual results container to an unrelated ancestor
+     * `<ul>` LinkedIn uses for something else entirely (a tab strip, a
+     * landmark wrapper), and a virtualised results list positions every row
+     * with `position: absolute` regardless of what a plain sibling in normal
+     * flow does — so an inserted bar changed nothing about where the first
+     * row painted, and being later in the DOM, that row painted (and caught
+     * clicks) on top of us. <main> is never virtualised and never absolutely
+     * positioned, so this is never wrong — only, on a page with page-level
+     * chrome above the list (a filter row, a result count), a little less
+     * snug against it than "right above the list" would be.
+     */
+    const scope = document.querySelector("main");
+    if (!scope) return false;
     const el = bar();
-    if (el.parentElement !== list.parentElement) list.parentElement.insertBefore(el, list);
+    if (el.parentElement !== scope || scope.firstChild !== el) scope.insertBefore(el, scope.firstChild);
     return true;
   }
 
