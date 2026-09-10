@@ -17,6 +17,7 @@
  * failed action and nothing more.
  */
 const { observe, act, FORBIDDEN } = require("./pilot-page");
+const { CODES } = require("./outcome-codes");
 
 const MAX_STEPS = 8;
 /**
@@ -33,6 +34,16 @@ const MAX_STEPS = 8;
  * Gemini Flash prices a downscaled JPEG per step is not worth optimising away.
  */
 const SCREENSHOT_AFTER_STEP = 0;
+
+/**
+ * How many elements may go to the assistant.
+ *
+ * The endpoint refuses more than 200, and a rejected body reads to the client as
+ * "could not reach the assistant" — so exceeding it silently sent every action
+ * to the old selector path. The list arrives sorted with the dialog first, then
+ * the profile's action row, so a trim takes from the least useful end.
+ */
+const MAX_ELEMENTS = 150;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -108,7 +119,7 @@ async function pilotAction({ page, action, apiBase, token, onStep = () => {}, us
   }
 
   if (seen.signedOut) {
-    return { status: "failed", result: "not logged in to LinkedIn in this browser", fatal: "login" };
+    return { status: "failed", code: CODES.LINKEDIN_SESSION_INVALID, result: "not logged in to LinkedIn in this browser", fatal: "login" };
   }
 
   // The identity guard, unchanged and non-negotiable: a renamed vanity URL or a
@@ -118,6 +129,7 @@ async function pilotAction({ page, action, apiBase, token, onStep = () => {}, us
   if (wantSlug && haveSlug && decodeURIComponent(wantSlug) !== decodeURIComponent(haveSlug)) {
     return {
       status: "failed",
+      code: CODES.TARGET_PROFILE_MISMATCH,
       result: `landed on /in/${haveSlug} but this action is for /in/${wantSlug} — not acting on the wrong profile`,
     };
   }
@@ -125,15 +137,29 @@ async function pilotAction({ page, action, apiBase, token, onStep = () => {}, us
   // Decided here rather than by the model: it is a fact on the page, and an
   // explicit invitation to an existing connection has nothing to do.
   if (goal === "invite" && seen.firstDegree) {
-    return { status: "skipped", result: "already connected — no invitation to send" };
+    return { status: "skipped", code: CODES.ALREADY_CONNECTED, result: "already connected — no invitation to send" };
+  }
+
+  // Somebody already invited them and it has not been accepted yet. Sending a
+  // second one is not possible and would not be wanted.
+  if (goal === "invite" && seen.pending) {
+    return { status: "skipped", code: CODES.INVITATION_PENDING, result: "an invitation to this person is already pending" };
   }
 
   let sawScreenshot = false;
   let forceScreenshot = false;
 
   for (let step = 0; step < MAX_STEPS; step++) {
+    // If the browser was navigated away from the profile (e.g. into an activity post), return immediately
+    const currentUrl = page.url();
+    if (!currentUrl.includes("/in/")) {
+      await page.goto(action.linkedinUrl, { waitUntil: "domcontentloaded" });
+      await sleep(1500);
+      seen = await page.evaluate(observe);
+    }
+
     if (seen.limitWall) {
-      return { status: "failed", result: seen.limitWall, fatal: "limit" };
+      return { status: "failed", code: CODES.LINKEDIN_LIMIT_REACHED, result: seen.limitWall, fatal: "limit" };
     }
 
     const wantShot = forceScreenshot || step >= SCREENSHOT_AFTER_STEP;
@@ -154,8 +180,12 @@ async function pilotAction({ page, action, apiBase, token, onStep = () => {}, us
         url: seen.url,
         step,
         history,
-        elements: seen.elements,
+        elements: seen.elements.slice(0, MAX_ELEMENTS),
         screenshot,
+        viewport: page.viewportSize() || (await page.evaluate(() => ({
+          width: window.innerWidth,
+          height: window.innerHeight,
+        }))),
       });
     } catch (e) {
       const msg = String((e && e.message) || e);
@@ -177,7 +207,7 @@ async function pilotAction({ page, action, apiBase, token, onStep = () => {}, us
     if (decision.action === "give_up") {
       const why = String(decision.reason || "").toLowerCase();
       if (/already connected/.test(why)) {
-        return { status: "skipped", result: "already connected — no invitation to send" };
+        return { status: "skipped", code: CODES.ALREADY_CONNECTED, result: "already connected — no invitation to send" };
       }
       // "No Connect button" is not a conclusion until the overflow menu has been
       // opened. On a follow-primary profile Connect is only in that menu, and
@@ -215,16 +245,17 @@ async function pilotAction({ page, action, apiBase, token, onStep = () => {}, us
       // invitation did not go, and recording a send that did not happen moves
       // the lead to contacted and lets a sequence follow up on silence.
       const after = await page.evaluate(observe);
-      if (after.limitWall) return { status: "failed", result: after.limitWall, fatal: "limit" };
+      if (after.limitWall) return { status: "failed", code: CODES.LINKEDIN_LIMIT_REACHED, result: after.limitWall, fatal: "limit" };
 
       // "done" is a claim, not evidence. A model that answers done on the first
       // step without touching anything would otherwise be recorded as a sent
       // invitation — a lie in the CRM, and the sequence follows up on a
       // conversation that never started. Require that we actually clicked
       // something that invites.
-      if (goal === "invite" && !history.some((h) => /clicked "(invite|connect)/i.test(h))) {
+      if (goal === "invite" && !history.some((h) => /clicked "(invite|connect|send)/i.test(h))) {
         return {
           status: "failed",
+          code: CODES.INVITATION_SUBMISSION_UNCONFIRMED,
           result: "the assistant said it was done without ever clicking Connect — nothing was sent",
         };
       }
@@ -232,14 +263,16 @@ async function pilotAction({ page, action, apiBase, token, onStep = () => {}, us
       if (goal === "invite" && after.dialogOpen) {
         return {
           status: "failed",
+          code: CODES.INVITATION_SUBMISSION_UNCONFIRMED,
           result: "the assistant said it was done, but the invite dialog is still open — treating as not sent",
         };
       }
       if (!autoSend) {
-        return { status: "drafted", result: "filled in and left for you to send", kind: goal };
+        return { status: "drafted", code: null, result: "filled in and left for you to send", kind: goal };
       }
       return {
         status: "sent",
+        code: CODES.INVITATION_SUBMITTED,
         result: goal === "invite" ? "invitation sent" : "message sent",
         kind: goal,
         // Only a note that was actually typed spends the day's allowance.
@@ -255,6 +288,8 @@ async function pilotAction({ page, action, apiBase, token, onStep = () => {}, us
       expectedName: seen.personName,
       forbiddenSource: FORBIDDEN.source,
       goal,
+      // Not advice. With this false, act() refuses anything that would send.
+      autoSend,
     });
 
     if (!outcome.ok) {
@@ -266,11 +301,64 @@ async function pilotAction({ page, action, apiBase, token, onStep = () => {}, us
         return { status: "failed", result: `stopped after three refused suggestions — last: ${outcome.error}` };
       }
     } else {
+      // Execute the click using Playwright's native trusted mouse input pipeline if not already clicked by rescue.
+      if (outcome.action === "click") {
+        let clicked = false;
+        if (outcome.selector) {
+          try {
+            await page.click(outcome.selector, { timeout: 2000, noWaitAfter: true });
+            clicked = true;
+          } catch (_) {}
+        }
+        if (!clicked && outcome.point && typeof outcome.point.x === "number" && typeof outcome.point.y === "number") {
+          try {
+            await page.mouse.move(outcome.point.x, outcome.point.y);
+            await sleep(40 + Math.random() * 40);
+            await page.mouse.click(outcome.point.x, outcome.point.y);
+            clicked = true;
+          } catch (_) {}
+        }
+        await page.evaluate(() => {
+          document.querySelectorAll("[data-ft-act]").forEach((e) => e.removeAttribute("data-ft-act"));
+        }).catch(() => {});
+      }
+
       history.push(outcome.did);
     }
 
     // Let the click land — a dialog opening, a menu expanding.
-    await sleep(1400 + Math.random() * 900);
+    await sleep(1400 + Math.random() * 800);
+    // If a dialog or menu is opening, give it a moment to appear in the DOM
+    for (let i = 0; i < 6; i++) {
+      const appeared = await page
+        .evaluate(() => !!document.querySelector('[role="dialog"], .artdeco-modal, .artdeco-dropdown__content, [role="menu"]'))
+        .catch(() => false);
+      if (appeared) break;
+      await sleep(250);
+    }
+
+    // Check if invitation sent toast appeared or pending status confirmed
+    const hasSentToast = await page
+      .locator('.artdeco-toast-item, div[role="alert"], [data-view-name*="toast"]')
+      .filter({ hasText: /invitation sent|invite sent/i })
+      .isVisible({ timeout: 800 })
+      .catch(() => false);
+
+    const now = await page.evaluate(observe);
+    if (
+      goal === "invite" &&
+      autoSend &&
+      (now.pending || hasSentToast) &&
+      history.some((h) => /clicked "(invite|connect|send)/i.test(h))
+    ) {
+      return {
+        status: "sent",
+        code: CODES.INVITATION_SUBMITTED,
+        result: "invitation sent",
+        kind: "invite",
+        noteUsed: history.some((h) => /^typed/.test(h)),
+      };
+    }
     const before = seen.elements.length;
     seen = await page.evaluate(observe);
 

@@ -18,7 +18,7 @@ export async function GET(req: NextRequest, { params }: Ctx) {
   const { id } = await params;
 
   const campaign = await prisma.campaign.findFirst({
-    where: { id, organizationId: ctx.orgId },
+    where: { id, organizationId: ctx.orgId, archivedAt: null },
     include: CAMPAIGN_INCLUDE,
   });
   if (!campaign) return fail("Campaign not found", 404);
@@ -40,9 +40,10 @@ export async function PATCH(req: NextRequest, { params }: Ctx) {
   if (gate) return gate;
   const { id } = await params;
 
-  // Verify ownership
+  // Verify ownership. A deleted (archived) campaign is gone as far as editing
+  // goes — reactivating one would restart sends nobody can see in the list.
   const existing = await prisma.campaign.findFirst({
-    where: { id, organizationId: ctx.orgId },
+    where: { id, organizationId: ctx.orgId, archivedAt: null },
   });
   if (!existing) return fail("Campaign not found", 404);
 
@@ -77,7 +78,22 @@ export async function PATCH(req: NextRequest, { params }: Ctx) {
   return ok(updated);
 }
 
-/** DELETE /api/campaigns/[id] */
+/**
+ * DELETE /api/campaigns/[id] — stop it, then remove it.
+ *
+ * This used to be a bare `campaign.delete`. Enrollments cascaded away, but
+ * LinkedInAction.campaignId is a plain column with no foreign key, so every
+ * invitation the campaign had already queued stayed `pending` — and the desktop
+ * app would have claimed and sent them for a campaign that no longer existed.
+ * An invitation cannot be recalled.
+ *
+ * So everything still in flight is stopped first, in one transaction. A campaign
+ * that never reached anybody is then deleted outright; one with history is
+ * archived instead, so its sends, replies and invitations keep naming it in the
+ * Inbox, Outbox and Reports.
+ *
+ * `?dryRun=1` reports what would happen without doing it, for the confirm dialog.
+ */
 export async function DELETE(req: NextRequest, { params }: Ctx) {
   const ctx = await requireOrg(req);
   if (ctx instanceof Response) return ctx;
@@ -86,10 +102,39 @@ export async function DELETE(req: NextRequest, { params }: Ctx) {
   const { id } = await params;
 
   const existing = await prisma.campaign.findFirst({
-    where: { id, organizationId: ctx.orgId },
+    where: { id, organizationId: ctx.orgId, archivedAt: null },
+    select: { id: true },
   });
   if (!existing) return fail("Campaign not found", 404);
 
-  await prisma.campaign.delete({ where: { id } });
-  return ok({ deleted: true });
+  const inFlight: Prisma.EnrollmentWhereInput = { campaignId: id, status: { in: ["active", "paused"] } };
+  const queued: Prisma.LinkedInActionWhereInput = {
+    organizationId: ctx.orgId,
+    campaignId: id,
+    status: { in: ["pending", "in_progress", "drafted"] },
+  };
+
+  const [stopping, cancelling, messages, sentActions] = await Promise.all([
+    prisma.enrollment.count({ where: inFlight }),
+    prisma.linkedInAction.count({ where: queued }),
+    prisma.message.count({ where: { organizationId: ctx.orgId, campaignId: id } }),
+    prisma.linkedInAction.count({ where: { organizationId: ctx.orgId, campaignId: id, status: "sent" } }),
+  ]);
+  const keepHistory = messages > 0 || sentActions > 0;
+
+  if (req.nextUrl.searchParams.get("dryRun")) {
+    return ok({ stopping, cancelling, archived: keepHistory });
+  }
+
+  await prisma.$transaction(async (tx) => {
+    await tx.enrollment.updateMany({ where: inFlight, data: { status: "stopped", nextRunAt: null } });
+    await tx.linkedInAction.updateMany({ where: queued, data: { status: "skipped", result: "campaign deleted" } });
+    if (keepHistory) {
+      await tx.campaign.update({ where: { id }, data: { status: "done", archivedAt: new Date() } });
+    } else {
+      await tx.campaign.delete({ where: { id } });
+    }
+  });
+
+  return ok({ deleted: true, archived: keepHistory, stopped: stopping, cancelled: cancelling });
 }

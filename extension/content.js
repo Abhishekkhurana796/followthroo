@@ -103,8 +103,13 @@
       /* ---- The bar ----------------------------------------------------
          Two states. Dormant it is a thin, quiet strip that says what it can do.
          Active it carries weight and one primary action, so ticking somebody
-         feels like it changed something. It used to look identical either way. */
-      #${BAR_ID}{position:sticky;top:56px;z-index:400;display:flex;align-items:center;gap:12px;
+         feels like it changed something. It used to look identical either way.
+
+         In flow, not sticky. Sticky at top:56px it slid down over the first
+         results as soon as the page scrolled (and over other tools' bars),
+         covering the very people it asks you to pick. Once it scrolls away,
+         the launcher's count badge and its panel carry the selection. */
+      #${BAR_ID}{position:relative;z-index:1;display:flex;align-items:center;gap:12px;
         margin:0 0 12px;padding:9px 14px;border:1px solid var(--ft-line);border-radius:12px;
         background:var(--ft-surface);box-shadow:0 1px 2px var(--ft-shadow);
         font-family:-apple-system,Segoe UI,Roboto,sans-serif;font-size:13px;color:var(--ft-ink);
@@ -166,6 +171,28 @@
         border-radius:50%;border:2px solid var(--ft-surface);box-sizing:border-box}
       #ft-launcher .ft-dot.on{background:var(--ft-ok)}
       #ft-launcher .ft-dot.off{background:var(--ft-err)}
+
+      /* Selected count. The bar scrolls away with the page now, so the launcher —
+         fixed to the edge — is what still says a selection is waiting. */
+      #ft-launcher .ft-badge{position:absolute;left:-7px;top:-7px;min-width:18px;height:18px;padding:0 5px;
+        border-radius:9px;background:var(--ft-ink);color:var(--ft-surface);font-size:10px;font-weight:800;
+        display:grid;place-items:center;box-sizing:border-box;border:2px solid var(--ft-surface)}
+      #ft-launcher .ft-badge[hidden]{display:none}
+
+      /* ---- "In Followthroo" chip ----------------------------------------
+         Beside a name, so it reads as a fact about that person. Green only
+         for good news; "not yet" is neutral, not a warning. */
+      .ft-chip{display:inline-flex;align-items:center;gap:6px;margin:3px 0 0 6px;padding:1px 8px;
+        border-radius:999px;border:1px solid var(--ft-line);background:var(--ft-tint);color:var(--ft-soft);
+        font:600 11px/1.6 -apple-system,Segoe UI,Roboto,sans-serif;white-space:nowrap;vertical-align:middle;
+        text-decoration:none}
+      .ft-chip.ft-in{color:var(--ft-ok);border-color:color-mix(in srgb,var(--ft-ok) 35%,transparent);
+        background:color-mix(in srgb,var(--ft-ok) 10%,transparent)}
+      a.ft-chip.ft-in:hover{text-decoration:underline}
+      .ft-chip-profile{margin:6px 0 0}
+      .ft-chip .ft-chip-add{border:0;background:${ACCENT};color:var(--ft-on-accent);border-radius:999px;
+        padding:0 8px;font:inherit;cursor:pointer}
+      .ft-chip .ft-chip-add:disabled{opacity:.6;cursor:default}
 
       /* ---- Panel ----
          Anchored to the launcher with a pointer, because it belongs to it. A
@@ -320,14 +347,31 @@
     const scope = document.querySelector("main") || document.body;
     const anchors = Array.from(scope.querySelectorAll('a[href*="/in/"]'));
     const sample = anchors[0] && anchors[0].closest("li, div[class]");
+    const { found, pairs } = readableRows();
+    // The shape of the first row, with nobody's name in it: how many profile
+    // links it holds and how many carry text or a photo. "2 links, 1 with a
+    // photo, 0 with text" is the whole Connections-page bug in one line — and the
+    // report that surfaced it had no way to say so.
+    const first = rowCards()[0];
+    const links = first ? Array.from(first.querySelectorAll('a[href*="/in/"]')) : [];
     return JSON.stringify(
       {
         url: location.href.split("?")[0],
+        pageKind: pageKind(),
         profileLinksOnPage: anchors.length,
         matchedSelector: ROW_SELECTORS.find(
           (sel) => Array.from(document.querySelectorAll(sel)).filter(isPerson).length,
         ) || null,
         structuralRows: structuralCards().length,
+        rowsFound: found,
+        rowsRead: pairs.length,
+        firstRow: first
+          ? {
+              profileLinks: links.length,
+              linksWithText: links.filter((a) => (a.textContent || "").trim()).length,
+              linksWithPhoto: links.filter((a) => a.querySelector("img")).length,
+            }
+          : null,
         sampleRowClass: sample ? sample.className || "(no class)" : null,
         extensionVersion: version(),
       },
@@ -359,15 +403,48 @@
     } catch {
       return null;
     }
+    /**
+     * The first leaf with text inside an element, not its whole textContent: a
+     * card-wide link can wrap the name AND the headline, and textContent would
+     * glue them into one "name".
+     */
+    const firstText = (el) => {
+      for (const leaf of el.querySelectorAll("span, p, div, strong, h3")) {
+        if (leaf.querySelector("span, p, div, strong, h3")) continue;
+        const t = (leaf.textContent || "").trim().replace(/\s+/g, " ");
+        if (t) return t;
+      }
+      return (el.textContent || "").trim().replace(/\s+/g, " ");
+    };
+
+    /**
+     * First non-empty text among ALL matches of each selector, in order.
+     *
+     * This used to take only the first match (`querySelector`), which is fine
+     * until the first match is empty. On the Connections page every card leads
+     * with the person's photo, linked to the same profile and holding no text —
+     * so the name came back "", every row was dropped, and the bar reported 20
+     * people it could not read. Walking every match reaches the name link after it.
+     */
     const grab = (sels) => {
       for (const s of sels) {
-        const n = card.querySelector(s);
-        const t = n && n.textContent ? n.textContent.trim().replace(/\s+/g, " ") : "";
-        if (t) return t;
+        for (const n of card.querySelectorAll(s)) {
+          const t = firstText(n);
+          if (t) return t;
+        }
       }
       return "";
     };
-    const raw = grab([
+
+    // Screen-reader and alt-text wrappers around a name: "View Priya Shah’s
+    // profile", "Photo of Priya Shah", "Priya Shah’s profile picture".
+    const cleanName = (t) =>
+      (t || "")
+        .replace(/^(view|photo of)\s+/i, "")
+        .replace(/[’']s\s+profile(\s+(picture|photo))?$/i, "")
+        .trim();
+
+    const raw = cleanName(grab([
       "span.entity-result__title-text span[aria-hidden='true']",
       ".entity-result__title-text a span",
       "span[dir='ltr'] span[aria-hidden='true']",
@@ -379,7 +456,10 @@
       // had this line; content.js was a copy that dropped it.
       'a[href*="/in/"] span[aria-hidden="true"]',
       'a[href*="/in/"]',
-    ]);
+    ])) ||
+      // A card whose only profile link is a photo, with no name text anywhere:
+      // the avatar's alt text is the person's name.
+      cleanName((card.querySelector('a[href*="/in/"] img[alt]') || {}).alt);
     const fullName = raw.replace(/\b(1st|2nd|3rd)\b/g, "").replace(/[·•|]/g, " ").replace(/\s+/g, " ").trim();
     if (!fullName) return null;
 
@@ -404,10 +484,17 @@
     for (const el of card.querySelectorAll("div, p, span, h3")) {
       if (el.querySelector("div, p, span, a, button")) continue; // leaves only
       if (el.closest("button")) continue;
+      // Our own chips are leaf text too; read as a headline, "In Followthroo"
+      // would become somebody's job title.
+      if (el.closest("[data-ft-chip]")) continue;
       const t = (el.textContent || "").trim().replace(/\s+/g, " ");
       if (t.length < 3) continue;
       if (t === fullName || t.startsWith(fullName)) continue; // name + a11y copy
       if (/^[·•|\s]*(1st|2nd|3rd)\+?[·•|\s]*$/i.test(t)) continue;
+      // Controls and screen-reader copy that are neither a headline nor a
+      // location. Connections cards carry "Connected on 8 September 2026", a
+      // Message button label and a "Remove connection" item as leaf text.
+      if (/^(connected\s|message$|remove connection|status is|view\s.+profile|more actions|connect$|follow$|pending$|send$)/i.test(t)) continue;
       if (!blocks.includes(t)) blocks.push(t);
     }
 
@@ -478,24 +565,40 @@
   }
 
   /**
-   * Mount above the results list.
+   * Mount above the results list — on pages that are lists of people, and only
+   * those.
    *
-   * It also mounts when NO rows were found, which is the point: previously a
-   * selector miss meant the bar never appeared, so a broken extension and an
-   * extension that had nothing to do looked identical — to the user and to us.
-   * Now the page says which of the two it is.
+   * On such a page it also mounts when NO rows were found, which is the point: a
+   * selector miss used to mean the bar never appeared, so a broken extension and
+   * an extension with nothing to do looked identical. Now the page says which.
+   *
+   * Which pages count is decided by the URL, not by counting profile links. The
+   * old test — three or more /in/ links inside <main> — was true of the feed,
+   * which has a profile link on every post. So the feed got a "can't read this
+   * page" box, inserted beside <main> inside LinkedIn's layout grid, covering the
+   * page. Everywhere that is not a list gets the launcher and nothing else.
    */
   function mountBar() {
+    if (!LIST_KINDS.has(pageKind())) {
+      // LinkedIn is a single-page app: leaving a search for the feed keeps our
+      // bar and the ticked selection unless we drop them here.
+      const stale = document.getElementById(BAR_ID);
+      if (stale) stale.remove();
+      if (state.selected.size) {
+        state.selected.clear();
+        paintLauncher();
+      }
+      return false;
+    }
     const cards = rowCards();
 
     if (!cards.length) {
-      // Only complain where people are actually expected. A profile page or the
-      // feed having no result rows is correct, not a failure.
-      const scope = document.querySelector("main") || document.body;
-      const looksLikeAList = scope.querySelectorAll('a[href*="/in/"]').length >= 3;
-      if (!looksLikeAList || !scope.parentElement) return false;
+      // Inside <main>, at the top — never beside it. As a sibling of <main> the
+      // bar became a cell in LinkedIn's page grid and took a column's width.
+      const scope = document.querySelector("main");
+      if (!scope) return false;
       const el = bar();
-      if (el.parentElement !== scope.parentElement) scope.parentElement.insertBefore(el, scope);
+      if (el.parentElement !== scope) scope.insertBefore(el, scope.firstChild);
       return true;
     }
 
@@ -507,6 +610,7 @@
   }
 
   function paint() {
+    paintLauncher();
     const el = document.getElementById(BAR_ID);
     if (!el) return;
     const n = state.selected.size;
@@ -608,6 +712,139 @@
     paint();
   }
 
+  /* ---------------------------------------------------------------- */
+
+  /**
+   * "In Followthroo" / "Not in Followthroo", beside the name.
+   *
+   * Other tools put this next to every person, and the question it answers is a
+   * real one: am I about to add somebody twice? Answers come from one batched
+   * call per render and are remembered for the life of the tab — nobody leaves
+   * the CRM while you scroll.
+   *
+   * Nothing is shown until the server has answered. A chip that guesses is worse
+   * than none, which is also why a failed lookup shows nothing and waits a minute
+   * before asking again rather than retrying on every render.
+   */
+  const known = new Map(); // profileUrl -> { inCrm, leadId }
+  let appBase = "https://app.followthroo.com";
+  let lookupBusy = false;
+  let lookupPausedUntil = 0;
+
+  async function lookup(urls) {
+    const wanted = [...new Set(urls)].filter((u) => u && !known.has(u)).slice(0, 100);
+    if (!wanted.length || lookupBusy || Date.now() < lookupPausedUntil) return;
+    const cfg = await chrome.storage.local.get(["apiBase", "token"]);
+    if (!cfg.apiBase || !cfg.token) return; // not connected: say nothing rather than guess
+    appBase = cfg.apiBase;
+    lookupBusy = true;
+    try {
+      const res = await fetch(`${cfg.apiBase}/api/linkedin/lookup`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${cfg.token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ urls: wanted }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok || !json.ok) throw new Error(json.error || `server said ${res.status}`);
+      for (const [url, info] of Object.entries((json.data && json.data.results) || {})) known.set(url, info);
+      paintChips();
+    } catch {
+      lookupPausedUntil = Date.now() + 60_000;
+    } finally {
+      lookupBusy = false;
+    }
+  }
+
+  /** Forget these people's answers and ask again — after adding them, say. */
+  function relookup(urls) {
+    for (const u of urls) known.delete(u);
+    lookup(urls);
+  }
+
+  function makeChip(url, info) {
+    let chip;
+    if (info.inCrm) {
+      // A link only when this member can open the record; otherwise just say so.
+      chip = document.createElement(info.leadId ? "a" : "span");
+      chip.className = "ft-chip ft-in";
+      chip.textContent = "In Followthroo";
+      if (info.leadId) {
+        chip.href = `${appBase}/dashboard/leads/${info.leadId}`;
+        chip.target = "_blank";
+        chip.rel = "noopener";
+        chip.title = "Open in Followthroo";
+      }
+    } else {
+      chip = document.createElement("span");
+      chip.className = "ft-chip ft-out";
+      chip.textContent = "Not in Followthroo";
+    }
+    chip.dataset.ftChip = url;
+    // LinkedIn cards are links end to end; a click on the chip is ours alone.
+    chip.addEventListener("click", (e) => e.stopPropagation());
+    return chip;
+  }
+
+  /** Is `el` already the right chip for this person and this answer? */
+  const chipMatches = (el, url, info) =>
+    !!el &&
+    el.dataset.ftChip === url &&
+    el.classList.contains(info.inCrm ? "ft-in" : "ft-out") &&
+    (!info.inCrm || !!el.getAttribute("href") === !!info.leadId);
+
+  function paintChips() {
+    if (LIST_KINDS.has(pageKind())) {
+      for (const { card, data } of readableRows().pairs) {
+        const info = known.get(data.profileUrl);
+        if (!info) continue;
+        const existing = card.querySelector("[data-ft-chip]");
+        if (chipMatches(existing, data.profileUrl, info)) continue;
+        if (existing) existing.remove();
+        // Beside the name: the first profile link that carries text.
+        const nameLink = Array.from(card.querySelectorAll('a[href*="/in/"]')).find((a) => (a.textContent || "").trim());
+        const chip = makeChip(data.profileUrl, info);
+        if (nameLink) nameLink.insertAdjacentElement("afterend", chip);
+        else card.appendChild(chip);
+      }
+    }
+
+    const profile = currentProfile();
+    const existing = document.querySelector("[data-ft-chip-profile]");
+    if (!profile) {
+      if (existing) existing.remove();
+      return;
+    }
+    const info = known.get(profile.profileUrl);
+    const h1 = document.querySelector("main h1") || document.querySelector("h1");
+    if (!info || !h1) return;
+    if (chipMatches(existing, profile.profileUrl, info)) return;
+    if (existing) existing.remove();
+    const chip = makeChip(profile.profileUrl, info);
+    chip.dataset.ftChipProfile = "1";
+    chip.classList.add("ft-chip-profile");
+    if (!info.inCrm) {
+      // On a profile the chip is also the quickest way to fix what it reports.
+      const add = document.createElement("button");
+      add.type = "button";
+      add.className = "ft-chip-add";
+      add.textContent = "Add";
+      add.addEventListener("click", async (e) => {
+        e.stopPropagation();
+        add.disabled = true;
+        add.textContent = "Adding…";
+        // On success postRows re-asks the server, which swaps this chip for "In".
+        await postRows([profile], (text, isError) => {
+          if (!isError) return;
+          add.disabled = false;
+          add.textContent = "Add";
+          add.title = text;
+        });
+      });
+      chip.appendChild(add);
+    }
+    h1.insertAdjacentElement("afterend", chip);
+  }
+
   /**
    * The whole result set, not just this page.
    *
@@ -666,6 +903,8 @@
         duplicates ? `Added ${created}, ${duplicates} already yours` : `Added ${created}`,
         "ok",
       );
+      // Their chips should now say "In Followthroo" — ask again rather than assume.
+      relookup(rows.map((r) => r.profileUrl));
       state.selected.clear();
       document.querySelectorAll(`.${CHECK_CLASS}`).forEach((b) => { b.checked = false; });
     } catch (e) {
@@ -697,12 +936,35 @@
   function pageKind() {
     const p = location.pathname;
     if (p.startsWith("/in/")) return "profile";
-    if (p.startsWith("/search/results/people")) return "search";
+    if (p.startsWith("/search/results/people") || p.startsWith("/sales/search/people")) return "search";
+    // Before the general /mynetwork: your own connections are a list of people;
+    // the rest of My Network (suggestions, invitations) is not.
+    if (p.startsWith("/mynetwork/invite-connect/connections")) return "connections";
+    if (/^\/company\/[^/]+\/people/.test(p)) return "company_people";
     if (p.startsWith("/company/")) return "company";
+    // A group's home is a feed of posts; only its member list is a list of people.
+    if (/^\/groups\/[^/]+\/members/.test(p)) return "group_members";
     if (p.startsWith("/groups/")) return "group";
     if (p.startsWith("/events/")) return "event";
     if (p.startsWith("/mynetwork")) return "network";
     return "other";
+  }
+
+  /**
+   * The pages that are lists of people — the only ones that get the bar.
+   * Everything else (feed, profiles, a company's or group's home, messaging)
+   * gets the launcher alone. See mountBar() for what counting links did instead.
+   */
+  const LIST_KINDS = new Set(["search", "connections", "company_people", "group_members"]);
+
+  /** Keep the launcher's count in step with the selection. */
+  function paintLauncher() {
+    const badge = document.querySelector(`#${LAUNCHER_ID} [data-ft="badge"]`);
+    if (!badge) return;
+    const n = state.selected.size;
+    badge.hidden = n === 0;
+    badge.textContent = n > 99 ? "99+" : String(n);
+    badge.title = n ? `${n} selected — open to add them` : "";
   }
 
   /** The person whose profile is open, read from the page. */
@@ -739,6 +1001,8 @@
       if (!res.ok || !json.ok) throw new Error(json.error || `server said ${res.status}`);
       const { created = 0, duplicates = 0 } = json.data || {};
       onDone(duplicates ? `Added ${created}, ${duplicates} already yours` : `Added ${created}`, false);
+      // Their chips should now say "In Followthroo" — ask again rather than assume.
+      relookup(rows.map((r) => r.profileUrl));
     } catch (e) {
       onDone(String((e && e.message) || e), true);
     }
@@ -750,9 +1014,10 @@
     el.id = LAUNCHER_ID;
     el.innerHTML = `
       <span class="ft-grip" data-ft="grip" title="Drag to move"></span>
-      <button class="ft-open" data-ft="open" title="Followthroo">F<span class="ft-dot off" data-ft="dot"></span></button>
+      <button class="ft-open" data-ft="open" title="Followthroo">F<span class="ft-dot off" data-ft="dot"></span><span class="ft-badge" data-ft="badge" hidden></span></button>
     `;
     document.body.appendChild(el);
+    paintLauncher();
 
     // Restore where they last put it.
     chrome.storage.local.get(["launcherTop"], (v) => {
@@ -809,14 +1074,38 @@
     el.style.top = `${Math.max(8, Math.min(window.innerHeight - 240, box.top))}px`;
     el.style.right = "52px";
 
-    const { found, pairs } = readableRows();
-    const profile = currentProfile();
     const kind = pageKind();
+    const listPage = LIST_KINDS.has(kind);
+    // Rows only count on a list page. The feed is full of profile links too, and
+    // offering to "add all 19 people on this page" there is the same mistake the
+    // bar used to make.
+    const { found, pairs } = listPage ? readableRows() : { found: 0, pairs: [] };
+    const profile = currentProfile();
+    const selectedCount = state.selected.size;
+    // Page text goes into innerHTML below, so it is escaped first.
+    const esc = (s) =>
+      String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 
     let bodyHtml;
     let action = null;
 
-    if (pairs.length) {
+    if (selectedCount) {
+      // The bar scrolls away with the page now; the selection it holds does not.
+      bodyHtml = `<h4>${selectedCount} selected</h4><p>Add the people you ticked, or keep ticking.</p>`;
+      action = {
+        label: `Add ${selectedCount} to Followthroo`,
+        run: async () => {
+          panelMessage(`Adding ${selectedCount}…`, false);
+          await postRows(Array.from(state.selected.values()), (text, isError) => {
+            panelMessage(text, isError);
+            if (isError) return;
+            state.selected.clear();
+            document.querySelectorAll(`.${CHECK_CLASS}`).forEach((b) => { b.checked = false; });
+            paint();
+          });
+        },
+      };
+    } else if (pairs.length) {
       bodyHtml = `<h4>${pairs.length} people on this page</h4><p>Tick the ones you want, or take the lot.</p>`;
       action = { label: `Add all ${pairs.length}`, run: addAllOnPage };
     } else if (found) {
@@ -828,9 +1117,9 @@
         `<div class="ft-note">Nothing was skipped quietly — copy the diagnostics and send them to us and this is usually a one-line fix.</div>`;
       action = { label: "Copy diagnostics", run: copyDiagnostics };
     } else if (profile) {
-      bodyHtml = `<h4>${profile.fullName}</h4><p>${profile.headline || "Save this profile to Followthroo."}</p>`;
+      bodyHtml = `<h4>${esc(profile.fullName)}</h4><p>${esc(profile.headline || "Save this profile to Followthroo.")}</p>`;
       action = { label: "Save this profile", run: saveCurrentProfile };
-    } else if (kind === "search" || kind === "company" || kind === "group" || kind === "event") {
+    } else if (listPage) {
       bodyHtml =
         `<h4>Can't read this page</h4>` +
         `<p>This looks like it should list people, but LinkedIn's layout has changed and we can't find them.</p>` +
@@ -927,7 +1216,49 @@
         decorate();
         paint();
       }
+      // Who here is already in Followthroo. Answers we have are drawn now;
+      // anyone new is asked about in one batch and drawn when it comes back.
+      const urls = LIST_KINDS.has(pageKind()) ? readableRows().pairs.map((p) => p.data.profileUrl) : [];
+      const profile = currentProfile();
+      if (profile) urls.push(profile.profileUrl);
+      paintChips();
+      if (urls.length) lookup(urls);
+      if (pageKind() === "connections") reportConnections();
     }, 400);
+  }
+
+  /**
+   * Tell Followthroo who is in your connections list, so invitations those people
+   * accepted can be marked accepted.
+   *
+   * LinkedIn announces acceptances nowhere; this list is the evidence. Only cards
+   * that say "Connected …" count — the page can also show suggestions, and one of
+   * them could be somebody with an invitation still pending. Each person is sent
+   * once per tab, not on every re-render as the page scrolls.
+   */
+  const reportedConnections = new Set();
+  async function reportConnections() {
+    const fresh = readableRows()
+      // No boundary before "connected": textContent runs adjacent elements
+      // together ("…MarketingConnected on 8 Sep"), so \bconnected misses real cards.
+      .pairs.filter((p) => /connected\b/i.test(p.card.textContent || ""))
+      .map((p) => p.data.profileUrl)
+      .filter((u) => !reportedConnections.has(u))
+      .slice(0, 200);
+    if (!fresh.length) return;
+    fresh.forEach((u) => reportedConnections.add(u));
+    const cfg = await chrome.storage.local.get(["apiBase", "token"]);
+    if (!cfg.apiBase || !cfg.token) return;
+    fetch(`${cfg.apiBase}/api/linkedin/connections/seen`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${cfg.token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ profileUrls: fresh }),
+    })
+      .then((res) => { if (!res.ok) throw new Error(String(res.status)); })
+      .catch(() => {
+        // Best effort. Forget them, so the next render tries again.
+        fresh.forEach((u) => reportedConnections.delete(u));
+      });
   }
 
   new MutationObserver(refresh).observe(document.body, { childList: true, subtree: true });

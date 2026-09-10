@@ -1,6 +1,6 @@
 # crm-data-model.md — Data Model, CRM, Import/Export
 
-**Last updated:** 2026-08-11
+**Last updated:** 2026-09-10
 **Status:** draft
 
 > Either Postgres-primary (custom CRM) or HubSpot as system-of-record with sync.
@@ -28,12 +28,34 @@
 
 ### `campaigns`
 `id`, `name`, `status (draft/active/paused/done)`, `sequence` (jsonb: ordered steps
-with channel, template_id, wait), `created_by`, timestamps.
+with channel, template_id, wait), `created_by`, `archived_at`, timestamps.
+
+**Deleting** (`DELETE /api/campaigns/[id]`, owner/admin) stops live enrollments and cancels
+queued LinkedIn actions in one transaction. A campaign that never sent anything is removed;
+one with sent messages or invitations gets `archived_at` instead and drops out of every
+list, so the Inbox, Outbox and Reports can still name it. `?dryRun=1` returns the counts the
+confirm dialog shows.
 
 ### `messages`
 `id`, `lead_id`, `campaign_id`, `channel (email/linkedin/whatsapp/social)`,
 `template_id`, `rendered_subject`, `rendered_body`, `status (queued/sent/delivered/
-bounced/replied/failed)`, `provider_id`, `sent_at`, `idempotency_key (unique)`.
+bounced/replied/failed/draft)`, `provider_id`, `sent_at`, `idempotency_key (unique)`,
+`kind (message/invite)`, `sent_by_user_id`.
+
+A LinkedIn connection request is written here with `kind: invite` so the timeline sees
+it. The Outbox (`/api/outbox`) lists `kind: message` rows as sent messages and reads
+invitations from `linkedin_actions`, which carry `kind` and `accepted_at`. "Sent by"
+reads, in order: the campaign; otherwise `sent_by_user_id` (a reply typed in the Inbox,
+which now writes a Message too); otherwise the AI agent.
+
+### `inbox_messages` attribution
+`campaign_id` is the campaign that sent an outbound message, or the one an inbound
+message answers — set only on a header or thread match, because an address match is a
+new message and naming a campaign there would claim a reply that never happened.
+`in_reply_to_message_id` is the Message a header match answers; `sent_by_user_id` is an
+Inbox reply's author. WhatsApp and LinkedIn carry no reply headers, so those threads say
+which campaign last contacted the person instead, worded as exactly that.
+`scripts/backfill-outreach-attribution.ts` fills all of this for older rows.
 
 ### `activity_log`
 `id`, `lead_id`, `campaign_id`, `type (sent/opened/clicked/delivered/bounced/replied/
@@ -137,11 +159,26 @@ of the unified record. It paginates separately from the lead bundle so opening a
 contact with years of history stays cheap.
 
 ## CSV import
-- Upload → parse (**PapaParse** / Python csv) → validate → **map columns to
-  variables** → dedupe by email → upsert.
-- Unknown columns land in `custom` jsonb and become `{{customField}}` template
+Leads → Add Lead → **Import CSV**. The tab lists the columns it understands and offers a
+sample file, both from `IMPORT_COLUMNS` / `SAMPLE_CSV` in
+`app/dashboard/leads/LeadsClient.tsx`, which mirror `normalizeRow` in
+`app/api/leads/import/route.ts` — change them together.
+
+| Column | Also accepted | Notes |
+|---|---|---|
+| `email` | | dedupe key; this **or** a LinkedIn URL is required per row |
+| `linkedin url` | `linkedin`, `linkedin profile`, `profile url` | dedupe key for rows with no email |
+| `first name`, `last name` | `name` (split on the first space) | |
+| `company`, `title`, `phone` | | |
+| `tags` | | comma-separated |
+
+- Parse with **PapaParse**; headers match case- and space-insensitively.
+- Unknown columns land in `custom` jsonb and become `{{Column name}}` template
   variables ([templates-and-variables.md](templates-and-variables.md)).
-- Report row-level errors; never silently drop.
+- A row with neither email nor LinkedIn URL is skipped with its reason; the dialog shows
+  the first three reasons. Never silently drop.
+- Imported leads get the `csv` source, the importer as `created_by` (`created_kind:
+  import`), and an owner from that source's assignment rule.
 
 ## CSV / report export
 - Export lead lists and campaign results (contacted, responses, engagement rates).

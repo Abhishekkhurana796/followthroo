@@ -132,6 +132,9 @@ export async function processSendJob(jobData: SendJob) {
       body: rendered.body,
       providerMessageId: result.providerId,
       rfcMessageId: result.rfcMessageId ?? rfcMessageId ?? null,
+      // So the thread can say which campaign sent this, and a reply can be
+      // shown as answering that campaign.
+      campaignId: campaignId ?? null,
       channel: "email",
     }).catch((e) => console.error("[job-processor] recordOutbound failed:", e));
   }

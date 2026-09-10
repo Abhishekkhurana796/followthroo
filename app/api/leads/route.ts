@@ -65,9 +65,15 @@ export async function GET(req: NextRequest) {
   const tags = searchParams.get("tags")?.split(",").map((t) => t.trim()).filter(Boolean);
   const ids = searchParams.get("ids")?.split(",").map((id) => id.trim()).filter(Boolean);
 
-  const pageSize = Math.min(Math.max(Number(searchParams.get("pageSize") ?? searchParams.get("take") ?? 50), 1), 500);
-  const page = Math.max(Number(searchParams.get("page") ?? 1), 1);
-  const skip = searchParams.has("skip") ? Number(searchParams.get("skip")) : (page - 1) * pageSize;
+  // Parsed defensively: Number("abc") is NaN, and a NaN take or skip reached
+  // Prisma and failed the whole request with a 500 instead of using the default.
+  const int = (raw: string | null, fallback: number) => {
+    const n = Number.parseInt(raw ?? "", 10);
+    return Number.isFinite(n) ? n : fallback;
+  };
+  const pageSize = Math.min(Math.max(int(searchParams.get("pageSize") ?? searchParams.get("take"), 50), 1), 500);
+  const page = Math.max(int(searchParams.get("page"), 1), 1);
+  const skip = searchParams.has("skip") ? Math.max(int(searchParams.get("skip"), 0), 0) : (page - 1) * pageSize;
 
   // A saved group resolves to a concrete set of lead ids (static or dynamic).
   const groupIds = group ? await resolveSegmentLeadIds(orgId, group) : undefined;

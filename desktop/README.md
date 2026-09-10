@@ -3,7 +3,7 @@
 Sends a customer's queued LinkedIn invitations from their own computer, on their
 own IP, using their own logged-in LinkedIn session.
 
-**Last updated:** 2026-09-08
+**Last updated:** 2026-09-09
 **Status:** draft
 
 ---
@@ -37,7 +37,8 @@ Chrome extension already used:
 |---|---|
 | Auth | `Bearer <extToken>` — the pairing token on `LinkedInAccount`, shown under LinkedIn → Browser helper |
 | Claim work | `GET /api/linkedin/queue?limit=1` |
-| Report outcome | `POST /api/linkedin/queue` with `{ actionId, status, result }` |
+| Report outcome | `POST /api/linkedin/queue` with `{ actionId, status, result, code }` |
+| Accepted invitations | `POST /api/linkedin/connections/seen` with `{ profileUrls }` — your connections list, read at the start of a run at most every six hours (`readRecentConnections` in `page-actions.js`, rationed by `connectionsCheckDue` in `store.js`). Never in a test run. LinkedIn announces acceptances nowhere else. |
 | Daily cap, campaign selection, pacing | `claimActions` in `lib/linkedin/queue.ts` |
 | CRM side effects | `completeAction` in `lib/linkedin/queue.ts` |
 
@@ -109,6 +110,69 @@ The banner is `pointer-events: none` and carries `data-followthroo-overlay`, whi
 `page-actions.js` explicitly excludes from its button search — otherwise a banner
 containing the word "Connect" would be clicked instead of LinkedIn's own button on
 every single invitation. There is a test for exactly that.
+
+## Which "Connect" belongs to this profile
+
+A profile page carries several controls reading exactly `Connect`: the person's
+own, a duplicate in the bar that sticks to the top as you scroll, and one per
+stranger in "People you may know", "Explore Premium profiles" and "Others named
+<the same name>". Only the first may ever be clicked, and an invitation cannot be
+recalled, so `act()` in `pilot-page.js` refuses to click any of them until one has
+been positively attributed to this profile.
+
+Attribution used to be structural: climb from the `<h1>` to the nearest
+`<section>`, or up to eight parents looking for a real `button`. Both assumptions
+are false on the live site — the top card is a `<div data-view-name>`, the heading
+sits ten levels below the card root, and Connect is a bare `<span>` with no role
+at all. So the marker was false for every element of every run, nothing could be
+attributed, and the app spent four releases reporting that it could see Connect
+and was refusing to press it.
+
+Attribution has three signals, ranked. `observe()` exposes two markers:
+`ownStrong` (the first two) and `inTopCard` (all three):
+
+- **the card** — climb from the `<h1>` with no depth limit, testing against the
+  candidate list that already includes unlabelled spans, stopping before `<main>`
+  (`<main>` also holds "More profiles for you"); *strong*.
+- **the heading** each control sits under, compared against the profile owner's
+  name — the one that survives LinkedIn re-nesting things; *strong*.
+- **geometry** — the action row sits just under the name, in the same column;
+  *weak*, because a short window puts the sticky top bar right under the name too.
+
+Sections that recommend other people are excluded from all three, which is what
+stops "Others named <owner>" — whose heading *is* the owner's name — from
+qualifying. The exclusion also runs after resolution, so it covers a decision
+given as screen coordinates.
+
+## The deterministic driver
+
+Choosing what to click is not a judgement call once attribution exists, so it is
+not made as one. `connect-flow.js`'s `sendConnectionRequest` drives the whole
+invite — find the profile's own Connect (by `ownStrong`, **not** the weaker
+`inTopCard`, so the sticky bar can never be mistaken for the action row), open it,
+add the note, Send, and confirm — clicking each control **by index through
+`act()`**, which still refuses the sidebar, a stranger, a destructive label,
+Follow-for-an-invite, and any Send during a test run.
+
+Dialog buttons are resolved by index from the observed list, never by their
+words: LinkedIn's invite modal is a `<div>` whose text *contains* "Send without a
+note" and "Add a note", so a text search lands on the container and clicks a dead
+element. The element list carries each button with its own label, which the word
+does not.
+
+The model (`pilot.js`) stays as the fallback for a layout the driver does not
+recognise — but only *before* any click, so a hand-off can never become a second
+invitation. Messages still go through the model. Every outcome carries a
+machine-readable `code` (`outcome-codes.js`) alongside the human `result`:
+`CONNECT_BUTTON_NOT_FOUND`, `CONNECT_BUTTON_AMBIGUOUS`,
+`INVITATION_SUBMISSION_UNCONFIRMED`, `TARGET_PROFILE_MISMATCH`, and the rest. A
+send counts only when the page confirms it — the button turning to "Pending" or a
+"sent" toast — never because Send was clicked.
+
+`scripts/verify-connect-flow.ts` exercises the nine cases: one Connect, two with
+one attributed, two with none (refuse), Follow-only (never Follow), Connect in the
+More menu, wrong profile, dialog-without-Send, Send-without-confirmation, and
+automatic-sending-off.
 
 ## When a run stops
 
@@ -214,42 +278,61 @@ download button on `/dashboard/linkedin` from "ask your admin" into a link.
 ### Where it lives now
 
 Vercel Blob, in a public store called **`leadskonnect-downloads`** (region `bom1`),
-linked to the `leadskonnect` project. The published URL is:
+linked to the `leadskonnect` project. `NEXT_PUBLIC_DESKTOP_BLOB_BASE` holds the
+store's base URL in production, preview and development:
 
 ```text
-https://wet59gidjhcn7yck.public.blob.vercel-storage.com/followthroo-linkedin-setup.exe
+https://wet59gidjhcn7yck.public.blob.vercel-storage.com
 ```
 
-`NEXT_PUBLIC_DESKTOP_APP_URL` is set to that in production, preview and
-development.
+One immutable object **per version** under that base:
+
+```text
+<base>/followthroo-linkedin-setup-<version>.exe
+```
+
+The site never links to a blob directly. `DESKTOP_APP_URL` points at
+`/api/desktop/download`, which 302s to `desktopInstallerUrl()` — built from
+`DESKTOP_APP_VERSION` in `lib/constants.ts`. That indirection is the whole
+release mechanism: bump the constant and the link moves, with no env var to edit
+and no `NEXT_PUBLIC_*` rebuild needed to change which file is current.
+
+An earlier arrangement overwrote one fixed pathname
+(`followthroo-linkedin-setup.exe`) on every release. Blob objects are served with
+a thirty-day cache, so edges kept handing out the previous build: somebody
+downloading "the latest" got last week's, and the bug they had just reported was
+still there after they reinstalled. Hence one object per version, cached hard and
+correctly, with the route as the only mutable part.
 
 ### Publishing a new build
 
-From `desktop/`, after `npm run dist`:
+Three steps, in order. Skipping the upload ships a download button that 404s.
+
+1. Bump `desktop/package.json`, `DESKTOP_APP_VERSION` in `lib/constants.ts` and
+   the version badge in `desktop/renderer/index.html` — same commit.
+2. Build and upload, from `desktop/` after `npm run dist`:
 
 ```bash
+V=$(node -p "require('./package.json').version")
 RW=$(grep -m1 '^BLOB_READ_WRITE_TOKEN=' ../.env.local | cut -d= -f2- | tr -d '"\r')
-vercel blob put "dist/Followthroo for LinkedIn Setup 1.0.0.exe" \
-  --pathname followthroo-linkedin-setup.exe \
-  --access public --allow-overwrite true --rw-token "$RW"
+vercel blob put "dist/Followthroo for LinkedIn Setup $V.exe" \
+  --pathname "followthroo-linkedin-setup-$V.exe" \
+  --access public --rw-token "$RW"
 ```
 
-Three flags that are not optional, each of which cost a failed attempt:
+3. Deploy the web app, so the route redirects to the version just uploaded.
+
+Two flags that are not optional, each of which cost a failed attempt:
 
 - `--rw-token` — without it the CLI finds `VERCEL_OIDC_TOKEN` in `.env.local`
   but no `BLOB_STORE_ID`, and refuses with a message about setting both or
   neither. Passing the read-write token explicitly sidesteps the whole question.
 - `--access public` — required, and the point: a private blob needs a signed URL,
   which a customer clicking a download link does not have.
-- `--allow-overwrite true` — the pathname must stay
-  `followthroo-linkedin-setup.exe` across releases so the env var never changes.
-  Without this the upload either fails or lands beside the old one.
-  (`--add-random-suffix=false` is documented as the default and did **not**
-  prevent a suffix; `--allow-overwrite` is what actually gives a stable name.)
 
-`NEXT_PUBLIC_*` is inlined at build time, so changing that variable needs a
-redeploy — but re-uploading to the same pathname does not, which is the reason
-for the stable name.
+`--allow-overwrite` is deliberately **not** used any more. Versioned pathnames
+are write-once; needing to overwrite one means a build was published twice under
+the same version, which is the thing the caching bug above punished.
 
 ### The alternatives, and why not
 

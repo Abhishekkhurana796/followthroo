@@ -81,6 +81,10 @@ export type ResolveInput = {
   sourceKey?: string;
   /** Adapter name, recorded against each new identifier. */
   source?: string;
+  /** Who added the contact, when a person did. Written only on create. */
+  createdById?: string | null;
+  /** user | import | extension | linkedin_bulk | webhook. Written only on create. */
+  createdKind?: string;
 };
 
 export type ResolveResult = {
@@ -130,6 +134,10 @@ export async function resolveContact(input: ResolveInput): Promise<ResolveResult
         company: input.profile?.company ?? null,
         title: input.profile?.title ?? null,
         leadSourceId: sourceId,
+        // Who added it — set only here, on create: re-importing somebody who
+        // already exists must not rewrite who brought them in.
+        createdById: input.createdById ?? null,
+        ...(input.createdKind ? { createdKind: input.createdKind } : {}),
         contactIdentities: {
           create: identities.map((i) => ({ organizationId, kind: i.kind, value: i.value, source })),
         },

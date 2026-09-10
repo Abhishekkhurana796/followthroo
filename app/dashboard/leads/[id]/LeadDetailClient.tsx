@@ -38,6 +38,10 @@ type Lead = {
   stage: string; tags: string[]; score: number | null; optedOut: boolean;
   budgetMentioned: boolean | null; timelineMentioned: boolean | null; decisionMakerConfirmed: boolean | null;
   createdAt: string;
+  /** The contact's assigned rep — what assignment writes. Distinct from a deal's owner. */
+  ownerId: string | null;
+  createdById: string | null;
+  createdKind: string;
   contactIdentities: Identity[];
   leadSource: { id: string; key: string; label: string } | null;
   tasks: Task[];
@@ -112,6 +116,12 @@ export default function LeadDetailClient({ id }: { id: string }) {
               {lead.optedOut && <Badge tone="danger">Opted out</Badge>}
               {lead.leadSource && <Badge tone="neutral">via {lead.leadSource.label}</Badge>}
             </div>
+            {/* Who brought them in, and when. "Where did this lead come from?"
+                had no answer on the record itself. */}
+            <p {...localTime} className="mt-2 text-xs text-ink-faint">
+              Added{lead.createdById ? ` by ${ownerName(lead.createdById) ?? "a former member"}` : ""} on{" "}
+              {new Date(lead.createdAt).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" })}
+            </p>
           </div>
 
           <ChannelActions lead={lead} />
@@ -555,6 +565,29 @@ function CrmRail({
   const prompt = usePrompt();
   const confirm = useConfirm();
   const toast = useToast();
+  // Who this person may hand a contact to: the same list, and rule, as tasks.
+  const { data: assignees } = useSWR<{ self: string; members: { userId: string; name: string; isSelf: boolean }[] }>(
+    "/api/tasks/assignees",
+  );
+
+  /**
+   * Give the contact to someone.
+   *
+   * The only way to do this used to be ticking the contact on the Leads screen
+   * and finding "Assign to…" in the bulk bar. On the record itself, "Owner" was a
+   * read-only line showing the deal's owner — so a contact in no pipeline said
+   * nothing about who owned it at all.
+   */
+  async function assign(ownerId: string) {
+    const value = ownerId || null;
+    if (value === lead.ownerId) return;
+    setBusy(true); onError(null);
+    try {
+      await api(`/api/leads/${lead.id}`, { method: "PATCH", body: { ownerId: value } });
+      await onChanged();
+      toast(value ? "Owner updated." : "Contact unassigned.");
+    } catch (e) { onError((e as Error).message); } finally { setBusy(false); }
+  }
 
   async function moveStage(toStageId: string) {
     if (!item || toStageId === item.stage.id) return;
@@ -598,8 +631,35 @@ function CrmRail({
     } catch (e) { onError((e as Error).message); } finally { setBusy(false); }
   }
 
+  const canPick = (assignees?.members.length ?? 0) > 1;
+
   return (
     <div className="space-y-4">
+      <Panel>
+        <h2 className="font-display text-sm font-bold uppercase tracking-wide text-ink-soft">Owner</h2>
+        {canPick ? (
+          <Select
+            value={lead.ownerId ?? ""}
+            disabled={busy}
+            onChange={(e) => assign(e.target.value)}
+            aria-label="Contact owner"
+            className="mt-3 !py-2 !text-sm"
+          >
+            <option value="">Unassigned</option>
+            {/* An owner this person may not assign to is still the owner — name
+                them rather than showing the select as blank. */}
+            {lead.ownerId && !assignees!.members.some((m) => m.userId === lead.ownerId) && (
+              <option value={lead.ownerId}>{ownerName(lead.ownerId) ?? "Someone else"}</option>
+            )}
+            {assignees!.members.map((m) => (
+              <option key={m.userId} value={m.userId}>{m.isSelf ? `${m.name} (you)` : m.name}</option>
+            ))}
+          </Select>
+        ) : (
+          <p className="mt-2 text-sm">{ownerName(lead.ownerId) ?? "Unassigned"}</p>
+        )}
+      </Panel>
+
       <Panel>
         <h2 className="font-display text-sm font-bold uppercase tracking-wide text-ink-soft">Pipeline</h2>
         {item ? (
@@ -611,7 +671,7 @@ function CrmRail({
               </Select>
             </div>
             <Row label="Pipeline" value={item.pipeline.name} />
-            <Row label="Owner" value={ownerName(item.ownerId) ?? "Unassigned"} />
+            <Row label="Deal owner" value={ownerName(item.ownerId) ?? "Unassigned"} />
             <Row label="Value" value={item.value != null ? `₹${item.value.toLocaleString("en-IN")}` : "—"} />
             <Row label="In stage since" value={new Date(item.enteredStageAt).toLocaleDateString()} localTime />
             {item.slaBreachedAt && (

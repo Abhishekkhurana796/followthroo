@@ -23,11 +23,14 @@ import { join } from "node:path";
 import { chromium, type Browser, type Page } from "@playwright/test";
 import { observe, act, FORBIDDEN } from "../desktop/pilot-page";
 import { pilotAction } from "../desktop/pilot";
+import { PilotObservationSchema, userPrompt } from "../lib/linkedin/pilot";
 
 const ROOT = join(__dirname, "..");
 const FIXTURE = readFileSync(join(ROOT, "scripts", "linkedin-fixtures", "profile-more-dropdown.html"), "utf8");
 /** The markup that defeated every structural selector: Connect as a bare span. */
 const SPAN_FIXTURE = readFileSync(join(ROOT, "scripts", "linkedin-fixtures", "profile-span-connect.html"), "utf8");
+/** The shape of a live profile: deep nesting, no <section>, a duplicate sticky row. */
+const DEEP_FIXTURE = readFileSync(join(ROOT, "scripts", "linkedin-fixtures", "profile-deep-card.html"), "utf8");
 const RIGHT = "https://www.linkedin.com/in/anirudh-bisht/";
 
 let pass = 0,
@@ -93,7 +96,7 @@ async function main() {
       const page = await openPage(RIGHT + "?cardconnect");
       const expectedName = (await page.evaluate(observe)).personName;
       const run = (decision: Decision) =>
-        page.evaluate(act, { decision, expectedName, forbiddenSource: FORBIDDEN.source, goal: "invite" });
+        page.evaluate(act, { decision, expectedName, forbiddenSource: FORBIDDEN.source, goal: "invite", autoSend: true });
 
       // A stranger's Connect, from the "People also viewed" rail.
       const strangerIdx = await indexOf(page, /Wrong Person One/i);
@@ -123,7 +126,7 @@ async function main() {
       const page = await openPage(RIGHT + "?cardconnect");
       const expectedName = (await page.evaluate(observe)).personName;
       const run = (decision: Decision, name = expectedName) =>
-        page.evaluate(act, { decision, expectedName: name, forbiddenSource: FORBIDDEN.source, goal: "invite" });
+        page.evaluate(act, { decision, expectedName: name, forbiddenSource: FORBIDDEN.source, goal: "invite", autoSend: true });
 
       // What actually happened on a real profile: the model reported "Connect
       // button is available directly on the profile" and clicked
@@ -180,6 +183,7 @@ async function main() {
         expectedName: seen.personName,
         forbiddenSource: FORBIDDEN.source,
         goal: "invite",
+        autoSend: true,
       });
       ok(byLabel.ok === true, `clicking by label works (${byLabel.error ?? byLabel.did})`);
       const invited = await page.evaluate(() => (window as never as { __invited?: string }).__invited ?? null);
@@ -196,12 +200,187 @@ async function main() {
         expectedName: ambSeen.personName,
         forbiddenSource: FORBIDDEN.source,
         goal: "invite",
+        autoSend: true,
       });
       ok(ambRes.ok === false, `ambiguous text is refused, not guessed (${ambRes.error ?? "ALLOWED"})`);
       const ambInvited = await amb.evaluate(() => (window as never as { __invited?: string }).__invited ?? null);
       ok(ambInvited === null, `and nobody was invited (invited: ${ambInvited})`);
       await amb.close();
       await sctx.close();
+    }
+
+    console.log("\n1c2. the profile's own Connect is attributed with no help from the DOM");
+    {
+      const sctx = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+      await sctx.route("**/*", (route) =>
+        route.fulfill({ status: 200, contentType: "text/html; charset=utf-8", body: SPAN_FIXTURE }),
+      );
+      // Both containment signals defeated, as they are on the live site: the
+      // action row is not inside a container that also holds the <h1>, and its
+      // nearest heading is not the person's name. Every real run was in exactly
+      // this position — inTopCard false for all 286 elements — so the two
+      // Connects looked equally anonymous and the run refused three times and
+      // gave up on a page whose Connect was plainly visible.
+      const page = await sctx.newPage();
+      await page.goto(RIGHT + "?nostructure");
+      await page.waitForTimeout(400);
+
+      const seen = await page.evaluate(observe);
+      const connects = seen.elements.filter((e) => /^Connect$/i.test(e.label));
+      ok(connects.length >= 2, `several controls read "Connect" (${connects.length})`);
+      ok(
+        connects.filter((c) => c.inTopCard).length === 1,
+        `exactly one is attributed to this profile (${connects.filter((c) => c.inTopCard).length})`,
+      );
+
+      const res = await page.evaluate(act, {
+        decision: { action: "click", label: "Connect" },
+        expectedName: seen.personName,
+        forbiddenSource: FORBIDDEN.source,
+        goal: "invite",
+        autoSend: true,
+      });
+      ok(res.ok === true, `so it can be clicked rather than refused (${res.error ?? res.did})`);
+      const invited = await page.evaluate(() => (window as never as { __invited?: string }).__invited ?? null);
+      ok(invited === "right", `and it is the profile owner's (invited: ${invited})`);
+      await page.close();
+      await sctx.close();
+    }
+
+    console.log("\n1d. a test run cannot send, whatever the model decides");
+    {
+      const sctx = await browser.newContext();
+      await sctx.route("**/*", (route) =>
+        route.fulfill({ status: 200, contentType: "text/html; charset=utf-8", body: SPAN_FIXTURE }),
+      );
+      const page = await sctx.newPage();
+      await page.goto(RIGHT);
+      const seen = await page.evaluate(observe);
+
+      // Open the dialog so a Send control exists to be refused.
+      await page.evaluate(act, {
+        decision: { action: "click", label: "Connect" },
+        expectedName: seen.personName,
+        forbiddenSource: FORBIDDEN.source,
+        goal: "invite",
+        autoSend: false,
+      });
+      await page.waitForTimeout(300);
+
+      // "Allowed to actually send: no" was only a line in the prompt, which the
+      // model is free to ignore — so a Test run could put a real invitation on
+      // somebody's LinkedIn, and never record it, because a dry run reports
+      // nothing to the server. Test and Start were doing the same thing.
+      for (const label of ["Send now", "Send without a note"]) {
+        const res = await page.evaluate(act, {
+          decision: { action: "click", label },
+          expectedName: seen.personName,
+          forbiddenSource: FORBIDDEN.source,
+          goal: "invite",
+          autoSend: false,
+        });
+        ok(res.ok === false, `"${label}" is refused during a test run (${res.error ?? "ALLOWED"})`);
+      }
+      const sentPlain = await page.evaluate(
+        () => (window as never as { __sentWithoutNote?: boolean }).__sentWithoutNote ?? false,
+      );
+      const note = await page.evaluate(() => (window as never as { __note?: string }).__note ?? null);
+      ok(sentPlain === false && note === null, `and nothing was actually sent (plain: ${sentPlain}, note: ${note})`);
+      await page.close();
+      await sctx.close();
+    }
+
+    console.log("\n1e. on a page shaped like the real thing, the profile's own Connect is found");
+    {
+      const dctx = await browser.newContext();
+      await dctx.route("**/*", (route) =>
+        route.fulfill({ status: 200, contentType: "text/html; charset=utf-8", body: DEEP_FIXTURE }),
+      );
+
+      // The regression this suite missed for four releases. Every earlier
+      // fixture kept the <h1> and the buttons in one <section> a level apart, so
+      // `inTopCard` was true here and false on every real profile — and a marker
+      // that is never true means act() cannot tell the profile's own Connect
+      // from a stranger's, refuses both, and three refusals end the action. The
+      // logs show no invitation ever sent, on any run, while this suite passed.
+      const page = await dctx.newPage();
+      await page.goto(RIGHT);
+      const seen = await page.evaluate(observe);
+
+      const connects = seen.elements.filter((e) => /^Connect$/i.test(e.label));
+      const own = connects.filter((e) => e.inTopCard);
+      ok(connects.length >= 4, `all four Connect controls are seen (found ${connects.length})`);
+      ok(own.length === 1, `exactly one is attributed to this profile (marked ${own.length})`);
+      ok(
+        (own[0]?.section ?? "").toLowerCase() === "anirudh bisht",
+        `and it is the one under the owner's own heading (under: ${own[0]?.section ?? "none"})`,
+      );
+
+      // The sticky duplicate action row sits under no heading at all, so nothing
+      // can attribute it. Unmarked is correct: the real card's Connect is marked
+      // and clickable whatever the page is scrolled to.
+      const sticky = connects.find((e) => e.section === null && !e.inAside);
+      ok(!!sticky && !sticky.inTopCard, "the unattributable sticky duplicate stays unmarked");
+
+      // False on every real page today, which is why each action also burned the
+      // full twelve-second hydration wait before doing anything at all.
+      ok(seen.profileReady === true, `the profile reads as ready (was: ${seen.profileReady})`);
+
+      const byLabel = await page.evaluate(act, {
+        decision: { action: "click", label: "Connect" },
+        expectedName: seen.personName,
+        forbiddenSource: FORBIDDEN.source,
+        goal: "invite",
+        autoSend: true,
+      });
+      ok(byLabel.ok === true, `clicking by label is allowed (${byLabel.error ?? byLabel.did})`);
+      const invited = await page.evaluate(() => (window as never as { __invited?: string }).__invited ?? null);
+      ok(invited === "right", `and it reached the profile owner (invited: ${invited})`);
+      await page.close();
+
+      // "Others named Anirudh Bisht" carries the owner's own name as its
+      // heading, so heading text alone would hand us a stranger. A coordinate
+      // answer is the path that never went through the text resolver, and so
+      // never had this checked — and the span carries no name for the name
+      // check to read either.
+      const strangers = await dctx.newPage();
+      await strangers.goto(RIGHT);
+      const box = await strangers.locator('[data-who="wrong-named"]').boundingBox();
+      const byPoint = await strangers.evaluate(act, {
+        decision: { action: "click", x: Math.round((box?.x ?? 0) + 4), y: Math.round((box?.y ?? 0) + 4) },
+        expectedName: (await strangers.evaluate(observe)).personName,
+        forbiddenSource: FORBIDDEN.source,
+        goal: "invite",
+        autoSend: true,
+      });
+      ok(byPoint.ok === false, `a point on "Others named" is refused (${byPoint.error ?? "ALLOWED"})`);
+      ok(
+        (await strangers.evaluate(() => (window as never as { __invited?: string }).__invited ?? null)) === null,
+        "and that stranger was not invited",
+      );
+      await strangers.close();
+
+      // Nothing attributable to anybody. Refusing is still the only safe answer,
+      // but the refusal now says what to try instead — repeating one dead-end
+      // suggestion until the third refusal is what ended the action before.
+      const amb = await dctx.newPage();
+      await amb.goto(RIGHT + "?ambiguous");
+      const ambSeen = await amb.evaluate(observe);
+      const ambRes = await amb.evaluate(act, {
+        decision: { action: "click", label: "Connect" },
+        expectedName: ambSeen.personName,
+        forbiddenSource: FORBIDDEN.source,
+        goal: "invite",
+        autoSend: true,
+      });
+      ok(ambRes.ok === false, `genuinely ambiguous text is still refused (${ambRes.error ?? "ALLOWED"})`);
+      ok(/elements \d+, \d+/.test(ambRes.error ?? ""), `and the refusal names the candidates: ${ambRes.error}`);
+      ok(
+        (await amb.evaluate(() => (window as never as { __invited?: string }).__invited ?? null)) === null,
+        "and nobody was invited",
+      );
+      await amb.close();
+      await dctx.close();
     }
 
     console.log("\n2. destructive actions are refused whatever the model says");
@@ -215,6 +394,7 @@ async function main() {
         expectedName,
         forbiddenSource: FORBIDDEN.source,
         goal: "invite",
+        autoSend: true,
       });
       await page.waitForTimeout(400);
 
@@ -225,6 +405,7 @@ async function main() {
           expectedName,
           forbiddenSource: FORBIDDEN.source,
           goal: "invite",
+          autoSend: true,
         });
         ok(res.ok === false, `${name} is refused (${res.error ?? "ALLOWED"})`);
       }
@@ -324,6 +505,40 @@ async function main() {
       // that never started, so "done" has to be backed by an actual click.
       ok(outcome.status === "failed", `an unbacked claim of success is not recorded as sent (status: ${outcome.status})`);
       ok(/without ever clicking Connect/i.test(outcome.result || ""), `and says why: ${outcome.result}`);
+    }
+
+    console.log("\n6. the markers survive the trip to the model");
+    {
+      // The other half of the same bug. The page computed `inTopCard`, and the
+      // endpoint's schema — a separate copy of the type, in a different file —
+      // did not declare it, so Zod stripped it along with `section` and `y`.
+      // The prompt then spent three paragraphs telling the model to rely on a
+      // marker it was never sent. Asserted on the rendered prompt rather than
+      // the parsed object, because the prompt is where it has to show up.
+      const wire = {
+        goal: "invite" as const,
+        personName: "Anirudh Bisht",
+        note: null,
+        autoSend: true,
+        url: RIGHT,
+        step: 0,
+        history: [],
+        elements: [
+          { i: 0, tag: "span", label: "Connect", inTopCard: true, section: "Anirudh Bisht", y: 511 },
+          { i: 1, tag: "span", label: "Connect", inAside: true, section: "People you may know", y: 2210 },
+        ],
+      };
+
+      const parsed = PilotObservationSchema.safeParse(wire);
+      ok(parsed.success, `a real observation validates (${parsed.success ? "ok" : parsed.error.issues[0]?.message})`);
+      if (parsed.success) {
+        ok(parsed.data.elements[0].inTopCard === true, "inTopCard survives validation");
+        ok(parsed.data.elements[0].section === "Anirudh Bisht", "section survives validation");
+        const prompt = userPrompt(parsed.data);
+        ok(/IN-PROFILE-ACTION-ROW/.test(prompt), "the prompt marks the profile's own action row");
+        ok(/\[under: Anirudh Bisht\]/.test(prompt), "and says what each control sits under");
+        ok(/IN-SIDEBAR-DO-NOT-USE/.test(prompt), "and still marks the sidebar");
+      }
     }
   } finally {
     await browser.close();

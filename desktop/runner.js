@@ -20,8 +20,10 @@
 const path = require("node:path");
 const fs = require("node:fs");
 const { chromium } = require("playwright-core");
-const { fillLinkedInAction } = require("./page-actions");
+const { fillLinkedInAction, readRecentConnections } = require("./page-actions");
 const { pilotAction } = require("./pilot");
+const { sendConnectionRequest } = require("./connect-flow");
+const { CODES } = require("./outcome-codes");
 
 /**
  * The daily ceiling, enforced here as well as on the server.
@@ -289,6 +291,14 @@ async function runBatch({
    * without a LinkedIn account to test them against.
    */
   launch = openBrowser,
+  /**
+   * Is it time to read the connections list for accepted invitations? Off unless
+   * the caller says otherwise, so the verification scripts — which serve every
+   * URL from a fixture — do not wander onto a page they did not set up.
+   */
+  connectionsCheckDue = () => false,
+  /** Called once the connections list has been read and reported. */
+  onConnectionsChecked = () => {},
 }) {
   const summary = {
     sent: 0,
@@ -359,6 +369,58 @@ async function runBatch({
       return summary;
     }
 
+    // Which account and which autoSend the server actually sees for this
+    // token. The gate above turns on account.autoSend; logging the account
+    // identity here is what makes a multi-member "UI says on, desktop says
+    // off" visible — the toggle and the desktop token can point at different
+    // LinkedInAccount rows. No secrets: config returns names and caps, never
+    // the token, cookies or li_at.
+    try {
+      const cfg = await api(apiBase, "/api/linkedin/config", { token });
+      log.write({
+        event: "run-account",
+        liMemberName: cfg.liMemberName,
+        autoSend: cfg.autoSend,
+        status: cfg.status,
+        dailyInviteCap: cfg.dailyInviteCap,
+      });
+    } catch (_) {
+      // Best effort — the run does not depend on it.
+    }
+
+    // Accepted invitations. LinkedIn announces them nowhere, so once every few
+    // hours the run opens your connections list before anything else and tells
+    // Followthroo who is on it (readRecentConnections in page-actions.js). Best
+    // effort — a run never stops over it — and never in a test run, which must
+    // leave no trace in the CRM.
+    if (!dryRun && connectionsCheckDue()) {
+      try {
+        emit("status", { message: "Checking who accepted your invitations…" });
+        await page.goto("https://www.linkedin.com/mynetwork/invite-connect/connections/", {
+          waitUntil: "domcontentloaded",
+          timeout: 30_000,
+        });
+        await sleep(2500 + Math.random() * 1500);
+        const profileUrls = await page.evaluate(readRecentConnections);
+        let matched = 0;
+        if (profileUrls.length) {
+          const res = await api(apiBase, "/api/linkedin/connections/seen", {
+            method: "POST",
+            token,
+            body: { profileUrls },
+          });
+          matched = (res && res.matched) || 0;
+        }
+        log.write({ event: "connections-seen", read: profileUrls.length, matched });
+        if (matched) {
+          emit("status", { message: `${matched} invitation${matched === 1 ? " was" : "s were"} accepted since the last check.` });
+        }
+        onConnectionsChecked();
+      } catch (e) {
+        log.write({ event: "connections-seen-failed", error: String((e && e.message) || e) });
+      }
+    }
+
     let consecutiveFailures = 0;
 
     while (progress() < cap) {
@@ -404,7 +466,8 @@ async function runBatch({
       if (!autoSend && !dryRun) {
         summary.stoppedBecause =
           'Automatic sending is off. Turn on "Send invites automatically" in Followthroo → LinkedIn, then press Start.';
-        emit("fatal", { message: summary.stoppedBecause });
+        log.write({ event: "gate", code: CODES.AUTOMATIC_SENDING_DISABLED, message: summary.stoppedBecause });
+        emit("fatal", { code: CODES.AUTOMATIC_SENDING_DISABLED, message: summary.stoppedBecause });
         break;
       }
 
@@ -457,33 +520,46 @@ async function runBatch({
             )
             .catch(() => {});
 
-          // The model drives. It reads whatever is actually on the page, which is
-          // what LinkedIn kept changing out from under a selector — Connect on the
-          // card, Connect in an overflow menu, Connect renamed.
-          outcome = await pilotAction({
+          // Checked per action rather than once per run: the allowance is spent
+          // as the run goes, so the fourth invitation of the day should go
+          // without a note even though the first three carried one.
+          const onStep = (st) => {
+            log.write({ event: "step", who, url: action.linkedinUrl, ...st });
+            emit("status", {
+              message: st.refused
+                ? `Ignored an unsafe suggestion: ${st.refused}`
+                : `Working on ${who}: ${st.decision?.reason || st.decision?.action || "thinking"}`,
+            });
+          };
+          const args = {
             page,
             action: { ...action, autoSend },
             apiBase,
             token,
-            // Checked per action rather than once per run: the allowance is
-            // spent as the run goes, so the fourth invitation of the day should
-            // go without a note even though the first three carried one.
             useNote: noteAllowed(),
-            onStep: (s) => {
-              log.write({ event: "step", who, url: action.linkedinUrl, ...s });
-              emit("status", {
-                message: s.refused
-                  ? `Ignored an unsafe suggestion: ${s.refused}`
-                  : `Working on ${who}: ${s.decision?.reason || s.decision?.action || "thinking"}`,
-              });
-            },
-          });
+            onStep,
+          };
 
-          // Only when no model is configured at all. The selector path still
-          // works for the common layouts and is better than refusing to run, but
-          // it is a floor, not the plan.
+          // Connection requests are driven deterministically: observe() already
+          // knows which Connect is the profile's own, so the model is not asked
+          // to choose between identical buttons. It stays as the fallback for a
+          // layout the driver does not recognise — but only before any click, so
+          // a hand-off can never become a second invitation. Messages still go
+          // through the model, which handles the compose-and-send flow.
+          if (action.type === "message") {
+            outcome = await pilotAction(args);
+          } else {
+            outcome = await sendConnectionRequest({
+              ...args,
+              fallback: () => pilotAction(args),
+            });
+          }
+
+          // Only when no model is configured at all — and only reachable when the
+          // driver delegated to the model. The selector path is a floor, not the
+          // plan.
           if (
-            /could not reach the assistant|No model is configured/i.test(
+            /No model is configured|not available on this deployment/i.test(
               outcome.result || "",
             )
           ) {
@@ -496,13 +572,12 @@ async function runBatch({
               ...action,
               autoSend,
             });
-            // Say which path produced this. Without it, a fallback failure reads
-            // as "the AI could not do it" when the AI was never asked — and the
-            // real problem (an endpoint that is not deployed, a missing key) is
-            // invisible in the one place anybody looks.
             outcome.result = `[no AI — ${why}] ${outcome.result}`;
           } else {
-            outcome.result = `[AI] ${outcome.result}`;
+            // Say which path produced this: the deterministic driver, or the
+            // model it handed off to.
+            const tag = outcome.delegated || action.type === "message" ? "AI" : "auto";
+            outcome.result = `[${tag}] ${outcome.result}`;
           }
         } catch (e) {
           outcome = { status: "failed", result: String((e && e.message) || e) };
@@ -525,6 +600,7 @@ async function runBatch({
             actionId: action.id,
             status: outcome.status,
             result: outcome.result,
+            code: outcome.code || undefined,
           },
         }).catch(() => {
           // Best effort. The server reclaims a stale in_progress row after 15
@@ -546,6 +622,7 @@ async function runBatch({
         who,
         url: action.linkedinUrl,
         status: outcome.status,
+        code: outcome.code || null,
         result: outcome.result,
         noteUsed: !!outcome.noteUsed,
       });

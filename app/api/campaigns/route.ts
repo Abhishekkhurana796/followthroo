@@ -21,7 +21,8 @@ export async function GET(req: NextRequest) {
   const ctx = await requireOrg(req);
   if (ctx instanceof Response) return ctx;
   const campaigns = await prisma.campaign.findMany({
-    where: { organizationId: ctx.orgId },
+    // Deleted campaigns with history are archived, not removed — see DELETE in ./[id].
+    where: { organizationId: ctx.orgId, archivedAt: null },
     include: CAMPAIGN_INCLUDE,
     orderBy: { createdAt: "desc" },
   });

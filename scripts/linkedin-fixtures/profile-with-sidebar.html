@@ -85,6 +85,17 @@
         // Captured here because the dialog is gone by the time a test can read it.
         window.__note = modal.querySelector("#custom-message").value;
         modal.remove();
+        // LinkedIn flips the card's Connect to "Pending" once the invitation is
+        // away. That is the page confirming the send, and the deterministic
+        // driver (and the pilot) treat it as the proof a send happened — so the
+        // fixture has to model it, or a real send reads as unconfirmed.
+        if (b.dataset.who === "right") {
+          const own = document.getElementById("ownConnect");
+          if (own) {
+            own.setAttribute("aria-label", "Pending");
+            own.textContent = "Pending";
+          }
+        }
       });
     });
   });

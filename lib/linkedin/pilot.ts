@@ -21,32 +21,49 @@
  * provider key inside a downloadable binary hands it to anyone who unzips it.
  */
 import Anthropic from "@anthropic-ai/sdk";
+import { z } from "zod";
 import { env, configured } from "../env";
 
-/** One clickable the page reported. `i` is what the model answers with. */
-export interface PilotElement {
-  i: number;
-  tag: string;
-  role?: string | null;
-  label: string;
-  disabled?: boolean;
-  inDialog?: boolean;
-  inAside?: boolean;
-  /** In the profile's own top card — the action row, not a "see more" elsewhere. */
-  inTopCard?: boolean;
-  /** Nearest heading above it, so identical labels can be told apart. */
-  section?: string | null;
-  y?: number;
-}
+/**
+ * The wire contract, defined once.
+ *
+ * This was a hand-written `interface` here and a separate Zod schema in
+ * app/api/linkedin/assist/route.ts, and they drifted: the schema never declared
+ * `inTopCard`, `section` or `y`, and Zod strips what it does not declare. So the
+ * three fields the page went to some trouble to compute were deleted in transit,
+ * `userPrompt` below rendered neither IN-PROFILE-ACTION-ROW nor [under: …], and
+ * the model was told at length to rely on a marker it was never shown.
+ *
+ * Types are derived from the schema now, so a field cannot exist in one and be
+ * silently dropped by the other.
+ */
 
-export interface PilotObservation {
-  goal: "invite" | "message";
-  /** The profile owner, from the page's <h1>. */
-  personName: string;
+/** One clickable the page reported. `i` is what the model answers with. */
+export const PilotElementSchema = z.object({
+  i: z.number().int().min(0),
+  tag: z.string().max(20),
+  role: z.string().max(40).nullish(),
+  label: z.string().max(300),
+  disabled: z.boolean().optional(),
+  /** A text box that already holds text, so it is not typed into twice. */
+  filled: z.boolean().optional(),
+  inDialog: z.boolean().optional(),
+  inAside: z.boolean().optional(),
+  /** In the profile's own action row, established from the card or the heading. */
+  inTopCard: z.boolean().optional(),
+  /** Nearest heading above it, so identical labels can be told apart. */
+  section: z.string().max(120).nullish(),
+  y: z.number().optional(),
+});
+
+export const PilotObservationSchema = z.object({
+  goal: z.enum(["invite", "message"]),
+  /** The profile owner, from the page's <h1> or its URL slug. */
+  personName: z.string().max(200),
   /** The note or message to send, already truncated by the caller. */
-  note: string | null;
+  note: z.string().max(4000).nullable(),
   /** True when the run is allowed to actually send. */
-  autoSend: boolean;
+  autoSend: z.boolean(),
   /**
    * Whether this invitation may carry a note.
    *
@@ -55,15 +72,23 @@ export interface PilotObservation {
    * it cannot know how many have been spent today, and guessing would burn the
    * allowance on whoever happened to come first.
    */
-  useNote?: boolean;
-  url: string;
-  step: number;
+  useNote: z.boolean().optional(),
+  url: z.string().max(500),
+  step: z.number().int().min(0).max(20),
   /** What has already been done this attempt, newest last. */
-  history: string[];
-  elements: PilotElement[];
-  /** Base64 JPEG, sent only once the element list has not been enough. */
-  screenshot?: string | null;
-}
+  history: z.array(z.string().max(300)).max(20),
+  // Capped so one page cannot turn into an enormous prompt. LinkedIn profiles
+  // sit well under this; anything approaching it is a sign the page is not what
+  // we think it is.
+  elements: z.array(PilotElementSchema).max(200),
+  /** Base64 JPEG, no data: prefix. ~1.5MB of base64 is a generous 1080p frame. */
+  screenshot: z.string().max(2_000_000).nullish(),
+  /** So a coordinate answer can be given in the same space as the picture. */
+  viewport: z.object({ width: z.number(), height: z.number() }).nullish(),
+});
+
+export type PilotElement = z.infer<typeof PilotElementSchema>;
+export type PilotObservation = z.infer<typeof PilotObservationSchema>;
 
 export type PilotDecision =
   /**
@@ -75,7 +100,7 @@ export type PilotDecision =
    * Deliberately not called `text`: on a `type` action `text` is what to type,
    * and one field meaning two things is how the note ends up in the button.
    */
-  | { action: "click"; index?: number; label?: string; reason: string }
+  | { action: "click"; index?: number; label?: string; x?: number; y?: number; reason: string }
   | { action: "type"; index?: number; label?: string; text: string; reason: string }
   | { action: "done"; reason: string }
   | { action: "give_up"; reason: string };
@@ -104,6 +129,7 @@ from the list means nothing about whether it is on the page.
 Reply with ONLY a JSON object, no prose, no code fence:
   {"action":"click","index":<n>,"reason":"<short>"}
   {"action":"click","label":"<exact words on the control>","reason":"<short>"}
+  {"action":"click","x":<px>,"y":<px>,"reason":"<short>"}
   {"action":"type","index":<n>,"text":"<text>","reason":"<short>"}
   {"action":"done","reason":"<short>"}
   {"action":"give_up","reason":"<short>"}
@@ -112,6 +138,13 @@ Use an index when the control you want is clearly in the list. When you can SEE 
 control in the screenshot that is not in the list — this is common — answer with
 "label" set to its exact visible words, e.g. {"action":"click","label":"Connect"}.
 Never invent an index for something that is not listed.
+
+If you can see the control but cannot give its exact words either — an icon with
+no text, or a label you cannot read — answer with "x" and "y": the pixel position
+of its CENTRE in the attached screenshot, measured from the top left. Use this
+last, because a few pixels of error lands on a different button. Whatever sits at
+that point is identified and checked before anything is clicked, and a point that
+turns out to be somebody else's control, or something destructive, is refused.
 
 Rules that matter more than completing the task:
 
@@ -146,7 +179,11 @@ Connect appears in one of two places, and you must check them in this order:
      instead of asking to connect. Never choose it. If the only options are
      Follow and More, the Connect you want is inside More.
   b) INSIDE THE OVERFLOW MENU, only when there is no Connect on the action row.
-     Open the "More" / "More actions", then look again in the list that follows.
+     Open the "More" / "More actions" (the three dots button). Find it in the
+     list (marked IN-PROFILE-ACTION-ROW) and answer with its index, or
+     {"action":"click","label":"More"}. Do NOT answer with x/y coordinates to
+     open More; always use index or label. Then look again in the list that
+     follows for Connect.
 
 IN-PROFILE-ACTION-ROW is a HINT, not a requirement. It is derived from the page
 structure and is often absent even when the element is exactly the one you want.
@@ -178,11 +215,16 @@ Only ever use an index that appears in the list. Do not answer -1 or any other
 number that is not listed — if what you need is not there, answer give_up and say
 so, and you will be shown a screenshot of the page instead.`;
 
-function userPrompt(o: PilotObservation): string {
+/**
+ * Exported so a test can assert the markers survive validation. The prompt is
+ * where IN-PROFILE-ACTION-ROW is actually rendered, so it is the only honest
+ * place to check that the field made it through the schema.
+ */
+export function userPrompt(o: PilotObservation): string {
   const lines = o.elements.map(
     (e) =>
       `${e.i}. <${e.tag}${e.role ? ` role=${e.role}` : ""}${e.disabled ? " disabled" : ""}${
-        e.inDialog ? " in-dialog" : ""
+        e.inDialog ? " in-dialog" : ""}${e.filled ? " ALREADY-HAS-TEXT" : ""
       }${e.inTopCard ? " IN-PROFILE-ACTION-ROW" : ""}${e.inAside ? " IN-SIDEBAR-DO-NOT-USE" : ""}> ${e.label}` +
       (e.section ? `   [under: ${e.section}]` : ""),
   );
@@ -195,6 +237,7 @@ function userPrompt(o: PilotObservation): string {
     `Allowed to actually send: ${o.autoSend ? "yes" : "no — stop once the text is entered"}`,
     `Add a note: ${o.useNote ? "yes" : 'no — click "Send without a note"'}`,
     `Step ${o.step}.`,
+    o.viewport ? `The screenshot is ${o.viewport.width} by ${o.viewport.height} pixels.` : "",
     o.history.length ? `Already done:\n${o.history.map((h) => `  - ${h}`).join("\n")}` : "Nothing done yet.",
     "",
     "Clickable elements:",
@@ -230,10 +273,32 @@ function parseDecision(text: string, valid?: Set<number>): PilotDecision {
     const idx = (parsed as { index?: unknown }).index;
     const lbl = (parsed as { label?: unknown }).label;
     const hasLabel = typeof lbl === "string" && lbl.trim().length > 0 && lbl.length <= 80;
-    if (typeof idx !== "number" && !hasLabel) throw new Error(`${a} without an index or a label`);
+    const px = (parsed as { x?: unknown }).x;
+    const py = (parsed as { y?: unknown }).y;
+    const hasPoint = typeof px === "number" && typeof py === "number";
+
+    if (hasPoint && !hasLabel) {
+      const reason = String((parsed as { reason?: unknown }).reason || "").toLowerCase();
+      if (/\b(more button|more menu|open.*more|click.*more|three dots|3 dots)\b/i.test(reason)) {
+        (parsed as { label?: string }).label = "More";
+      } else if (/\b(connect button|click.*connect)\b/i.test(reason)) {
+        (parsed as { label?: string }).label = "Connect";
+      } else if (/\b(send without a note|without a note)\b/i.test(reason)) {
+        (parsed as { label?: string }).label = "Send without a note";
+      } else if (/\b(add a note)\b/i.test(reason)) {
+        (parsed as { label?: string }).label = "Add a note";
+      }
+    }
+
+    const finalLabel = (parsed as { label?: unknown }).label;
+    const finalHasLabel = typeof finalLabel === "string" && finalLabel.trim().length > 0 && finalLabel.length <= 80;
+
+    if (typeof idx !== "number" && !finalHasLabel && !hasPoint) {
+      throw new Error(`${a} without an index, a label or a point`);
+    }
     // A label is resolved on the page by its visible words, so an index is
     // optional once one is given.
-    if (typeof idx === "number" && valid && !valid.has(idx) && !hasLabel) {
+    if (typeof idx === "number" && valid && !valid.has(idx) && !finalHasLabel && !hasPoint) {
       // Not a malformed reply — a considered "it is not in the list". Turned
       // into a give_up so the caller escalates to a screenshot rather than
       // firing a click at an element that was never there.

@@ -21,6 +21,9 @@ export async function enrollLeads(
 ): Promise<EnrollResult | { error: string; status: number }> {
   const campaign = await prisma.campaign.findFirst({ where: { id: campaignId, organizationId: orgId } });
   if (!campaign) return { error: "campaign not found", status: 404 };
+  // Enrolling would flip a deleted campaign back to active and start sending
+  // from something that no longer appears anywhere in the app.
+  if (campaign.archivedAt) return { error: "This campaign was deleted.", status: 410 };
 
   const graph = normalizeSequence(campaign.sequence);
   if (!graph.startNodeId) return { error: "campaign has no sequence", status: 400 };

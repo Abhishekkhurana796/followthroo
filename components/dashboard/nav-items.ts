@@ -1,5 +1,5 @@
 import {
-  LayoutDashboard, Users, Rocket, FileText, Inbox,
+  LayoutDashboard, Users, Rocket, FileText, Inbox, Send,
   ListChecks, BarChart3, Settings, GitBranch, Radio,
   type LucideIcon,
 } from "lucide-react";
@@ -72,7 +72,13 @@ export const NAV_GROUPS: NavGroup[] = [
   },
   {
     title: "Communicate",
-    items: [{ label: "Inbox", href: "/dashboard/inbox", icon: Inbox }],
+    // Outbox joined on 2026-09-10. "What did we send, and to whom?" is the other
+    // half of "who am I talking to?", and it had no screen: sent messages and
+    // LinkedIn invitations could only be seen one lead at a time.
+    items: [
+      { label: "Inbox", href: "/dashboard/inbox", icon: Inbox },
+      { label: "Outbox", href: "/dashboard/outbox", icon: Send },
+    ],
   },
   {
     title: "Analyze",

@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Fixture — the shape of a real profile</title>
+<style>
+  .ft-clickable { cursor: pointer; }
+  svg { width: 16px; height: 16px; }
+  #sticky { position: sticky; top: 0; }
+</style>
+</head>
+<body>
+<!--
+  Built from an actual failing run, not from imagination.
+
+  scripts/linkedin-fixtures/profile-span-connect.html asserted that the
+  profile's own Connect is marked `inTopCard`, and passed — because it puts the
+  <h1> and a <button aria-label="Message …"> one level apart inside a real
+  <section>. On the live site none of that holds, so the marker was false for
+  every element of every run, act() could not tell the profile's own Connect
+  from anyone else's, and refused to click either. Zero invitations ever went
+  out while the suite stayed green.
+
+  What the live page actually does, all reproduced below:
+
+    - the top card is <div data-view-name="profile-top-card">, NOT a <section>,
+      so h1.closest("section") skips past it to the page wrapper
+    - the <h1> is ten levels below the card root, and the action row is a
+      sibling subtree, so climbing eight parents from the h1 never reaches an
+      ancestor holding both
+    - Connect is a bare <span>: no role, no aria-label, an aria-hidden icon
+    - a second, identical action row is stuck to the top of the viewport, under
+      no heading at all
+    - "People you may know" in the rail, each with a working Connect
+    - "Others named Anirudh Bisht" inside <main> — the section whose heading IS
+      the profile owner's name, which is why ownership cannot be decided by
+      heading text alone
+
+  ?ambiguous — removes the real card's Connect, leaving controls that no
+               evidence can attribute to anybody. Refusing is the only safe
+               answer, and stays the expected one.
+-->
+<header class="global-nav"><a href="/feed">Skip to main content</a></header>
+
+<div id="sticky">
+  <!-- The duplicate action row. Same words, no heading above it, so nothing
+       can attribute it. It must NOT be marked as the profile's own. -->
+  <span class="_7c1a ft-clickable" data-who="sticky-connect">
+    <svg id="connect-small" aria-hidden="true" viewBox="0 0 16 16"><path d="M9 4a3 3 0 1 1-3-3"/></svg>
+    <div><span><span>Connect</span></span></div>
+  </span>
+  <a role="button" href="#" data-who="sticky-msg">Message</a>
+</div>
+
+<main>
+  <div data-view-name="profile-top-card" class="card">
+   <div class="a"><div class="b"><div class="c"><div class="d">
+    <div class="e"><div class="f"><div class="g"><div class="h">
+      <div class="i"><div class="j">
+        <h1>Anirudh Bisht</h1>
+        <span class="dist-value">· 2nd</span>
+      </div></div>
+    </div></div></div></div>
+   </div></div></div></div>
+
+   <!-- A sibling subtree, not a sibling element. The common ancestor with the
+        h1 is the card root, eleven levels up from the heading. -->
+   <div class="p"><div class="q"><div class="r">
+     <div class="actions">
+       <span class="_9e7d82ae ft-clickable" id="ownConnect" data-who="right">
+         <svg id="connect-small" aria-hidden="true" viewBox="0 0 16 16"><path d="M9 4a3 3 0 1 1-3-3 3 3 0 0 1 3 3"/></svg>
+         <div class="_9f31adb5"><span><span>Connect</span></span></div>
+       </span>
+       <a role="button" href="#" aria-label="Message Anirudh Bisht" data-who="right-msg">Message</a>
+       <button aria-label="More actions">More</button>
+     </div>
+   </div></div></div>
+  </div>
+
+  <section class="others-named">
+    <h2>Others named Anirudh Bisht</h2>
+    <div class="rail-card">
+      <a href="/in/wrong-person-2">Anirudh Bisht</a>
+      <!-- The heading here is the owner's own name. Matching headings without
+           excluding recommendation sections would hand us this stranger. -->
+      <span class="_cc33 ft-clickable" data-who="wrong-named">
+        <svg id="connect-small" aria-hidden="true" viewBox="0 0 16 16"><path d="M9 4a3 3 0 1 1-3-3"/></svg>
+        <div><span><span>Connect</span></span></div>
+      </span>
+    </div>
+  </section>
+</main>
+
+<aside id="rail">
+  <h2>People you may know</h2>
+  <div class="rail-card">
+    <a href="/in/wrong-person-1">Wrong Person One</a>
+    <span class="_aa11 ft-clickable" data-who="wrong-rail">
+      <svg id="connect-small" aria-hidden="true" viewBox="0 0 16 16"><path d="M9 4a3 3 0 1 1-3-3"/></svg>
+      <div><span><span>Connect</span></span></div>
+    </span>
+  </div>
+</aside>
+
+<script>
+  const q = new URLSearchParams(location.search);
+  window.__invited = null;
+
+  // Two Connect controls, NEITHER attributable to anybody: no heading above
+  // them, and the spans carry no name for the name check to read. This is the
+  // state every real profile was wrongly in before ownership was established
+  // from the section heading — and in this state refusing is still the only
+  // safe answer, because an invitation cannot be recalled.
+  if (q.has("ambiguous")) {
+    document.getElementById("ownConnect").remove();
+    const twin = document.querySelector('[data-who="sticky-connect"]').cloneNode(true);
+    twin.dataset.who = "sticky-twin";
+    document.getElementById("sticky").appendChild(twin);
+  }
+
+  document.querySelectorAll("[data-who]").forEach((el) => {
+    el.addEventListener("click", () => {
+      window.__invited = el.dataset.who;
+      if (el.dataset.who === "right") openInviteModal();
+    });
+  });
+
+  function openInviteModal() {
+    if (document.querySelector('[role="dialog"]')) return;
+    const modal = document.createElement("div");
+    modal.className = "artdeco-modal";
+    modal.setAttribute("role", "dialog");
+    modal.innerHTML =
+      '<h2>Add a note to your invitation?</h2>' +
+      '<button id="addNote" aria-label="Add a note">Add a note</button>' +
+      '<button id="sendPlain" aria-label="Send without a note">Send without a note</button>' +
+      '<div id="noteWrap" hidden><textarea id="custom-message" maxlength="300"></textarea></div>' +
+      '<button id="sendInvite" aria-label="Send now">Send now</button>';
+    document.body.appendChild(modal);
+    modal.querySelector("#addNote").addEventListener("click", () => {
+      modal.querySelector("#noteWrap").hidden = false;
+    });
+    // LinkedIn swaps Connect for "Pending" once the invitation is away. That is
+    // the app's own confirmation that it went, so the fixture has to do it too.
+    const markPending = () => {
+      modal.remove();
+      const own = document.getElementById("ownConnect");
+      if (own) own.innerHTML = '<div><span><span>Pending</span></span></div>';
+    };
+    modal.querySelector("#sendPlain").addEventListener("click", () => {
+      window.__sentWithoutNote = true;
+      markPending();
+    });
+    modal.querySelector("#sendInvite").addEventListener("click", () => {
+      window.__note = modal.querySelector("#custom-message").value;
+      markPending();
+    });
+  }
+</script>
+</body>
+</html>

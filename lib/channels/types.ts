@@ -64,6 +64,14 @@ export interface InboundEvent {
   /** Machine key for LeadSource — meta_lead_ads, indiamart, web_form, … */
   sourceKey?: string;
   meta?: Record<string, unknown>;
+  /**
+   * The member who brought this contact in, when a person did — an extension
+   * import, a reviewed LinkedIn job. Absent for webhooks and polled mail: nobody
+   * added those, a source did.
+   */
+  actorId?: string | null;
+  /** How the contact arrived: extension | linkedin_bulk | webhook | … */
+  createdKind?: string;
 }
 
 /**

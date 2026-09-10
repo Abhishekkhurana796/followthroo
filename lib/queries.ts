@@ -112,7 +112,8 @@ export async function getTemplates(orgId: string) {
 
 export function getCampaigns(orgId: string) {
   return prisma.campaign.findMany({
-    where: { organizationId: orgId },
+    // Archived = deleted by the user but kept so history can still name it.
+    where: { organizationId: orgId, archivedAt: null },
     include: CAMPAIGN_INCLUDE,
     orderBy: { createdAt: "desc" },
   });
@@ -136,7 +137,20 @@ export async function getCompanies(orgId: string) {
     .map((r) => ({ company: r.company as string, count: r._count._all }));
 }
 
-export async function getInboxThreads(orgId: string, status?: string, leadWhere?: Prisma.LeadWhereInput) {
+/** Threads per page in the Inbox list — InboxClient's PAGE mirrors it. */
+export const INBOX_PAGE = 50;
+
+export async function getInboxThreads(
+  orgId: string,
+  status?: string,
+  leadWhere?: Prisma.LeadWhereInput,
+  /**
+   * Older than this: the last thread's lastMessageAt on the page before. The list
+   * used to stop at 100 with no way past it, so the 101st conversation did not
+   * exist as far as the Inbox was concerned.
+   */
+  before?: Date,
+) {
   const threads = await prisma.inboxThread.findMany({
     where: {
       organizationId: orgId,
@@ -144,14 +158,33 @@ export async function getInboxThreads(orgId: string, status?: string, leadWhere?
       // A reply thread belongs to whoever owns the contact. Without this a rep
       // could read a colleague's conversation by opening the inbox.
       ...(leadWhere ? { lead: leadWhere } : {}),
+      ...(before ? { lastMessageAt: { lt: before } } : {}),
     },
     include: {
       lead: { select: { id: true, firstName: true, lastName: true, email: true, company: true } },
       messages: { orderBy: { sentAt: "desc" }, take: 1 },
     },
     orderBy: { lastMessageAt: "desc" },
-    take: 100,
+    take: INBOX_PAGE,
   });
+
+  // The campaign each conversation belongs to: the latest message on the thread
+  // that names one. One query for the page, not one per thread.
+  const tagged = threads.length
+    ? await prisma.inboxMessage.findMany({
+        where: { organizationId: orgId, threadId: { in: threads.map((t) => t.id) }, campaignId: { not: null } },
+        orderBy: { sentAt: "desc" },
+        distinct: ["threadId"],
+        select: { threadId: true, campaignId: true },
+      })
+    : [];
+  const campaignIds = [...new Set(tagged.map((m) => m.campaignId).filter((v): v is string => !!v))];
+  const campaigns = campaignIds.length
+    ? await prisma.campaign.findMany({ where: { id: { in: campaignIds }, organizationId: orgId }, select: { id: true, name: true } })
+    : [];
+  const campaignName = new Map(campaigns.map((c) => [c.id, c.name]));
+  const campaignOf = new Map(tagged.map((m) => [m.threadId, m.campaignId ? (campaignName.get(m.campaignId) ?? null) : null]));
+
   return threads.map((t) => ({
     id: t.id,
     status: t.status,
@@ -161,6 +194,7 @@ export async function getInboxThreads(orgId: string, status?: string, leadWhere?
     lead: t.lead,
     preview: t.messages[0]?.body?.slice(0, 140) ?? "",
     direction: t.messages[0]?.direction ?? null,
+    campaignName: campaignOf.get(t.id) ?? null,
   }));
 }
 
@@ -221,8 +255,17 @@ type LeadRowBase = { id: string; leadSourceId: string | null };
  * batched throughout: one page of 50 contacts costs a fixed handful of queries,
  * not 50 × 4.
  */
-export async function enrichLeadRows<T extends LeadRowBase>(orgId: string, leads: T[]) {
-  if (leads.length === 0) return [] as (T & { source: string | null; ownerName: string | null; lastActivityAt: Date | null; nextAction: NextAction | null })[];
+export async function enrichLeadRows<
+  T extends LeadRowBase & { ownerId: string | null; createdById: string | null; createdKind: string },
+>(orgId: string, leads: T[]) {
+  type Enriched = T & {
+    source: string | null;
+    ownerName: string | null;
+    createdByName: string | null;
+    lastActivityAt: Date | null;
+    nextAction: NextAction | null;
+  };
+  if (leads.length === 0) return [] as Enriched[];
 
   const ids = leads.map((l) => l.id);
   const sourceIds = [...new Set(leads.map((l) => l.leadSourceId).filter((s): s is string => !!s))];
@@ -245,22 +288,32 @@ export async function enrichLeadRows<T extends LeadRowBase>(orgId: string, leads
   ]);
 
   const sourceLabel = new Map(sources.map((s) => [s.id, s.label]));
-  const ownerByLead = new Map(items.map((i) => [i.leadId, i.ownerId]));
+  const pipelineOwnerByLead = new Map(items.map((i) => [i.leadId, i.ownerId]));
   const lastByLead = new Map<string, Date>();
   for (const e of latest) if (!lastByLead.has(e.leadId)) lastByLead.set(e.leadId, e.occurredAt);
 
-  const ownerIds = [...new Set([...ownerByLead.values()].filter((s): s is string => !!s))];
-  const owners = ownerIds.length
-    ? await prisma.user.findMany({ where: { id: { in: ownerIds } }, select: { id: true, name: true, email: true } })
-    : [];
-  const ownerName = new Map(owners.map((o) => [o.id, o.name || o.email]));
+  // The contact's own ownerId first — it is what assignment writes and what the
+  // scoped list filters on. This used to read only the open pipeline item, so a
+  // contact assigned from the Leads screen but in no pipeline showed "—".
+  const ownerOf = (l: T) => l.ownerId ?? pipelineOwnerByLead.get(l.id) ?? null;
 
-  return leads.map((l) => {
-    const oid = ownerByLead.get(l.id) ?? null;
+  const userIds = [
+    ...new Set(leads.flatMap((l) => [ownerOf(l), l.createdById]).filter((s): s is string => !!s)),
+  ];
+  const users = userIds.length
+    ? await prisma.user.findMany({ where: { id: { in: userIds } }, select: { id: true, name: true, email: true } })
+    : [];
+  const nameOf = new Map(users.map((u) => [u.id, u.name || u.email]));
+
+  return leads.map((l): Enriched => {
+    const oid = ownerOf(l);
     return {
       ...l,
       source: l.leadSourceId ? (sourceLabel.get(l.leadSourceId) ?? null) : null,
-      ownerName: oid ? (ownerName.get(oid) ?? null) : null,
+      ownerName: oid ? (nameOf.get(oid) ?? null) : null,
+      // Who added it, which is not who owns it: importing 500 contacts does not
+      // make you the rep working all 500.
+      createdByName: l.createdById ? (nameOf.get(l.createdById) ?? null) : null,
       lastActivityAt: lastByLead.get(l.id) ?? null,
       nextAction: actions.get(l.id) ?? null,
     };
@@ -327,6 +380,9 @@ export async function getLeadDetail(orgId: string, leadId: string, scopeWhere?: 
   // resolve them here rather than storing a denormalised copy that goes stale.
   const ownerIds = [
     ...new Set([
+      // The contact's own owner and who added it, so the record can name both.
+      lead.ownerId,
+      lead.createdById,
       ...lead.pipelineItems.map((i) => i.ownerId),
       ...lead.tasks.map((t) => t.ownerId),
     ].filter((id): id is string => !!id)),

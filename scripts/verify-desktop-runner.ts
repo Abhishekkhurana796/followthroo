@@ -2,19 +2,21 @@
  * Verification: the desktop run stops when it should.
  *
  *   npx tsx scripts/verify-desktop-runner.ts
- *   FT_CASES=2,3,4,5 npx tsx scripts/verify-desktop-runner.ts   # skip the slow one
+ *   FT_CASES=2,3,4,5,6 npx tsx scripts/verify-desktop-runner.ts   # skip the slow one
  *
  * verify-linkedin-target.ts covers one action in isolation — the right person,
  * the right button. This covers the loop around it, which is where the damage
  * scales: a batch that does not stop sends twenty wrong things instead of one.
  *
- * Five rules, each of which has a plausible way of quietly not holding:
+ * Six rules, each of which has a plausible way of quietly not holding:
  *
  *   - the daily ceiling holds even when the server offers more work
  *   - LinkedIn's own limit wall ends the batch immediately, not on the third try
  *   - three failures in a row end it
  *   - a test run reports nothing back, so it cannot touch the CRM or the quota
  *   - automatic sending switched off means the run refuses to start
+ *   - the connections check reports only people on "Connected" cards, and never
+ *     from a test run
  *
  * A fake Followthroo answers /api/linkedin/queue, and every LinkedIn URL is
  * fulfilled from the same fixture the targeting test uses. No network, no
@@ -28,6 +30,31 @@ import { runBatch, MAX_PER_DAY } from "../desktop/runner";
 
 const ROOT = join(__dirname, "..");
 const FIXTURE = readFileSync(join(ROOT, "scripts", "linkedin-fixtures", "profile-with-sidebar.html"), "utf8");
+
+/**
+ * A connections list with a suggestion on the same page. The two "Connected"
+ * cards are real connections; "suggested-person" is not, and may well be
+ * somebody with an invitation pending — reporting them would record an
+ * acceptance that never happened.
+ */
+const CONNECTIONS_FIXTURE = `<!doctype html><html><head><meta charset="utf-8"></head><body><main>
+  <section>
+    ${["kavya-rao", "dev-malhotra"]
+      .map(
+        (slug) => `
+    <div class="card">
+      <a href="/in/${slug}/"><img alt="" width="56" height="56"></a>
+      <div><a href="/in/${slug}/"><p>${slug}</p></a><p>Connected on 9 September 2026</p></div>
+      <button>Message</button>
+    </div>`,
+      )
+      .join("")}
+  </section>
+  <section>
+    <h2>People you may know</h2>
+    <div class="card"><a href="/in/suggested-person/"><p>Suggested Person</p></a><button>Connect</button></div>
+  </section>
+</main></body></html>`;
 
 let pass = 0,
   fail = 0;
@@ -44,9 +71,9 @@ const ok = (c: boolean, m: string) => {
 type Reported = { actionId: string; status: string; result?: string };
 
 /**
- * Which cases to run, e.g. `FT_CASES=2,3,4,5`. Case 1 drives twenty real browser
- * iterations to prove the daily cap and takes minutes on its own; being able to
- * run the quick ones alone keeps the other four usable while iterating.
+ * Which cases to run, e.g. `FT_CASES=2,3,4,5,6`. Case 1 drives twenty real
+ * browser iterations to prove the daily cap and takes minutes on its own; being
+ * able to run the quick ones alone keeps the others usable while iterating.
  * Unset runs everything.
  */
 const ONLY = (process.env.FT_CASES || "")
@@ -64,6 +91,8 @@ const wants = (n: number) => ONLY.length === 0 || ONLY.includes(String(n));
  */
 function fakeApp(opts: { profileSuffix?: string; autoSend?: boolean } = {}) {
   const reported: Reported[] = [];
+  /** Profile URLs the run reported from the connections list. */
+  const seen: string[] = [];
   let handedOut = 0;
 
   const server: Server = createServer((req, res) => {
@@ -107,12 +136,33 @@ function fakeApp(opts: { profileSuffix?: string; autoSend?: boolean } = {}) {
       return;
     }
 
+    if (url.pathname === "/api/linkedin/connections/seen" && req.method === "POST") {
+      let body = "";
+      req.on("data", (c) => (body += c));
+      req.on("end", () => {
+        seen.push(...((JSON.parse(body || "{}").profileUrls as string[] | undefined) ?? []));
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ ok: true, data: { matched: 1 } }));
+      });
+      return;
+    }
+
+    // No model on this deployment, which is the one case that still falls back
+    // to the selector path. These cases test the loop — claim, pace, stop — not
+    // the pilot, so the deterministic path is what they want.
+    if (url.pathname === "/api/linkedin/assist") {
+      res.writeHead(503, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ ok: false, error: "No model is configured on this deployment." }));
+      return;
+    }
+
     res.writeHead(404, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ ok: false, error: "not found" }));
   });
 
   return {
     reported,
+    seen,
     handedOut: () => handedOut,
     listen: () =>
       new Promise<string>((resolve) => {
@@ -139,6 +189,21 @@ function fixtureLauncher(browser: Browser) {
     const ctx = await browser.newContext();
     await ctx.route("**/*", (route) =>
       route.fulfill({ status: 200, contentType: "text/html; charset=utf-8", body: FIXTURE }),
+    );
+    return ctx;
+  };
+}
+
+/** The same, except the connections list is served its own fixture. */
+function connectionsLauncher(browser: Browser) {
+  return async () => {
+    const ctx = await browser.newContext();
+    await ctx.route("**/*", (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "text/html; charset=utf-8",
+        body: route.request().url().includes("/mynetwork/invite-connect/connections") ? CONNECTIONS_FIXTURE : FIXTURE,
+      }),
     );
     return ctx;
   };
@@ -173,7 +238,7 @@ async function main() {
           `reports exactly ${MAX_PER_DAY} sends back to the server (reported: ${app.reported.filter((r) => r.status === "sent").length})`,
         );
         ok(/Daily limit reached/i.test(summary.stoppedBecause || ""), `and says why: ${summary.stoppedBecause}`);
-    }
+      }
     }
 
     if (wants(2)) {
@@ -189,7 +254,7 @@ async function main() {
         ok(summary.attempted === 1, `stops on the first limit wall, not the third (attempted: ${summary.attempted})`);
         ok(summary.sent === 0, "nothing is recorded as sent when LinkedIn refused");
         ok(/weekly invitation limit/i.test(summary.stoppedBecause || ""), `and says why: ${summary.stoppedBecause}`);
-    }
+      }
     }
 
     if (wants(3)) {
@@ -222,7 +287,7 @@ async function main() {
         ok(summary.failed === 3, `gives up after 3 failures in a row (failed: ${summary.failed})`);
         ok(summary.sent === 0, "and sends nothing while doing so");
         ok(/failures in a row/i.test(summary.stoppedBecause || ""), `and says why: ${summary.stoppedBecause}`);
-    }
+      }
     }
 
     if (wants(4)) {
@@ -249,7 +314,7 @@ async function main() {
         // asked for three, got three drafts, and went back for more forever.
         // The limit has to count attempts when nothing is being sent.
         ok(summary.attempted === 3, `stops after the 3 it was asked for, rather than looping (attempted: ${summary.attempted})`);
-    }
+      }
     }
 
     if (wants(5)) {
@@ -265,7 +330,63 @@ async function main() {
         await app.close();
         ok(summary.attempted === 0, `refuses to start with automatic sending off (attempted: ${summary.attempted})`);
         ok(/Automatic sending is off/i.test(summary.stoppedBecause || ""), `and points at the switch: ${summary.stoppedBecause}`);
+      }
     }
+
+    if (wants(6)) {
+      console.log("\n6. accepted invitations, read from the connections list");
+      // 6. The connections check. Once due, the run reads the list before it
+      //    claims anything, and reports only the people on "Connected" cards.
+      //    Automatic sending is off here so the run stops straight after — the
+      //    check is what is under test, not the send.
+      {
+        const app = fakeApp({ autoSend: false });
+        const base = await app.listen();
+        let checked = 0;
+        await runBatch({
+          apiBase: base,
+          token: "test",
+          userDataPath: "",
+          launch: connectionsLauncher(browser),
+          connectionsCheckDue: () => true,
+          onConnectionsChecked: () => {
+            checked++;
+          },
+        });
+        await app.close();
+        const expected = ["https://www.linkedin.com/in/kavya-rao", "https://www.linkedin.com/in/dev-malhotra"];
+        ok(JSON.stringify(app.seen) === JSON.stringify(expected), `reports the two connections (reported: ${JSON.stringify(app.seen)})`);
+        ok(!app.seen.some((u) => u.includes("suggested-person")), "a suggestion on the same page is not counted as a connection");
+        ok(checked === 1, `records that the check ran, so it is not repeated for hours (recorded: ${checked})`);
+      }
+      {
+        // A test run leaves no trace, and that includes this report.
+        const app = fakeApp();
+        const base = await app.listen();
+        let checked = 0;
+        await runBatch({
+          apiBase: base,
+          token: "test",
+          userDataPath: "",
+          limit: 1,
+          dryRun: true,
+          launch: connectionsLauncher(browser),
+          connectionsCheckDue: () => true,
+          onConnectionsChecked: () => {
+            checked++;
+          },
+        });
+        await app.close();
+        ok(app.seen.length === 0 && checked === 0, `a test run does not read or report connections (reported: ${app.seen.length})`);
+      }
+      {
+        // Not due: the run goes straight to work, with no detour to the list.
+        const app = fakeApp({ autoSend: false });
+        const base = await app.listen();
+        await runBatch({ apiBase: base, token: "test", userDataPath: "", launch: connectionsLauncher(browser) });
+        await app.close();
+        ok(app.seen.length === 0, "when the check is not due, nothing is read");
+      }
     }
   } finally {
     await browser.close();

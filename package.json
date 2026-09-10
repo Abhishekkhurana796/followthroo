@@ -15,7 +15,7 @@
     "db:studio": "prisma studio",
     "desktop": "npm start --prefix desktop",
     "desktop:dist": "npm run dist --prefix desktop",
-    "verify:linkedin": "tsx scripts/verify-linkedin-target.ts && tsx scripts/verify-desktop-runner.ts"
+    "verify:linkedin": "tsx scripts/verify-linkedin-target.ts && tsx scripts/verify-desktop-runner.ts && tsx scripts/verify-linkedin-pilot.ts && tsx scripts/verify-connect-flow.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.32.1",

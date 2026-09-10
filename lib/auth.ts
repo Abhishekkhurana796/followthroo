@@ -4,6 +4,8 @@ import { organization, genericOAuth } from "better-auth/plugins";
 import { ac, orgRoles } from "./access-control";
 import { prisma } from "./db";
 import { sendSystemEmail } from "./channels/email";
+import { configured } from "./env";
+import { authRateLimitStorage } from "./api-ratelimit";
 import { roleLabel } from "./roles";
 
 /**
@@ -47,6 +49,26 @@ const trustedOrigins = Array.from(
   )
 );
 
+/**
+ * Whether password sign-ups must confirm their email before signing in.
+ *
+ * They used to be marked verified on creation, because nothing could send a
+ * confirmation. So an address was never proven to belong to whoever typed it —
+ * and with Google trusted for account linking, someone could register another
+ * person's email with a password of their own, and keep access after the real
+ * owner signed in with Google.
+ *
+ * It needs mail. Without SMTP the link can never arrive, and requiring it would
+ * lock every new password sign-up out — so without SMTP the old behaviour stays,
+ * and says so loudly every time the server starts.
+ */
+const verifyEmails = configured.email;
+if (!verifyEmails) {
+  console.error(
+    "[auth] SMTP_HOST / SMTP_USER / SMTP_PASS are not set: password sign-ups are NOT email-verified. Configure SMTP to require confirmation.",
+  );
+}
+
 /** Slugify a name/email into a unique-ish org slug. */
 function slugify(input: string): string {
   const base = input.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "").slice(0, 32) || "org";
@@ -68,9 +90,56 @@ async function createPersonalOrg(user: { id: string; name?: string | null; email
   return org;
 }
 
+/**
+ * Which workspace a new session should open in.
+ *
+ * This used to be the OLDEST membership. Every account gets a personal workspace
+ * the moment it is created (above), so for anyone who signed up and then accepted
+ * an invitation, "oldest" meant that empty personal workspace — not the team they
+ * joined. Accepting switched the one session it happened in; every later sign-in
+ * dropped them back. Tasks and notifications are scoped to the active workspace,
+ * so work assigned to them looked like it had never arrived.
+ *
+ * Now: the workspace they last switched to, if they still belong to it; otherwise
+ * the one they joined most recently, which is the invitation they accepted.
+ */
+export async function preferredOrganizationId(userId: string): Promise<string | null> {
+  const [user, memberships] = await Promise.all([
+    prisma.user.findUnique({ where: { id: userId }, select: { lastActiveOrganizationId: true } }),
+    prisma.member.findMany({ where: { userId }, orderBy: { createdAt: "desc" }, select: { organizationId: true } }),
+  ]);
+  const last = user?.lastActiveOrganizationId;
+  if (last && memberships.some((m) => m.organizationId === last)) return last;
+  return memberships[0]?.organizationId ?? null;
+}
+
 export const auth = betterAuth({
   database: prismaAdapter(prisma, { provider: "postgresql" }),
-  emailAndPassword: { enabled: true, autoSignIn: true },
+  emailAndPassword: {
+    enabled: true,
+    // Signing a brand-new account straight in would skip the confirmation.
+    autoSignIn: !verifyEmails,
+    requireEmailVerification: verifyEmails,
+  },
+  emailVerification: {
+    sendOnSignUp: verifyEmails,
+    autoSignInAfterVerification: true,
+    expiresIn: 60 * 60 * 24,
+    async sendVerificationEmail({ user, url }) {
+      const sent = await sendSystemEmail(
+        user.email,
+        "Confirm your email for Followthroo",
+        `Confirm your email address
+
+Someone — hopefully you — created a Followthroo account with this address. Confirm it to finish signing up:
+
+${url}
+
+The link works for 24 hours. If you didn't create this account, ignore this email: nothing happens, and nobody can sign in with it.`,
+      );
+      if (!sent) console.warn(`[auth] verification email not sent to ${user.email}`);
+    },
+  },
   ...(googleConfigured
     ? {
         socialProviders: {
@@ -87,16 +156,34 @@ export const auth = betterAuth({
     accountLinking: {
       enabled: true,
       trustedProviders: ["google"],
+      // Never attach a Google login to a password account whose address was never
+      // confirmed: whoever set that password may not own the inbox. better-auth's
+      // own default today — stated so an upgrade cannot quietly turn it off.
+      requireLocalEmailVerified: true,
     },
   },
-  // There is no email-verification flow yet, so email/password users would otherwise
-  // stay emailVerified:false forever — which blocks later "Sign in with Google" linking
-  // (account_not_linked). Mark new users verified on creation until a real verification
-  // flow exists. This lowers no security guarantee the app currently makes.
+  // Sign-in, sign-up and verification emails are what gets hammered. better-auth
+  // limits them per IP, in memory by default — which on Vercel means per instance,
+  // barely a limit — so the counts go to Redis when there is one.
+  rateLimit: {
+    enabled: process.env.NODE_ENV === "production",
+    window: 60,
+    max: 100,
+    customRules: {
+      "/sign-in/email": { window: 60, max: 10 },
+      "/sign-up/email": { window: 60, max: 5 },
+      "/send-verification-email": { window: 60, max: 3 },
+    },
+    ...(configured.redis ? { customStorage: authRateLimitStorage } : {}),
+  },
   databaseHooks: {
     user: {
       create: {
-        before: async (user) => ({ data: { ...user, emailVerified: true } }),
+        // With SMTP, a password sign-up starts unverified and the emailed link
+        // verifies it. Without SMTP nothing can, so it keeps the old
+        // mark-as-verified (see verifyEmails). OAuth sign-ups carry their
+        // provider's verification either way.
+        before: async (user) => ({ data: verifyEmails ? user : { ...user, emailVerified: true } }),
         // Give every new user a personal organization to own and scope data into.
         after: async (user) => {
           await createPersonalOrg(user).catch((e) =>
@@ -107,13 +194,27 @@ export const auth = betterAuth({
     },
     session: {
       create: {
-        // Attach the user's (first / owned) org as the active tenant on each new session.
-        before: async (session) => {
-          const member = await prisma.member.findFirst({
-            where: { userId: session.userId },
-            orderBy: { createdAt: "asc" },
-          });
-          return { data: { ...session, activeOrganizationId: member?.organizationId ?? null } };
+        // Open each new session in the workspace the person was last working in.
+        before: async (session) => ({
+          data: { ...session, activeOrganizationId: await preferredOrganizationId(session.userId) },
+        }),
+      },
+      update: {
+        // Remember a workspace switch so the next sign-in opens there too. The
+        // organization plugin's setActive writes through this same session
+        // update, which covers the sidebar switcher and accepting an invitation.
+        after: async (session) => {
+          const orgId = (session as { activeOrganizationId?: string | null }).activeOrganizationId;
+          if (!orgId) return;
+          await prisma.user
+            .updateMany({
+              where: {
+                id: session.userId,
+                OR: [{ lastActiveOrganizationId: null }, { lastActiveOrganizationId: { not: orgId } }],
+              },
+              data: { lastActiveOrganizationId: orgId },
+            })
+            .catch((e) => console.error("[auth] failed to remember the active workspace:", e));
         },
       },
     },
@@ -138,6 +239,9 @@ export const auth = betterAuth({
                 mapProfileToUser: (profile: Record<string, unknown>) => ({
                   email: String(profile.Email ?? profile.email ?? ""),
                   name: String(profile.Display_Name ?? profile.displayName ?? profile.First_Name ?? ""),
+                  // Zoho confirms an account's address before it can sign in
+                  // anywhere, so a Zoho sign-up is as verified as a Google one.
+                  emailVerified: true,
                 }),
               },
             ],

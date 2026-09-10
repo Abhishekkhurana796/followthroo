@@ -3,9 +3,7 @@ import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { ok, fail } from "@/lib/http";
 import { requireOrg } from "@/lib/tenant";
-import { detectScrapeKind, SUPPORTED_HINT } from "@/lib/linkedin/detect";
 import {
-  queueScrapeJob,
   scrapeUsageToday,
   describeOutcome,
   flagKnownRows,
@@ -16,8 +14,15 @@ import {
 export const runtime = "nodejs";
 
 /**
- * The dashboard side of LinkedIn sourcing. The extension talks to
- * ./claim and ./results instead, with its own bearer token.
+ * The dashboard side of LinkedIn sourcing: the jobs list and the review step.
+ * The extension talks to ./claim and ./collect instead, with its own bearer
+ * token — and that is now the only place jobs are created.
+ *
+ * There used to be a POST here that queued a job from a URL pasted into the app
+ * ("Find leads"). That input was removed on 2026-09-10 at the client's request:
+ * people bring contacts in from LinkedIn itself with the extension, or in bulk by
+ * CSV. A route with no caller is a route nobody is watching, so it went too. See
+ * docs/linkedin-sourcing-ux.md.
  *
  * Jobs are always scoped to the caller: a scrape runs in *their* LinkedIn
  * session, so the results are theirs. There is no "see the team's scrapes" view
@@ -67,45 +72,6 @@ export async function GET(req: NextRequest) {
   });
 }
 
-const Create = z.object({
-  url: z.string().trim().min(1),
-  maxResults: z.number().int().positive().max(5000).optional(),
-});
-
-/** POST /api/linkedin/scrape — queue a job from a pasted URL. */
-export async function POST(req: NextRequest) {
-  const ctx = await requireOrg(req);
-  if (ctx instanceof Response) return ctx;
-
-  const parsed = Create.safeParse(await req.json().catch(() => null));
-  if (!parsed.success) return fail("Paste a LinkedIn URL.", 422);
-
-  // The URL decides the scraper. Nobody picks one — see docs/linkedin-sourcing-ux.md.
-  const detected = detectScrapeKind(parsed.data.url);
-  if (!detected) return fail(`That is not a LinkedIn page we can read. ${SUPPORTED_HINT}`, 422);
-
-  const usage = await scrapeUsageToday(ctx.orgId, ctx.userId);
-  if (!usage.connected) {
-    return fail("Connect the Followthroo extension first — it reads LinkedIn from your own browser.", 409);
-  }
-  if (usage.remaining <= 0) {
-    return fail(
-      `You have pulled ${usage.used} of ${usage.cap} rows today. This resets at midnight.`,
-      429,
-    );
-  }
-
-  const job = await queueScrapeJob({
-    organizationId: ctx.orgId,
-    userId: ctx.userId,
-    kind: detected.kind,
-    inputUrl: detected.url,
-    maxResults: parsed.data.maxResults ?? detected.info.defaultResults,
-  });
-
-  return ok({ id: job.id, kind: job.kind, maxResults: job.maxResults }, { status: 201 });
-}
-
 const Action = z.object({
   id: z.string().min(1),
   action: z.enum(["import", "cancel"]),
@@ -139,6 +105,8 @@ export async function PATCH(req: NextRequest) {
     organizationId: ctx.orgId,
     jobId: job.id,
     rowIndexes: parsed.data.rowIndexes,
+    actorId: ctx.userId,
+    createdKind: "linkedin_bulk",
   });
   return ok(result);
 }

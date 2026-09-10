@@ -87,6 +87,11 @@ sequence. A premium Next.js UI sits on top.
   `docs/phantombuster.md`. The row now earns its place on one job: **getting
   people out of LinkedIn and into the CRM**, plus the health of the connection
   that makes that possible.
+  **No paste-a-link importer (removed 2026-09-10, the client's call).** People
+  come in by being ticked on LinkedIn with the extension's in-page bar, or by CSV
+  with a `linkedin url` column. The LinkedIn screen shows what those imports
+  produced and the connection's health. Do not put a URL field back — on that
+  screen or in Add Lead.
   **Outreach is not there.** Sending a connection request or a message is a step
   in a campaign, beside Email and WhatsApp, because a channel is a property of a
   step and not a place you visit. If you are about to add a "send" affordance to

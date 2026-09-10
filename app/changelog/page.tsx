@@ -9,6 +9,99 @@ export const metadata = { title: "Changelog — Followthroo" };
  */
 const ENTRIES = [
   {
+    version: "0.19.0",
+    date: "Sep 2026",
+    items: [
+      "New accounts created with an email and password now confirm the address before they can sign in: we email a link, and the account opens once it is clicked. This closes a way someone could register another person’s email ahead of them and keep access after the real owner signed in with Google. Google and Zoho sign-ups work as before, and existing accounts are unaffected",
+      "Signing in, signing up and requesting confirmation emails are now rate limited, and so are the Chrome extension, the Windows app, lead webhooks, CSV imports and bulk edits—so a runaway script or a leaked key cannot flood a workspace",
+      "Tightened database access so your data can only be reached through Followthroo itself, including any tables added in future",
+      "Reports load faster for busy workspaces: totals, daily charts and campaign numbers are counted in the database instead of being assembled from every message in the period",
+      "Fixed: a tags column in a CSV import was ignored. Tags in the file are now applied to each lead",
+      "Tasks now says when a section is showing only its first 200, instead of silently leaving the rest out",
+    ],
+  },
+  {
+    version: "0.18.0",
+    date: "Sep 2026",
+    items: [
+      "New Outbox, under Communicate: everything that went out, and what sent it. Messages sent lists every email, WhatsApp and LinkedIn message with the campaign behind it—or the teammate who typed it, or the AI agent. LinkedIn invites follows every connection request from queued to sent to accepted",
+      "The Inbox now says where each conversation came from. A reply to a campaign email is marked with that campaign, a message from a known contact that is not a reply says so plainly, and WhatsApp and LinkedIn threads show which campaign last contacted the person",
+      "Reports has a LinkedIn section with real numbers: connection requests sent, how many were accepted, the acceptance rate, and how each campaign did. LinkedIn doesn’t announce acceptances, so a request counts as accepted when that person appears in your connections list—the Windows app checks it at the start of a run, at most every six hours, and the Chrome extension reads it whenever you open your Connections page",
+      "Replies you type in the Inbox now count as sent messages, so they appear in the Outbox with your name on them",
+      "The Inbox no longer stops at 100 conversations: older ones load from the bottom of the list",
+      "Fixed: a team member could open a colleague’s Inbox conversation from a direct link. Conversations now follow the same visibility rules as the Inbox list",
+      "Windows app 1.11.0: checks your connections list at the start of a run to spot invitations that were accepted",
+    ],
+  },
+  {
+    version: "0.17.0",
+    date: "Sep 2026",
+    items: [
+      "Fixed: tasks assigned to a teammate never reached them—nothing on their task list and nothing in their notifications. Signing in always opened the oldest workspace on the account, and for anyone who joined a team by invitation that was the empty personal workspace created when they signed up, so the work was sitting one workspace away. Signing in now opens the workspace you last used, or else the team you joined most recently",
+      "The notification bell also counts unread notifications waiting in your other workspaces, with a Switch button beside each, so work assigned to you somewhere else can no longer go unnoticed",
+      "Campaigns can now be deleted, by owners and admins. Before you confirm, it says what will stop—how many people are partway through the sequence and how many LinkedIn connection requests are still queued. A campaign that has already sent messages leaves your list but stays in the records, so replies and reports can still say which campaign they came from",
+      "Fixed: deleting a campaign used to leave its queued LinkedIn connection requests behind, where the desktop app could still send them. Connection requests from a deleted campaign are now cancelled and never sent",
+      "Fixed: a team member could edit or delete a lead they were not allowed to open, if they had its link. Editing and deleting now follow the same visibility rules as viewing",
+      "Chrome extension 3.1.0: the Followthroo bar no longer covers the LinkedIn feed with a “can’t read this page” message—it only appears on pages that list people. It stays above the results instead of sliding over the first person as you scroll, and once it is out of view the F button shows how many people you have ticked",
+      "Chrome extension 3.1.0: fixed adding people from your LinkedIn Connections page. Each connection’s photo links to their profile before their name does, and the extension only ever read that first, empty link—so it found every connection and could not read a single name",
+      "Chrome extension 3.1.0: every person in a LinkedIn search, on your Connections page and on a profile now shows whether they are already in Followthroo. “In Followthroo” opens the lead, and a profile that is not in Followthroo yet has an Add button right beside the name",
+      "The Leads table has an Added by column: who brought each lead in and how—by hand, from a CSV, or from LinkedIn with the extension—or which source sent it, when no person did. Each lead’s own page says the same, with the date",
+      "Leads can be assigned one at a time: choose an owner straight from the Owner column, from the lead’s page, or while adding the lead, and the new owner is notified. The Owner column also now shows the owner of leads that are not in a pipeline, which used to read as a dash",
+      "Import CSV now shows the columns it understands—an email or a LinkedIn URL is all a row needs, plus name, company, title, phone and tags—with a sample file to start from. Any other column is kept on the lead and can be used in templates, and after an import it lists why any rows were skipped",
+      "Archived templates can be found again: Templates has an Archived list, where each one can be restored or deleted permanently",
+      "Removed the paste-a-LinkedIn-link importer from the LinkedIn page and from Add Lead. Bring people in from LinkedIn with the Chrome extension, or in bulk with a CSV that has a LinkedIn URL column",
+      "People a team member adds with the extension now count as theirs, so they appear in that person’s leads instead of landing unassigned where they could not see them",
+    ],
+  },
+  {
+    version: "0.16.2",
+    date: "Sep 2026",
+    items: [
+      "Fixed connection requests failing on profiles where LinkedIn does not put the person’s name in the usual place. The app worked out which buttons belong to the person you are visiting by starting from their name heading—and on those profiles there is no such heading, so it fell back to reading the name out of the web address and then could attribute nothing at all. It would see three buttons saying “More” (one pinned to the top of the screen, the person’s own, and one that expands their About text), correctly refuse to guess between them, and stop",
+      "The name is now found wherever it sits on the page, and matched against the web address even when that address runs the name together without punctuation (/in/liannemui against a heading reading “Lianne Mui”). Those two together are what let it pick the person’s own “More” menu and find Connect inside it",
+      "On a profile that offers Follow rather than Connect, the request now goes through the person’s own menu instead of giving up—and Follow is still never pressed in place of Connect",
+    ],
+  },
+  {
+    version: "0.16.1",
+    date: "Sep 2026",
+    items: [
+      "Fixed: v1.10.0 of the Windows app would not open at all—it stopped on a startup error about a missing file. The installer was built from a list of files written by hand, and two new ones added in that release were never added to the list, so they were left out of the package. The list is now worked out automatically, which is what stops the next new file going missing the same way. If you downloaded v1.10.0, download again—v1.10.1 is the working build",
+    ],
+  },
+  {
+    version: "0.16.0",
+    date: "Sep 2026",
+    items: [
+      "Connection requests are now sent by a fixed, predictable procedure rather than left to the assistant to work out click by click. The app already knows which Connect button is the person’s own; from there, opening it, adding the note and pressing Send is not a judgement call, so it is no longer made as one. The assistant is kept in reserve for a profile laid out in a way the procedure does not recognise—and only before anything has been clicked, so a handover can never turn into a second invitation",
+      "It will not stand in for Connect with something else. If it cannot find the person’s own Connect—on the card or inside their “More” menu—it stops and says so. Follow is never pressed in its place, a stranger’s Connect is never pressed, and when two Connect buttons cannot be told apart it refuses rather than guess",
+      "An invitation counts as sent only when the page confirms it—the button turning to “Pending” or a “sent” notice appearing. Pressing Send and hoping is not enough: if the page does not confirm, the run reports that plainly instead of recording a request that may never have gone",
+      "Every outcome now carries a specific reason—already connected, invitation pending, no Connect found, could not confirm the send, wrong profile—so the record shows what actually happened rather than a bare “failed”",
+      "Removed a set of shortcuts that could press Connect or Send by matching the word alone, sidestepping the checks that keep an invitation off the wrong person. Every click, including inside the menu and the send dialog, now goes through those checks",
+    ],
+  },
+  {
+    version: "0.15.0",
+    date: "Sep 2026",
+    items: [
+      "Fixed the last thing standing between a written invitation and a sent one. The app filled in the note, went to press Send, and stopped — because the button on that dialog says “Send now”, and it would only accept a button whose wording matched to the letter. Near-misses like that are now understood, so an invitation that has been prepared actually goes out",
+      "The app now identifies the person’s own Connect button by where it sits on the screen — directly under their name — rather than by how LinkedIn nests the page. On real profiles the nesting gives no usable clue at all: the action row is not inside anything that also holds the name. Geometry is the one signal LinkedIn does not rewrite",
+      "Fixed: references to buttons from a previous look at the page were never cleared, so an instruction meant for one control could land on whatever had since taken its place. Every look now starts clean",
+      "Aiming at a point on the screen now requires something that is actually a control there. Previously it could settle on the block of text containing that point — which is how a click once landed on an entire profile — and a run that failed printed that whole profile into the log",
+    ],
+  },
+  {
+    version: "0.14.0",
+    date: "Sep 2026",
+    items: [
+      "Fixed the reason no connection requests were going out at all. The app could see the Connect button perfectly well — it said so, every time — and then refused to press it. The check that stops it inviting the wrong person works by first establishing which button belongs to the profile you are on, and that step had quietly never once succeeded, so every button looked equally unattributable and none of them could be clicked",
+      "A LinkedIn profile shows several Connect buttons: the person’s own, one stuck to the top of the screen as you scroll, and one for each stranger in “People you may know” and “Others named …”. The app now works out which is which from the heading each one sits under, rather than from the page’s nesting, which LinkedIn changes constantly",
+      "If it genuinely cannot tell which Connect belongs to the person you asked for, it still refuses — an invitation cannot be recalled. But it now says which buttons it was choosing between and carries on looking, instead of repeating the same refusal until the run gave up on that person",
+      "Fixed: a connection request aimed by position on the screen could land on somebody else’s card inside “Others named …”, a section whose heading is the same name as the person you are visiting. That path is now checked the same way every other one is",
+      "Each invitation also starts about ten seconds sooner. The app was waiting for a signal that the profile had finished loading, and that signal depended on the same broken step, so it never arrived and every invite sat through the full wait",
+    ],
+  },
+  {
     version: "0.13.0",
     date: "Sep 2026",
     items: [

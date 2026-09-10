@@ -14,6 +14,7 @@ const el = {
   settingsErr: $("settingsErr"), settings: $("settings"),
   who: $("who"), whoCount: $("whoCount"), whoNote: $("whoNote"),
   signin: $("signin"), signinBtn: $("signinBtn"), collapse: $("collapse"),
+  reload: $("reload"),
 };
 
 let cap = 20;
@@ -164,6 +165,10 @@ document.getElementById("reopen").addEventListener("click", () => setCollapsed(f
 
 async function load() {
   const s = await window.ft.getSettings();
+  if (s.version) {
+    const v = $("version");
+    if (v) v.textContent = `v${s.version}`;
+  }
   cap = s.maxPerDay;
   el.cap.textContent = String(cap);
   el.apiBase.value = s.apiBase;
@@ -204,6 +209,13 @@ async function begin(dryRun) {
     log(res.error, "failed");
   }
 }
+
+el.reload.addEventListener("click", async () => {
+  el.reload.disabled = true;
+  await loadQueue();
+  // Long enough to read as a response rather than nothing happening.
+  setTimeout(() => (el.reload.disabled = false), 400);
+});
 
 el.start.addEventListener("click", () => begin(false));
 el.dry.addEventListener("click", () => begin(true));

@@ -32,59 +32,108 @@ const pct = (n: number, d: number) => (d > 0 ? Math.round((n / d) * 1000) / 10 :
 export async function getReport(orgId: string, days = 30): Promise<ReportData> {
   const since = new Date(Date.now() - days * DAY);
 
-  const [leads, messages, activities, stageGroups, campaigns, suppressed] = await Promise.all([
+  // Counted in the database. This used to load every message sent in the
+  // window, and every open, click and reply, into memory just to count them — a
+  // busy workspace's 90-day report read hundreds of thousands of rows to produce
+  // a dozen numbers. Days are UTC, as dayKey() below is.
+  const [
+    leads, sent, stageGroups, campaigns, suppressed,
+    sentByDay, eventsByDay, engaged, typeCounts,
+    sentByCampaign, openedByCampaign, repliedByCampaign,
+  ] = await Promise.all([
     prisma.lead.count({ where: { organizationId: orgId } }),
-    prisma.message.findMany({
-      where: { organizationId: orgId, sentAt: { gte: since } },
-      select: { sentAt: true, campaignId: true },
-    }),
-    prisma.activityLog.findMany({
-      where: { organizationId: orgId, at: { gte: since }, type: { in: ["opened", "clicked", "replied", "inbound"] } },
-      select: { at: true, type: true, messageId: true, campaignId: true },
-    }),
+    prisma.message.count({ where: { organizationId: orgId, sentAt: { gte: since } } }),
     prisma.lead.groupBy({ by: ["stage"], where: { organizationId: orgId }, _count: { _all: true } }),
     prisma.campaign.findMany({
       where: { organizationId: orgId },
       select: { id: true, name: true, _count: { select: { enrollments: true } } },
     }),
     prisma.suppression.count({ where: { organizationId: orgId } }),
+    prisma.$queryRaw<{ d: string; n: number }[]>`
+      select to_char(date_trunc('day', "sentAt"), 'YYYY-MM-DD') as d, count(*)::int as n
+        from "Message"
+       where "organizationId" = ${orgId} and "sentAt" >= ${since}
+       group by 1`,
+    prisma.$queryRaw<{ d: string; type: string; n: number }[]>`
+      select to_char(date_trunc('day', "at"), 'YYYY-MM-DD') as d, "type", count(*)::int as n
+        from "ActivityLog"
+       where "organizationId" = ${orgId} and "at" >= ${since} and "type" in ('opened', 'clicked', 'replied')
+       group by 1, 2`,
+    // Unique messages opened and clicked — a message opened five times is one open.
+    prisma.$queryRaw<{ opened: number; clicked: number }[]>`
+      select (count(distinct "messageId") filter (where "type" = 'opened'))::int as opened,
+             (count(distinct "messageId") filter (where "type" = 'clicked'))::int as clicked
+        from "ActivityLog"
+       where "organizationId" = ${orgId} and "at" >= ${since} and "messageId" is not null
+         and "type" in ('opened', 'clicked')`,
+    prisma.activityLog.groupBy({
+      by: ["type"],
+      where: { organizationId: orgId, at: { gte: since }, type: { in: ["replied", "inbound"] } },
+      _count: { _all: true },
+    }),
+    prisma.message.groupBy({
+      by: ["campaignId"],
+      where: { organizationId: orgId, sentAt: { gte: since }, campaignId: { not: null } },
+      _count: { _all: true },
+    }),
+    prisma.$queryRaw<{ campaignId: string; n: number }[]>`
+      select "campaignId", count(distinct "messageId")::int as n
+        from "ActivityLog"
+       where "organizationId" = ${orgId} and "at" >= ${since} and "type" = 'opened'
+         and "campaignId" is not null and "messageId" is not null
+       group by 1`,
+    prisma.activityLog.groupBy({
+      by: ["campaignId"],
+      where: { organizationId: orgId, at: { gte: since }, type: "replied", campaignId: { not: null } },
+      _count: { _all: true },
+    }),
   ]);
 
-  const openedMsgs = new Set(activities.filter((a) => a.type === "opened" && a.messageId).map((a) => a.messageId));
-  const clickedMsgs = new Set(activities.filter((a) => a.type === "clicked" && a.messageId).map((a) => a.messageId));
+  const opened = engaged[0]?.opened ?? 0;
+  const clicked = engaged[0]?.clicked ?? 0;
+  const typeCount = new Map(typeCounts.map((g) => [g.type, g._count._all]));
   // "replied" is now only ever written for a VERIFIED reply — one whose
   // In-Reply-To/References names a message we sent (lib/inbox/store.ts). Mail
   // from a known contact that starts a new thread lands in `inbound` instead, so
   // the reply rate finally means what it says.
-  const repliedCount = activities.filter((a) => a.type === "replied").length;
-  const inboundCount = activities.filter((a) => a.type === "inbound").length;
-  const sent = messages.length;
+  const repliedCount = typeCount.get("replied") ?? 0;
+  const inboundCount = typeCount.get("inbound") ?? 0;
 
   // Time series (fill every day in the window).
   const buckets = new Map<string, { sent: number; opened: number; clicked: number; replied: number }>();
   for (let i = 0; i <= days; i++) buckets.set(dayKey(new Date(since.getTime() + i * DAY)), { sent: 0, opened: 0, clicked: 0, replied: 0 });
-  for (const m of messages) if (m.sentAt) { const b = buckets.get(dayKey(m.sentAt)); if (b) b.sent++; }
-  for (const a of activities) {
-    const b = buckets.get(dayKey(a.at));
+  for (const r of sentByDay) {
+    const b = buckets.get(r.d);
+    if (b) b.sent += r.n;
+  }
+  for (const r of eventsByDay) {
+    const b = buckets.get(r.d);
     if (!b) continue;
-    if (a.type === "opened") b.opened++;
-    else if (a.type === "clicked") b.clicked++;
-    else if (a.type === "replied") b.replied++;
+    if (r.type === "opened") b.opened += r.n;
+    else if (r.type === "clicked") b.clicked += r.n;
+    else if (r.type === "replied") b.replied += r.n;
   }
   const series = Array.from(buckets.entries()).map(([date, v]) => ({ date, ...v }));
 
   // Per-campaign breakdown.
-  const byCampaign = campaigns.map((c) => {
-    const cSent = messages.filter((m) => m.campaignId === c.id).length;
-    const cOpened = new Set(activities.filter((a) => a.type === "opened" && a.campaignId === c.id && a.messageId).map((a) => a.messageId)).size;
-    const cReplied = activities.filter((a) => a.type === "replied" && a.campaignId === c.id).length;
-    return { id: c.id, name: c.name, enrolled: c._count.enrollments, sent: cSent, opened: cOpened, replied: cReplied };
-  }).sort((a, b) => b.sent - a.sent);
+  const sentBy = new Map(sentByCampaign.map((g) => [g.campaignId, g._count._all]));
+  const openedBy = new Map(openedByCampaign.map((r) => [r.campaignId, r.n]));
+  const repliedBy = new Map(repliedByCampaign.map((g) => [g.campaignId, g._count._all]));
+  const byCampaign = campaigns
+    .map((c) => ({
+      id: c.id,
+      name: c.name,
+      enrolled: c._count.enrollments,
+      sent: sentBy.get(c.id) ?? 0,
+      opened: openedBy.get(c.id) ?? 0,
+      replied: repliedBy.get(c.id) ?? 0,
+    }))
+    .sort((a, b) => b.sent - a.sent);
 
   return {
     days,
-    totals: { leads, sent, opened: openedMsgs.size, clicked: clickedMsgs.size, replied: repliedCount, suppressed, inbound: inboundCount },
-    rates: { open: pct(openedMsgs.size, sent), click: pct(clickedMsgs.size, sent), reply: pct(repliedCount, sent) },
+    totals: { leads, sent, opened, clicked, replied: repliedCount, suppressed, inbound: inboundCount },
+    rates: { open: pct(opened, sent), click: pct(clicked, sent), reply: pct(repliedCount, sent) },
     funnel: stageGroups.map((g) => ({ stage: g.stage, count: g._count._all })),
     series,
     byCampaign,
@@ -331,4 +380,106 @@ export async function getTeamPerformance(orgId: string, days = 30, userIds?: str
       tasksDue: tasksBy.get(m.userId) ?? 0,
     };
   });
+}
+
+// ---------------------------------------------------------------------------
+// LinkedIn — invitations sent, and how many were actually accepted.
+// ---------------------------------------------------------------------------
+
+export interface LinkedInReport {
+  invitesSent: number;
+  accepted: number;
+  /** Percentage 0–100 of this window's invitations accepted so far. */
+  acceptanceRate: number;
+  /** Sent in the window and not accepted yet. */
+  awaiting: number;
+  /** Skipped because they were already a connection — not an acceptance. */
+  alreadyConnected: number;
+  failed: number;
+  messagesSent: number;
+  /** In the queue right now, whatever the window. */
+  queued: number;
+  byCampaign: { id: string | null; name: string; sent: number; accepted: number; rate: number }[];
+  series: { date: string; sent: number; accepted: number }[];
+}
+
+/**
+ * LinkedIn numbers from what happened, not from what was queued.
+ *
+ * "Sent" is an invitation the desktop app confirmed on the page. "Accepted" is
+ * one whose person has since appeared in the connections list — LinkedIn reports
+ * acceptances nowhere else (see recordConnectionsSeen in lib/linkedin/queue.ts),
+ * so this undercounts rather than guesses: an acceptance nobody has looked for
+ * yet still reads as awaiting.
+ *
+ * Reports had no LinkedIn section at all before this; a LinkedIn step counted as
+ * a generic "sent", and an accepted invitation was never recorded anywhere.
+ */
+export async function getLinkedInReport(orgId: string, days = 30): Promise<LinkedInReport> {
+  const since = new Date(Date.now() - days * DAY);
+  // Rows from before `kind` existed read as the desktop app treated them.
+  const invites = { OR: [{ kind: "invite" }, { kind: null, type: { not: "message" } }] };
+
+  const [sent, alreadyConnected, failed, messagesSent, queued] = await Promise.all([
+    // Invitations are few — LinkedIn allows about twenty a day per account — so
+    // the window's rows are read and grouped here, which gives the per-campaign
+    // and per-day splits from one query.
+    prisma.linkedInAction.findMany({
+      where: { AND: [invites, { organizationId: orgId, status: "sent", sentAt: { gte: since } }] },
+      select: { campaignId: true, sentAt: true, acceptedAt: true },
+    }),
+    prisma.linkedInAction.count({
+      where: {
+        AND: [invites, { organizationId: orgId, status: "skipped", result: { startsWith: "already connected" }, updatedAt: { gte: since } }],
+      },
+    }),
+    prisma.linkedInAction.count({ where: { organizationId: orgId, status: "failed", updatedAt: { gte: since } } }),
+    prisma.linkedInAction.count({ where: { organizationId: orgId, status: "sent", kind: "message", sentAt: { gte: since } } }),
+    prisma.linkedInAction.count({ where: { organizationId: orgId, status: { in: ["pending", "in_progress", "drafted"] } } }),
+  ]);
+
+  const accepted = sent.filter((a) => a.acceptedAt).length;
+
+  const campaignIds = [...new Set(sent.map((a) => a.campaignId).filter((v): v is string => !!v))];
+  const campaigns = campaignIds.length
+    ? await prisma.campaign.findMany({ where: { id: { in: campaignIds } }, select: { id: true, name: true, archivedAt: true } })
+    : [];
+  const nameOf = new Map(campaigns.map((c) => [c.id, c.archivedAt ? `${c.name} (deleted)` : c.name]));
+
+  const perCampaign = new Map<string, { id: string | null; name: string; sent: number; accepted: number }>();
+  for (const a of sent) {
+    const key = a.campaignId ?? "";
+    const row = perCampaign.get(key) ?? {
+      id: a.campaignId,
+      // No campaign means the bulk "Connect on LinkedIn" on the Leads screen.
+      name: a.campaignId ? (nameOf.get(a.campaignId) ?? "Deleted campaign") : "From the Leads screen",
+      sent: 0,
+      accepted: 0,
+    };
+    row.sent++;
+    if (a.acceptedAt) row.accepted++;
+    perCampaign.set(key, row);
+  }
+
+  const buckets = new Map<string, { sent: number; accepted: number }>();
+  for (let i = 0; i <= days; i++) buckets.set(dayKey(new Date(since.getTime() + i * DAY)), { sent: 0, accepted: 0 });
+  for (const a of sent) {
+    const s = a.sentAt && buckets.get(dayKey(a.sentAt));
+    if (s) s.sent++;
+    const acc = a.acceptedAt && buckets.get(dayKey(a.acceptedAt));
+    if (acc) acc.accepted++;
+  }
+
+  return {
+    invitesSent: sent.length,
+    accepted,
+    acceptanceRate: pct(accepted, sent.length),
+    awaiting: sent.length - accepted,
+    alreadyConnected,
+    failed,
+    messagesSent,
+    queued,
+    byCampaign: [...perCampaign.values()].map((r) => ({ ...r, rate: pct(r.accepted, r.sent) })).sort((a, b) => b.sent - a.sent),
+    series: [...buckets.entries()].map(([date, v]) => ({ date, ...v })),
+  };
 }

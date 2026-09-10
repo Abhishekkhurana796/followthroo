@@ -408,4 +408,55 @@ async function fillLinkedInAction(action) {
   }
 }
 
-module.exports = { fillLinkedInAction };
+/**
+ * The people on your own Connections page, newest first, as profile URLs.
+ *
+ * LinkedIn announces an accepted invitation nowhere — no API, no notification
+ * we can read. Your connections list is the evidence, so the desktop app reads
+ * its first screen at the start of a run and tells Followthroo who is on it
+ * (/api/linkedin/connections/seen), which marks those invitations accepted.
+ *
+ * Runs INSIDE the page, like fillLinkedInAction: no imports, no closure. Reads
+ * hrefs only — never clicks — and returns [] rather than throwing when the markup
+ * is not what it expects, because a run must never stop over a report.
+ */
+function readRecentConnections() {
+  const scope = document.querySelector("main") || document.body;
+  const slugOf = (a) => {
+    try {
+      const path = new URL(a.getAttribute("href"), "https://www.linkedin.com").pathname;
+      return (path.split("/in/")[1] || "").split("/")[0] || null;
+    } catch {
+      return null;
+    }
+  };
+
+  const found = new Set();
+  for (const a of scope.querySelectorAll('a[href*="/in/"]')) {
+    const slug = slugOf(a);
+    if (!slug || found.has(slug)) continue;
+    // Only a card that says "Connected …" counts. The page can also show people
+    // you are not connected to, and one of them may have an invitation pending —
+    // counting them would record an acceptance that never happened.
+    let node = a;
+    for (let depth = 0; depth < 6 && node && node !== scope; depth++) {
+      node = node.parentElement;
+      if (!node) break;
+      const slugs = new Set(Array.from(node.querySelectorAll('a[href*="/in/"]')).map(slugOf).filter(Boolean));
+      if (slugs.size > 1) break; // climbed past this person's own card
+      // No word boundary before "connected": textContent runs adjacent elements
+      // together, so a rendered card reads "Priya ShahConnected on 8 Sep" and
+      // \bconnected never matched a real one. ("Connect", on a suggestion, is
+      // not "connected".)
+      if (/connected\b/i.test(node.textContent || "")) {
+        found.add(slug);
+        break;
+      }
+    }
+  }
+  return Array.from(found)
+    .slice(0, 200)
+    .map((slug) => `https://www.linkedin.com/in/${slug}`);
+}
+
+module.exports = { fillLinkedInAction, readRecentConnections };

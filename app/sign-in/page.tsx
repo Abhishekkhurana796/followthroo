@@ -3,7 +3,7 @@
 import { useState, Suspense } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { signIn } from "@/lib/auth-client";
+import { authClient, signIn } from "@/lib/auth-client";
 import { GoogleButton } from "@/components/auth/GoogleButton";
 import { ZohoButton } from "@/components/auth/ZohoButton";
 
@@ -25,16 +25,36 @@ function SignInForm() {
   const [password, setPassword] = useState("");
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // Signed up with a password but never opened the confirmation link.
+  const [unverified, setUnverified] = useState(false);
+  const [resent, setResent] = useState(false);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     setBusy(true);
     setErr(null);
-    const { error } = await signIn.email({ email, password });
+    setUnverified(false);
+    setResent(false);
+    const { error } = await signIn.email({ email, password, callbackURL: redirect });
     setBusy(false);
-    if (error) return setErr(error.message || "Sign in failed");
+    if (error) {
+      if (error.code === "EMAIL_NOT_VERIFIED" || error.status === 403) {
+        setUnverified(true);
+        return setErr("Confirm your email address first — the link is in your inbox.");
+      }
+      return setErr(error.message || "Sign in failed");
+    }
     router.push(redirect);
   }
+
+  async function resend() {
+    setResent(false);
+    const { error } = await authClient.sendVerificationEmail({ email, callbackURL: redirect });
+    if (error) return setErr(error.message || "Could not send the email");
+    setResent(true);
+  }
+
+  const signUpHref = redirect === "/dashboard" ? "/sign-up" : `/sign-up?redirect=${encodeURIComponent(redirect)}`;
 
   return (
     <div className="w-full max-w-sm">
@@ -55,7 +75,22 @@ function SignInForm() {
       </div>
 
       <form onSubmit={submit} className="space-y-4">
-        {err && <div className="rounded-xl border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-700">{err}</div>}
+        {err && (
+          <div className="rounded-xl border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-700">
+            {err}
+            {unverified && (
+              <div className="mt-2">
+                {resent ? (
+                  <span>Sent again to {email}.</span>
+                ) : (
+                  <button type="button" onClick={resend} className="font-medium underline">
+                    Send the link again
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
+        )}
         <div>
           <label className="mb-1.5 block font-mono text-xs uppercase tracking-wide text-ink-soft">Email</label>
           <input type="email" required value={email} onChange={(e) => setEmail(e.target.value)} className="w-full rounded-xl border border-line bg-surface px-3.5 py-2.5 text-sm outline-none focus:border-ink" placeholder="you@company.com" />
@@ -68,7 +103,7 @@ function SignInForm() {
       </form>
 
       <p className="mt-6 text-sm text-ink-soft">
-        No account? <Link href="/sign-up" className="font-medium text-ink underline">Create one</Link>
+        No account? <Link href={signUpHref} className="font-medium text-ink underline">Create one</Link>
       </p>
     </div>
   );

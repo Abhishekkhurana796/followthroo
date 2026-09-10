@@ -27,8 +27,8 @@ npm run worker                 # needs REDIS_URL + DATABASE_URL
 |---|---|---|
 | `APP_SECRET` | sessions/tokens | 32+ random chars |
 | `DATABASE_URL` | everything CRM | PostgreSQL connection string |
-| `REDIS_URL` | queue + shared rate limits | without it, rate limits are in-memory (dev only) and sequencing is disabled |
-| `SMTP_HOST/PORT/SECURE/USER/PASS` | Internal mail | platform notifications to your own users only — outreach uses each workspace's connected Sending account |
+| `REDIS_URL` | queue + shared rate limits | also holds the API and sign-in rate limits; without it they are per-instance (dev only) and sequencing is disabled |
+| `SMTP_HOST/PORT/SECURE/USER/PASS` | Internal mail, sign-up confirmation | notifications and email-confirmation links to your own users only — outreach uses each workspace's connected Sending account. **Required in production:** without it, password sign-ups are not email-verified (see docs/security.md) |
 | `MAIL_FROM` | Internal mail | From header on those notifications |
 | `DKIM_DOMAIN/KEY_SELECTOR/PRIVATE_KEY` | Email deliverability | recommended |
 | `GMAIL_CLIENT_ID/SECRET/REFRESH_TOKEN/SENDER` | Email via Gmail API | alternative to SMTP |

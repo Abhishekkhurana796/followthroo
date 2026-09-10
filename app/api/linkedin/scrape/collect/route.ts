@@ -123,7 +123,7 @@ export async function POST(req: NextRequest) {
   });
 
   await completeScrapeJob({ organizationId, jobId: job.id, rows: accepted });
-  const result = await importScrapedRows({ organizationId, jobId: job.id });
+  const result = await importScrapedRows({ organizationId, jobId: job.id, actorId: userId, createdKind: "extension" });
 
   return withCors(
     ok({

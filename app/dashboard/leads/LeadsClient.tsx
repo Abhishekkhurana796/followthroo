@@ -3,18 +3,16 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import useSWR from "swr";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import {
   Trash2, Upload, Plus, Tag, FolderPlus, X, Pencil, Check, Users, Linkedin,
-  AlertTriangle, CircleDot, Search, Sparkles, ArrowRight, Building2,
+  AlertTriangle, CircleDot, Search, ArrowRight, Building2, Download,
 } from "lucide-react";
 import { api } from "@/lib/client";
 import { cn } from "@/lib/cn";
 import { Badge, Banner, DashHeader, Dialog, EmptyState, Input, Label, NoResults, Panel, Select, Skeleton, Textarea, useConfirm, usePrompt } from "@/components/ui";
 import { INVITE_NOTE_MAX, worstCaseNoteLength } from "@/lib/linkedin/note";
 import { tourTarget } from "@/components/dashboard/tour/target";
-import { FindLeadsPanel } from "@/components/dashboard/FindLeadsPanel";
-
 type NextAction = { taskId: string | null; label: string; kind: string; dueAt: string | null; urgent: boolean; source: string };
 type Lead = {
   id: string;
@@ -27,7 +25,12 @@ type Lead = {
   tags: string[];
   score: number | null;
   source: string | null;
+  ownerId: string | null;
   ownerName: string | null;
+  /** Who added the contact, as a name. Null when a source added it, not a person. */
+  createdByName: string | null;
+  /** user | import | extension | linkedin_bulk | webhook | ai */
+  createdKind: string;
   lastActivityAt: string | null;
   nextAction: NextAction | null;
 };
@@ -36,8 +39,43 @@ type LeadsResponse = { items: Lead[]; total: number; page: number; pageSize: num
 type Assignees = { self: string; members: { userId: string; name: string; email: string | null; isSelf: boolean }[] };
 type Segment = { id: string; name: string; kind: string; count: number; leadIds: string[] };
 type Campaign = { id: string; name: string };
+type ImportResult = { imported: number; skipped: number; errors?: string[] };
 
 const PAGE_SIZE = 50;
+
+/**
+ * What the CSV import understands, shown in the Add Lead dialog.
+ *
+ * "What columns does the CSV need?" was a question the screen could not answer:
+ * the only way to find out was to upload a file and read the skip count. Mirrors
+ * normalizeRow in app/api/leads/import/route.ts — keep the two in step. Headers
+ * match case- and space-insensitively, so "First Name" and "firstname" are equal.
+ */
+const IMPORT_COLUMNS: { column: string; aliases?: string; note?: string }[] = [
+  { column: "email", note: "Also how duplicates are spotted" },
+  { column: "linkedin url", aliases: "linkedin, linkedin profile, profile url", note: "Enough on its own — no email needed" },
+  { column: "first name", aliases: "name (split into first and last)" },
+  { column: "last name" },
+  { column: "company" },
+  { column: "title" },
+  { column: "phone" },
+  { column: "tags", note: "Several at once, separated by commas" },
+];
+
+const SAMPLE_CSV = [
+  "first name,last name,email,linkedin url,company,title,phone,tags,city",
+  'Priya,Shah,priya@acme.com,https://www.linkedin.com/in/priyashah,Acme,Head of HR,+91 98765 43210,"warm,hr",Mumbai',
+  "Arjun,Mehta,,https://www.linkedin.com/in/arjun-mehta,Globex,Talent Lead,,linkedin,Pune",
+].join("\n");
+
+/** Where a contact came from, as a person reads it: "Priya · CSV", "IndiaMART". */
+function addedBy(l: Lead): string {
+  const how: Record<string, string> = { import: "CSV", extension: "Extension", linkedin_bulk: "LinkedIn" };
+  if (l.createdByName) return how[l.createdKind] ? `${l.createdByName} · ${how[l.createdKind]}` : l.createdByName;
+  if (l.createdKind === "ai") return "AI agent";
+  // Nobody added it: a source did (a webhook, a polled inbox).
+  return l.source ?? "Automatic";
+}
 
 const displayName = (l: Lead) => [l.firstName, l.lastName].filter(Boolean).join(" ") || l.email || "Unnamed lead";
 
@@ -83,7 +121,6 @@ export default function LeadsPage() {
   // query and refuses it for anyone who is not an owner, admin or manager.
   const view = useSearchParams().get("view");
   const unassignedView = view === "unassigned";
-  const router = useRouter();
 
   const params = new URLSearchParams({ page: String(page), pageSize: String(PAGE_SIZE) });
   if (unassignedView) params.set("view", "unassigned");
@@ -135,6 +172,11 @@ export default function LeadsPage() {
     });
   }
 
+  // Who a new contact goes to. Empty means "let the source's rule decide" — for a
+  // manual add, that is whoever is adding it.
+  const [newOwnerId, setNewOwnerId] = useState("");
+  const [importResult, setImportResult] = useState<ImportResult | null>(null);
+
   async function addLead(e: React.FormEvent) {
     e.preventDefault();
     if (!form.email.trim() && !form.linkedinUrl.trim()) {
@@ -151,9 +193,11 @@ export default function LeadsPage() {
           linkedinUrl: form.linkedinUrl.trim() || undefined,
           company: form.company || undefined,
           tags,
+          ...(newOwnerId ? { ownerId: newOwnerId } : {}),
         },
       });
       setForm({ firstName: "", email: "", company: "", tags: "", linkedinUrl: "" });
+      setNewOwnerId("");
       setAddOpen(false);
       // An existing address is updated in place and keeps its original position
       // in the newest-first list, so "Lead added" would send someone hunting for
@@ -174,17 +218,32 @@ export default function LeadsPage() {
   async function importCsv(file: File) {
     setBusy(true);
     setMsg(null);
-    setAddOpen(false);
+    setImportResult(null);
     try {
       const text = await file.text();
-      const res = await api<{ imported: number; skipped: number }>("/api/leads/import", { raw: text, contentType: "text/csv" });
-      setMsg({ kind: "success", text: `Imported ${res.imported}, skipped ${res.skipped}.` });
+      const res = await api<ImportResult>("/api/leads/import", { raw: text, contentType: "text/csv" });
+      // Shown in the dialog, beside the column list: "skipped 3" is only useful
+      // next to the reasons and the rules those rows broke.
+      setImportResult(res);
       mutate();
     } catch (e) {
-      setMsg({ kind: "error", text: (e as Error).message });
+      setImportResult({ imported: 0, skipped: 0, errors: [(e as Error).message] });
     } finally {
       setBusy(false);
       if (fileRef.current) fileRef.current.value = "";
+    }
+  }
+
+  /** Assign one contact from its row — the same endpoint, and rule, as the lead's own page. */
+  async function assignOne(l: Lead, ownerId: string) {
+    const value = ownerId || null;
+    if (value === l.ownerId) return;
+    setMsg(null);
+    try {
+      await api(`/api/leads/${l.id}`, { method: "PATCH", body: { ownerId: value } });
+      mutate();
+    } catch (e) {
+      setMsg({ kind: "error", text: (e as Error).message });
     }
   }
 
@@ -422,6 +481,7 @@ export default function LeadsPage() {
                 <th className="px-4 py-3">Source</th>
                 <th className="px-4 py-3">Stage</th>
                 <th className="px-4 py-3">Owner</th>
+                <th className="px-4 py-3">Added by</th>
                 <th className="px-4 py-3">Last activity</th>
                 <th className="px-4 py-3">Next action</th>
                 <th className="px-4 py-3"></th>
@@ -434,14 +494,14 @@ export default function LeadsPage() {
                 Array.from({ length: 8 }).map((_, i) => (
                   <tr key={`sk-${i}`}>
                     <td className="px-4 py-3"><Skeleton className="h-4 w-4" /></td>
-                    {Array.from({ length: 8 }).map((__, c) => (
+                    {Array.from({ length: 9 }).map((__, c) => (
                       <td key={c} className="px-4 py-3"><Skeleton className={`h-3.5 ${c === 0 ? "w-32" : "w-20"}`} /></td>
                     ))}
                   </tr>
                 ))
               ) : leads.length === 0 ? (
                 <tr>
-                  <td colSpan={9} className="px-4 py-10">
+                  <td colSpan={10} className="px-4 py-10">
                     {hasFilters ? (
                       <NoResults
                         query={debouncedSearch.trim() || undefined}
@@ -475,7 +535,30 @@ export default function LeadsPage() {
                       {l.source ? <Badge tone="neutral">{l.source}</Badge> : <span className="text-ink-faint">—</span>}
                     </td>
                     <td className="px-4 py-3"><span className="rounded-full bg-tint px-2 py-0.5 font-mono text-xs">{l.stage}</span></td>
-                    <td className="px-4 py-3 text-ink-soft">{l.ownerName ?? "—"}</td>
+                    <td className="px-4 py-3">
+                      {/* One contact at a time, without selecting it first — the
+                          bulk bar was the only way, and nobody found it. Shown only
+                          when there is someone to choose; the server re-checks. */}
+                      {(assignees?.members.length ?? 0) > 1 ? (
+                        <Select
+                          value={l.ownerId ?? ""}
+                          onChange={(e) => assignOne(l, e.target.value)}
+                          aria-label={`Owner of ${displayName(l)}`}
+                          className="!w-36 !border-transparent !bg-transparent !px-1.5 !py-1 text-xs text-ink-soft hover:!border-line"
+                        >
+                          <option value="">Unassigned</option>
+                          {l.ownerId && !assignees!.members.some((m) => m.userId === l.ownerId) && (
+                            <option value={l.ownerId}>{l.ownerName ?? "Someone else"}</option>
+                          )}
+                          {assignees!.members.map((m) => (
+                            <option key={m.userId} value={m.userId}>{m.isSelf ? `${m.name} (me)` : m.name}</option>
+                          ))}
+                        </Select>
+                      ) : (
+                        <span className="text-ink-soft">{l.ownerName ?? "—"}</span>
+                      )}
+                    </td>
+                    <td className="px-4 py-3 text-xs text-ink-soft">{addedBy(l)}</td>
                     <td suppressHydrationWarning className="px-4 py-3 font-mono text-xs text-ink-soft">{ago(l.lastActivityAt)}</td>
                     {/* The column the whole product hangs off — loud on purpose. */}
                     <td className="px-4 py-3">
@@ -533,19 +616,16 @@ export default function LeadsPage() {
       {/* ---- Add lead ---- */}
       <AddLeadDialog
         open={addOpen}
-        onClose={() => setAddOpen(false)}
+        onClose={() => { setAddOpen(false); setImportResult(null); }}
         form={form}
         setForm={setForm}
         busy={busy}
         onSubmit={addLead}
         onImport={() => fileRef.current?.click()}
-        onQueued={() => {
-          // LinkedIn has its own screen now, and that is where results live.
-          // Two homes for the same thing is how people end up unsure which one
-          // is real — so this hands off rather than duplicating it here.
-          setAddOpen(false);
-          router.push("/dashboard/linkedin");
-        }}
+        importResult={importResult}
+        assignees={assignees}
+        ownerId={newOwnerId}
+        setOwnerId={setNewOwnerId}
       />
 
       {/* ---- Groups ---- */}
@@ -784,7 +864,7 @@ function InviteDialog({
 }
 
 function AddLeadDialog({
-  open, onClose, form, setForm, busy, onSubmit, onImport, onQueued,
+  open, onClose, form, setForm, busy, onSubmit, onImport, importResult, assignees, ownerId, setOwnerId,
 }: {
   open: boolean;
   onClose: () => void;
@@ -793,9 +873,12 @@ function AddLeadDialog({
   busy: boolean;
   onSubmit: (e: React.FormEvent) => void;
   onImport: () => void;
-  onQueued: (jobId: string) => void;
+  importResult: ImportResult | null;
+  assignees?: Assignees;
+  ownerId: string;
+  setOwnerId: (id: string) => void;
 }) {
-  const [tab, setTab] = useState<"manual" | "find">("manual");
+  const [tab, setTab] = useState<"manual" | "csv">("manual");
   if (!open) return null;
 
   const tabClass = (active: boolean) =>
@@ -803,22 +886,99 @@ function AddLeadDialog({
       active ? "border-ink bg-tint" : "border-line hover:bg-tint"
     }`;
 
+  /** Generated from SAMPLE_CSV beside IMPORT_COLUMNS, so the two change together. */
+  function downloadSample() {
+    const url = URL.createObjectURL(new Blob([SAMPLE_CSV], { type: "text/csv" }));
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "followthroo-leads-sample.csv";
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
   return (
     <Dialog open onClose={onClose} title="Add Lead" size="md">
-      <div className="grid gap-2 sm:grid-cols-3">
+      {/* "Find leads" — a paste-a-LinkedIn-link importer — was the third tab
+          until 2026-09-10, removed at the client's request. LinkedIn contacts
+          come in through the extension, or here by CSV. */}
+      <div className="grid gap-2 sm:grid-cols-2">
         <button onClick={() => setTab("manual")} className={tabClass(tab === "manual")}>
-          Add manually
+          <Plus className="mx-auto mb-1 h-3.5 w-3.5" /> Add manually
         </button>
-        <button onClick={onImport} className={tabClass(false)}>
+        <button onClick={() => setTab("csv")} className={tabClass(tab === "csv")}>
           <Upload className="mx-auto mb-1 h-3.5 w-3.5" /> Import CSV
-        </button>
-        {/* Was a disabled "coming soon" placeholder. This is what it was waiting for. */}
-        <button onClick={() => setTab("find")} className={tabClass(tab === "find")}>
-          <Sparkles className="mx-auto mb-1 h-3.5 w-3.5" /> Find leads
         </button>
       </div>
 
-      {tab === "find" && <FindLeadsPanel onQueued={onQueued} />}
+      {tab === "csv" && (
+        <div className="mt-5 space-y-4">
+          <p className="text-sm text-ink-soft">
+            One row per person, under a header row. Each row needs an <b className="text-ink">email</b> or a{" "}
+            <b className="text-ink">LinkedIn URL</b> — everything else is optional.
+          </p>
+
+          <div className="overflow-x-auto rounded-xl border border-line">
+            <table className="w-full text-left text-xs">
+              <thead className="bg-tint font-mono uppercase tracking-wide text-ink-soft">
+                <tr>
+                  <th className="px-3 py-2">Column</th>
+                  <th className="px-3 py-2">Also accepted</th>
+                  <th className="px-3 py-2">Note</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-line">
+                {IMPORT_COLUMNS.map((c) => (
+                  <tr key={c.column}>
+                    <td className="whitespace-nowrap px-3 py-2 font-mono text-ink">{c.column}</td>
+                    <td className="px-3 py-2 text-ink-soft">{c.aliases ?? "—"}</td>
+                    <td className="px-3 py-2 text-ink-soft">{c.note ?? ""}</td>
+                  </tr>
+                ))}
+                <tr>
+                  <td className="whitespace-nowrap px-3 py-2 font-mono text-ink">any other</td>
+                  <td className="px-3 py-2 text-ink-soft">—</td>
+                  <td className="px-3 py-2 text-ink-soft">
+                    Kept on the lead, and usable in templates as {"{{Column name}}"}
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <p className="text-xs text-ink-soft">
+            Header names ignore capitals and spaces, so “First Name” works. Importing LinkedIn contacts in bulk? A
+            LinkedIn URL column on its own is enough.
+          </p>
+
+          {importResult && (
+            <Banner kind={importResult.imported > 0 ? (importResult.skipped ? "info" : "success") : "error"}>
+              <div className="space-y-1">
+                <p>
+                  Imported {importResult.imported}
+                  {importResult.skipped ? `, skipped ${importResult.skipped}` : ""}.
+                </p>
+                {!!importResult.errors?.length && (
+                  <ul className="list-disc space-y-0.5 pl-4 text-xs">
+                    {importResult.errors.slice(0, 3).map((e, i) => (
+                      <li key={i} className="break-all">{e}</li>
+                    ))}
+                    {importResult.errors.length > 3 && <li>…and {importResult.errors.length - 3} more</li>}
+                  </ul>
+                )}
+              </div>
+            </Banner>
+          )}
+
+          <div className="flex flex-wrap justify-end gap-2 pt-1">
+            <button type="button" onClick={downloadSample} className="btn btn-ghost !py-2 !text-sm">
+              <Download className="h-4 w-4" /> Sample CSV
+            </button>
+            <button type="button" onClick={onImport} disabled={busy} className="btn btn-primary !py-2 !text-sm disabled:opacity-50">
+              <Upload className="h-4 w-4" /> {busy ? "Importing…" : "Choose CSV file"}
+            </button>
+          </div>
+        </div>
+      )}
 
       {tab === "manual" && (
       <form onSubmit={onSubmit} className="mt-5 space-y-3">
@@ -844,6 +1004,18 @@ function AddLeadDialog({
           <Label>Tags (comma-separated)</Label>
           <Input value={form.tags} onChange={(e) => setForm({ ...form, tags: e.target.value })} placeholder="vip, warm" />
         </div>
+        {/* Only when there is a real choice; otherwise the source's rule applies, which for a manual add is you. */}
+        {(assignees?.members.length ?? 0) > 1 && (
+          <div>
+            <Label>Owner</Label>
+            <Select value={ownerId} onChange={(e) => setOwnerId(e.target.value)}>
+              <option value="">Automatic (usually you)</option>
+              {assignees!.members.map((m) => (
+                <option key={m.userId} value={m.userId}>{m.isSelf ? `${m.name} (you)` : m.name}</option>
+              ))}
+            </Select>
+          </div>
+        )}
         <p className="text-xs text-ink-soft">An email or a LinkedIn URL is required — everything else can wait.</p>
         <div className="flex justify-end gap-2 pt-1">
           <button type="button" onClick={onClose} className="btn btn-ghost !py-2 !text-sm">Cancel</button>

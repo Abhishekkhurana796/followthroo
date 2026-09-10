@@ -21,7 +21,7 @@ export async function GET(req: NextRequest) {
 
   const [campaigns, groups, queue] = await Promise.all([
     prisma.campaign.findMany({
-      where: { organizationId: account.organizationId },
+      where: { organizationId: account.organizationId, archivedAt: null },
       select: { id: true, name: true, status: true },
       orderBy: { createdAt: "desc" },
     }),

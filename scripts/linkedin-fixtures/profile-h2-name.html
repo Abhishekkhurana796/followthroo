@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Fixture — the name is an h2, and there are three "More"s</title>
+<style>
+  #sticky { position: sticky; top: 0; }
+  .ft-clickable { cursor: pointer; }
+</style>
+</head>
+<body>
+<!--
+  Copied from a run that failed on a real profile (/in/liannemui):
+
+    "More" matches 3 places and none is marked as this profile's own
+    (elements 0, 4, 15)
+
+  Two things about that page defeated attribution at the same time, and this
+  fixture reproduces both:
+
+    1. There is NO <h1> anywhere. The name is an <h2>. Everything hung off
+       `document.querySelector("main h1, h1")` — personName (which fell back to
+       the URL slug), topCard (null without it) and nameBox (the geometry
+       signal's origin) — so one missing tag disabled every way of attributing
+       an element at once, and 0 of 38 elements were owned.
+    2. The vanity slug is not hyphenated: "liannemui" against a heading that
+       normalises to "lianne mui". Neither contains the other as words, so the
+       section-heading signal could not rescue it either.
+
+  Three controls read "More": the sticky bar at the top (no heading above it),
+  the profile's own action row, and "…more" in About. Only the second may be
+  opened, and only the section heading tells them apart.
+
+  This is also a follow-primary profile: Follow and Message on the card, Connect
+  only inside the profile's own More menu.
+-->
+<header class="global-nav"><a href="/feed">Skip to main content</a></header>
+
+<div id="sticky">
+  <button aria-label="More actions" data-who="sticky-more">More</button>
+  <div role="button" data-who="sticky-follow">Follow</div>
+  <a role="button" href="#" data-who="sticky-msg">Message</a>
+</div>
+
+<main>
+  <section class="pv-top-card artdeco-card">
+    <div class="a"><div class="b">
+      <!-- The name. An h2, not an h1 — the whole point of this fixture. -->
+      <h2>Lianne Mui</h2>
+      <span class="dist-value">· 2nd</span>
+      <div class="text-body-medium">Brand Building · Modern Marketing</div>
+    </div></div>
+    <div class="actions">
+      <a role="button" href="#" aria-label="Message Lianne Mui" data-who="msg">Message</a>
+      <div role="button" data-who="follow">Follow</div>
+      <button id="moreBtn" aria-label="More actions" aria-expanded="false" data-who="own-more">More</button>
+    </div>
+  </section>
+
+  <section class="about">
+    <h2>About</h2>
+    <p>Twenty years across brand and ecommerce…</p>
+    <span class="ft-clickable" data-who="about-more">more</span>
+  </section>
+</main>
+
+<aside id="rail">
+  <h2>Explore Premium profiles</h2>
+  <div class="rail-card">
+    <a href="/in/wrong-person-1">Wrong Person One</a>
+    <button aria-label="Invite Wrong Person One to connect" data-who="stranger">Connect</button>
+  </div>
+</aside>
+
+<script>
+  window.__invited = null;
+  window.__followed = false;
+  window.__sent = null;
+  window.__openedMore = null;   // which "More" was opened
+  window.__aboutExpanded = false;
+
+  document.querySelector('[data-who="sticky-follow"]').addEventListener("click", () => { window.__followed = true; });
+  document.querySelector('[data-who="follow"]').addEventListener("click", () => { window.__followed = true; });
+  document.querySelector('[data-who="stranger"]').addEventListener("click", () => { window.__invited = "stranger"; });
+  document.querySelector('[data-who="about-more"]').addEventListener("click", () => {
+    window.__openedMore = "about";
+    window.__aboutExpanded = true;
+  });
+  document.querySelector('[data-who="sticky-more"]').addEventListener("click", () => {
+    window.__openedMore = "sticky";
+  });
+
+  // The profile's own More menu, appended to <body> as LinkedIn does.
+  document.getElementById("moreBtn").addEventListener("click", () => {
+    window.__openedMore = "own";
+    if (document.querySelector(".artdeco-dropdown__content")) return;
+    const menu = document.createElement("div");
+    menu.className = "artdeco-dropdown__content";
+    menu.setAttribute("role", "menu");
+    const items = [
+      ["Follow Lianne Mui", "follow"],
+      ["Save to PDF", "pdf"],
+      ["Invite Lianne Mui to connect", "right"],
+      ["Report or block", "report"],
+    ];
+    for (const [aria, who] of items) {
+      const item = document.createElement("div");
+      item.setAttribute("role", "button");
+      item.setAttribute("aria-label", aria);
+      item.className = "artdeco-dropdown__item";
+      item.dataset.who = who;
+      item.textContent = aria.replace(/ Lianne Mui/, "");
+      item.addEventListener("click", () => {
+        if (who === "follow") window.__followed = true;
+        if (who === "right") { window.__invited = "right"; openInviteModal(); }
+      });
+      menu.appendChild(item);
+    }
+    document.body.appendChild(menu);
+  });
+
+  function markPending() {
+    const p = document.createElement("button");
+    p.setAttribute("aria-label", "Pending");
+    p.textContent = "Pending";
+    document.querySelector(".actions").insertBefore(p, document.querySelector(".actions").firstChild);
+  }
+
+  function openInviteModal() {
+    if (document.querySelector('[role="dialog"]')) return;
+    const modal = document.createElement("div");
+    modal.className = "artdeco-modal";
+    modal.setAttribute("role", "dialog");
+    modal.innerHTML =
+      '<h2>Add a note to your invitation?</h2>' +
+      '<button id="addNote" aria-label="Add a note">Add a note</button>' +
+      '<div id="noteWrap" hidden><textarea id="custom-message" maxlength="300"></textarea></div>' +
+      '<button id="sendPlain" aria-label="Send without a note">Send without a note</button>' +
+      '<button id="sendNow" aria-label="Send" hidden>Send</button>';
+    document.body.appendChild(modal);
+    modal.querySelector("#addNote").addEventListener("click", () => {
+      modal.querySelector("#noteWrap").hidden = false;
+      modal.querySelector("#sendPlain").hidden = true;
+      modal.querySelector("#sendNow").hidden = false;
+    });
+    const finish = (withNote) => {
+      window.__sent = "right";
+      if (withNote) window.__note = modal.querySelector("#custom-message").value;
+      modal.remove();
+      markPending();
+    };
+    modal.querySelector("#sendPlain").addEventListener("click", () => finish(false));
+    modal.querySelector("#sendNow").addEventListener("click", () => finish(true));
+  }
+</script>
+</body>
+</html>

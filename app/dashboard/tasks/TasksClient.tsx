@@ -126,6 +126,15 @@ export default function TasksClient() {
       <div className="space-y-6 p-8">
         {msg && <Banner kind="error">{msg}</Banner>}
 
+        {/* The server returns at most 200 tasks per section (lib/tasks.ts). A full
+            section is a cut-off, not a coincidence — say so rather than let the
+            rest go unseen. */}
+        {data && (["overdue", "today", "upcoming"] as const).some((k) => data[k].length >= 200) && (
+          <Banner kind="info">
+            A section is showing its first 200 tasks. Switch to Mine to narrow the list to your own.
+          </Banner>
+        )}
+
         {isLoading && !data && (
           <div className="space-y-3">
             {Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-20 w-full rounded-2xl" />)}

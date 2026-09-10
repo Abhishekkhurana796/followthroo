@@ -3,7 +3,7 @@
 import { useState } from "react";
 import useSWR from "swr";
 import dynamic from "next/dynamic";
-import { Users, Send, MailOpen, MousePointerClick, Reply, TrendingUp, GitBranch, IndianRupee, Timer } from "lucide-react";
+import { Users, Send, MailOpen, MousePointerClick, Reply, TrendingUp, GitBranch, IndianRupee, Timer, Linkedin } from "lucide-react";
 import { DashHeader, Panel, Skeleton, Badge } from "@/components/ui";
 
 // recharts is a ~400 KB chunk for two charts below the fold. Loading it lazily
@@ -20,6 +20,13 @@ const CampaignChart = dynamic(() => import("./ReportsCharts").then((m) => m.Camp
   ssr: false,
   loading: () => <ChartFallback height={240} />,
 });
+
+type LinkedInReport = {
+  invitesSent: number; accepted: number; acceptanceRate: number; awaiting: number;
+  alreadyConnected: number; failed: number; messagesSent: number; queued: number;
+  byCampaign: { id: string | null; name: string; sent: number; accepted: number; rate: number }[];
+  series: { date: string; sent: number; accepted: number }[];
+};
 
 type Report = {
   days: number;
@@ -40,6 +47,8 @@ type Report = {
     ownerId: string; ownerName: string | null; ownerEmail: string;
     itemsRespondedTo: number; avgResponseHours: number;
   }[];
+  /** Absent in the server-rendered first paint; SWR fills it in. */
+  linkedin?: LinkedInReport;
 };
 
 // Recharts writes these straight onto SVG paint attributes, which a class
@@ -58,6 +67,90 @@ function Tile({ icon, label, value, sub }: { icon: React.ReactNode; label: strin
   );
 }
 
+/** A figure inside a panel — Tile without a panel of its own around it. */
+function Stat({ label, value, sub }: { label: string; value: string | number; sub?: string }) {
+  return (
+    <div className="rounded-xl border border-line p-4">
+      <div className="font-mono text-xs uppercase tracking-wide text-ink-soft">{label}</div>
+      <div className="mt-1 font-display text-2xl font-extrabold tabular-nums">{value}</div>
+      {sub && <div className="mt-0.5 text-xs text-ink-soft">{sub}</div>}
+    </div>
+  );
+}
+
+/**
+ * LinkedIn connection requests — sent, and actually accepted.
+ *
+ * Reports had no LinkedIn section at all: a request counted as a generic "sent"
+ * and an acceptance was never recorded anywhere. "Accepted" here is real — the
+ * person has since appeared in the connections list — which is why the footnote
+ * says how that is learned rather than letting the number look like more than it is.
+ */
+function LinkedInPanel({ days, li }: { days: number; li?: LinkedInReport }) {
+  return (
+    <Panel>
+      <div className="mb-4 flex flex-wrap items-baseline justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <Linkedin className="h-4 w-4 text-ink-soft" />
+          <h2 className="font-display text-base font-bold">LinkedIn connection requests</h2>
+        </div>
+        <span className="text-xs text-ink-soft">last {days} days</span>
+      </div>
+
+      {!li ? (
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          {Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-20 w-full rounded-xl" />)}
+        </div>
+      ) : li.invitesSent === 0 && li.queued === 0 && li.messagesSent === 0 ? (
+        <p className="text-sm text-ink-soft">No connection requests sent in this window.</p>
+      ) : (
+        <>
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            <Stat label="Requests sent" value={li.invitesSent} sub={li.queued ? `${li.queued} more queued` : undefined} />
+            <Stat label="Accepted" value={li.accepted} sub={`${li.awaiting} awaiting`} />
+            <Stat label="Acceptance rate" value={`${li.acceptanceRate}%`} />
+            <Stat
+              label="LinkedIn messages"
+              value={li.messagesSent}
+              sub={li.alreadyConnected ? `${li.alreadyConnected} were already connected` : undefined}
+            />
+          </div>
+
+          {li.byCampaign.length > 0 && (
+            <div className="mt-5 overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-line text-left font-mono text-xs uppercase tracking-wide text-ink-soft">
+                    <th className="py-2 pr-3 font-medium">Campaign</th>
+                    <th className="py-2 pr-3 text-right font-medium">Sent</th>
+                    <th className="py-2 pr-3 text-right font-medium">Accepted</th>
+                    <th className="py-2 text-right font-medium">Rate</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-line">
+                  {li.byCampaign.map((c) => (
+                    <tr key={c.id ?? "none"}>
+                      <td className="py-2 pr-3">{c.name}</td>
+                      <td className="py-2 pr-3 text-right font-mono tabular-nums">{c.sent}</td>
+                      <td className="py-2 pr-3 text-right font-mono tabular-nums">{c.accepted}</td>
+                      <td className="py-2 text-right font-mono tabular-nums text-ink-soft">{c.rate}%</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          <p className="mt-4 text-xs text-ink-faint">
+            LinkedIn doesn&apos;t announce acceptances, so a request counts as accepted once that person appears in your
+            connections list — read by the desktop app at the start of a run, or by the Chrome extension on your
+            Connections page.{li.failed ? ` ${li.failed} failed to send.` : ""}
+          </p>
+        </>
+      )}
+    </Panel>
+  );
+}
 
 export default function ReportsClient() {
   const [days, setDays] = useState(30);
@@ -151,6 +244,8 @@ export default function ReportsClient() {
             ))}
           </div>
         </Panel>
+
+        <LinkedInPanel days={days} li={data?.linkedin} />
 
         {/* Pipeline funnels — the new Pipeline model, not the legacy Lead.stage above */}
         <Panel>

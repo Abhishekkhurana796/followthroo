@@ -3,8 +3,9 @@
 import { useState } from "react";
 import Link from "next/link";
 import useSWR from "swr";
-import { Bell, Check } from "lucide-react";
+import { ArrowRightLeft, Bell, Check } from "lucide-react";
 import { api } from "@/lib/client";
+import { authClient } from "@/lib/auth-client";
 
 type Item = {
   id: string;
@@ -15,7 +16,8 @@ type Item = {
   readAt: string | null;
   createdAt: string;
 };
-type Payload = { items: Item[]; unread: number };
+type Elsewhere = { organizationId: string; name: string; unread: number };
+type Payload = { items: Item[]; unread: number; elsewhere?: Elsewhere[] };
 
 /** "2m", "3h", "5d" — short enough to sit in a dense list. */
 function ago(iso: string): string {
@@ -45,13 +47,25 @@ export function NotificationBell() {
 
   const unread = data?.unread ?? 0;
   const items = data?.items ?? [];
+  const elsewhere = data?.elsewhere ?? [];
+  // Counted in the badge on purpose. Unread work in another workspace is exactly
+  // the case that read as "I was never told": a teammate in the wrong workspace
+  // saw a bell with nothing on it.
+  const badge = unread + elsewhere.reduce((n, w) => n + w.unread, 0);
 
   async function markAllRead() {
     // Optimistic: the count is the whole point of the control, so it should
     // respond to the click rather than to the round trip.
-    mutate({ items: items.map((i) => ({ ...i, readAt: i.readAt ?? new Date().toISOString() })), unread: 0 }, false);
+    mutate({ items: items.map((i) => ({ ...i, readAt: i.readAt ?? new Date().toISOString() })), unread: 0, elsewhere }, false);
     await api("/api/notifications", { method: "PATCH", body: {} }).catch(() => {});
     mutate();
+  }
+
+  async function switchTo(organizationId: string) {
+    // Same as the workspace switcher in the sidebar: every screen reads the
+    // active workspace on the server, so a full reload is the honest refresh.
+    await authClient.organization.setActive({ organizationId });
+    window.location.reload();
   }
 
   return (
@@ -59,13 +73,13 @@ export function NotificationBell() {
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        aria-label={unread ? `Notifications, ${unread} unread` : "Notifications"}
+        aria-label={badge ? `Notifications, ${badge} unread` : "Notifications"}
         className="relative flex h-9 w-9 items-center justify-center rounded-xl text-ink-soft transition-colors hover:bg-tint hover:text-ink"
       >
         <Bell className="h-4.5 w-4.5" />
-        {unread > 0 && (
+        {badge > 0 && (
           <span className="absolute right-1 top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-danger px-1 text-[10px] font-bold text-white">
-            {unread > 9 ? "9+" : unread}
+            {badge > 9 ? "9+" : badge}
           </span>
         )}
       </button>
@@ -90,8 +104,29 @@ export function NotificationBell() {
               )}
             </div>
 
+            {elsewhere.length > 0 && (
+              <div className="divide-y divide-line border-b border-line bg-tint/40">
+                {elsewhere.map((w) => (
+                  <div key={w.organizationId} className="flex items-center justify-between gap-3 px-4 py-2.5">
+                    <span className="min-w-0 text-xs text-ink-soft">
+                      <b className="text-ink">{w.unread}</b> unread in{" "}
+                      <span className="font-medium text-ink">{w.name}</span>
+                    </span>
+                    <button
+                      onClick={() => switchTo(w.organizationId)}
+                      className="flex shrink-0 items-center gap-1 text-xs font-medium text-accent hover:underline"
+                    >
+                      <ArrowRightLeft className="h-3.5 w-3.5" /> Switch
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+
             {items.length === 0 ? (
-              <p className="px-4 py-8 text-center text-sm text-ink-soft">Nothing yet.</p>
+              <p className="px-4 py-8 text-center text-sm text-ink-soft">
+                {elsewhere.length > 0 ? "Nothing in this workspace." : "Nothing yet."}
+              </p>
             ) : (
               <div className="max-h-96 divide-y divide-line overflow-y-auto">
                 {items.map((n) => {

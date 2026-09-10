@@ -8,7 +8,7 @@
 import { cache } from "react";
 import type { NextRequest } from "next/server";
 import { headers as nextHeaders } from "next/headers";
-import { auth } from "./auth";
+import { auth, preferredOrganizationId } from "./auth";
 import { prisma } from "./db";
 import { fail } from "./http";
 import { configured } from "./env";
@@ -28,12 +28,17 @@ async function resolveTenant(headers: Headers): Promise<TenantContext | null> {
   const userId = session.user.id;
   const active = (session.session as { activeOrganizationId?: string | null }).activeOrganizationId ?? null;
 
-  // Prefer the session's active org; fall back to the user's first membership.
+  // Prefer the session's active org; otherwise make the same choice a new
+  // session does — never simply the oldest membership, which for an invited
+  // teammate is their empty personal workspace.
   let membership = active
     ? await prisma.member.findFirst({ where: { userId, organizationId: active } })
     : null;
   if (!membership) {
-    membership = await prisma.member.findFirst({ where: { userId }, orderBy: { createdAt: "asc" } });
+    const preferred = await preferredOrganizationId(userId);
+    membership = preferred
+      ? await prisma.member.findFirst({ where: { userId, organizationId: preferred } })
+      : null;
   }
   if (!membership) return null;
   return { userId, orgId: membership.organizationId, role: membership.role, department: membership.department };
