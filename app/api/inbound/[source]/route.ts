@@ -5,6 +5,7 @@ import { ingestMany } from "@/lib/ingest";
 import { INBOUND_ADAPTERS, metaLeadAdsAdapter, googleAdsAdapter, type InboundAdapterKey } from "@/lib/channels/inbound";
 import { ingestKeyFor } from "@/lib/ingest-key";
 import { safeEqual } from "@/lib/webhook-auth";
+import { LIMITS, tooMany } from "@/lib/api-ratelimit";
 
 export const runtime = "nodejs";
 
@@ -46,6 +47,12 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ sou
   const { source } = await params;
   const auth = authorize(req);
   if (auth instanceof Response) return auth;
+
+  // A leaked ingest key is a way to pour rows into one workspace's lead table.
+  // Counted per source and workspace; a 429 makes a real provider retry later,
+  // which is exactly what a flood should get.
+  const limited = await tooMany(`inbound:${source}:${auth.orgId}`, LIMITS.webhook);
+  if (limited) return limited;
 
   const org = await prisma.organization.findUnique({ where: { id: auth.orgId }, select: { id: true } });
   if (!org) return fail("Unknown organization.", 404);

@@ -6,6 +6,7 @@ import { requireOrg } from "@/lib/tenant";
 import { ensureSource } from "@/lib/identity";
 import { resolveLeadOwner } from "@/lib/assignment";
 import { invalidate } from "@/lib/cache";
+import { LIMITS, tooMany } from "@/lib/api-ratelimit";
 
 export const runtime = "nodejs";
 
@@ -47,6 +48,8 @@ function normalizeRow(row: Record<string, string>) {
         break;
       case "company": lead.company = value; break;
       case "title": lead.title = value; break;
+      // Several in one cell, separated by commas or semicolons.
+      case "tags": lead.tags = value.split(/[,;]/).map((t) => t.trim()).filter(Boolean); break;
       default:
         if (!KNOWN.has(key)) custom[rawKey.trim()] = value;
     }
@@ -58,6 +61,10 @@ function normalizeRow(row: Record<string, string>) {
 export async function POST(req: NextRequest) {
   const ctx = await requireOrg(req);
   if (ctx instanceof Response) return ctx;
+  // An import writes hundreds of rows; a script firing them in a loop is the
+  // easiest way one member can slow the database for everyone.
+  const limited = await tooMany(`import:${ctx.userId}`, LIMITS.heavyWrite);
+  if (limited) return limited;
   const { orgId } = ctx;
 
   const contentType = req.headers.get("content-type") ?? "";

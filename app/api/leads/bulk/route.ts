@@ -7,6 +7,7 @@ import { invalidate } from "@/lib/cache";
 import { canAssignTo } from "@/lib/tasks";
 import { leadScope } from "@/lib/scope";
 import { notifyLeadAssigned } from "@/lib/notifications";
+import { LIMITS, tooMany } from "@/lib/api-ratelimit";
 
 export const runtime = "nodejs";
 
@@ -23,6 +24,9 @@ const Body = z.object({
 export async function POST(req: NextRequest) {
   const ctx = await requireOrg(req);
   if (ctx instanceof Response) return ctx;
+  // Each call can rewrite hundreds of rows; people do not need many a minute.
+  const limited = await tooMany(`bulk:${ctx.userId}`, LIMITS.heavyWrite);
+  if (limited) return limited;
   const parsed = Body.safeParse(await req.json().catch(() => null));
   if (!parsed.success) return fail(parsed.error.issues[0]?.message ?? "invalid body");
   const { leadIds, addTags, removeTags, segmentId, ownerId } = parsed.data;

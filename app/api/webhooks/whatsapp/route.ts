@@ -5,6 +5,7 @@ import { logActivity, suppress } from "@/lib/crm";
 import { env } from "@/lib/env";
 import { verifyTwilioSignature } from "@/lib/webhook-auth";
 import { normalizePhone } from "@/lib/identity";
+import { LIMITS, clientIp, tooMany } from "@/lib/api-ratelimit";
 
 export const runtime = "nodejs";
 
@@ -22,6 +23,11 @@ export const runtime = "nodejs";
 export async function POST(req: NextRequest) {
   const guard = requireDb();
   if (guard) return guard;
+
+  // Before the signature check, so a flood of forged requests is turned away
+  // without parsing every form.
+  const limited = await tooMany(`webhook-whatsapp:${clientIp(req)}`, LIMITS.webhook);
+  if (limited) return limited;
 
   const form = await req.formData();
   const params: Record<string, string> = {};

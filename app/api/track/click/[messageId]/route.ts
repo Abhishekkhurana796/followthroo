@@ -3,6 +3,7 @@ import { prisma } from "@/lib/db";
 import { logActivity } from "@/lib/crm";
 import { env } from "@/lib/env";
 import { verifyClickTarget } from "@/lib/tracking";
+import { LIMITS, clientIp, hit } from "@/lib/api-ratelimit";
 
 export const runtime = "nodejs";
 
@@ -13,6 +14,10 @@ export async function GET(req: NextRequest, { params }: Ctx) {
   const { messageId } = await params;
   const target = req.nextUrl.searchParams.get("u");
   const signature = req.nextUrl.searchParams.get("s");
+
+  // Over the limit, the recipient is still sent where the link points — a click
+  // must never dead-end — but the click is not recorded.
+  const { ok: withinLimit } = await hit(`track:${clientIp(req)}`, LIMITS.tracking);
 
   const message = await prisma.message.findUnique({ where: { id: messageId } }).catch(() => null);
 
@@ -36,7 +41,7 @@ export async function GET(req: NextRequest, { params }: Ctx) {
   }
 
   try {
-    if (message?.organizationId) {
+    if (withinLimit && message?.organizationId) {
       await logActivity({
         organizationId: message.organizationId,
         leadId: message.leadId,

@@ -9,6 +9,18 @@ export const metadata = { title: "Changelog — Followthroo" };
  */
 const ENTRIES = [
   {
+    version: "0.19.0",
+    date: "Sep 2026",
+    items: [
+      "New accounts created with an email and password now confirm the address before they can sign in: we email a link, and the account opens once it is clicked. This closes a way someone could register another person’s email ahead of them and keep access after the real owner signed in with Google. Google and Zoho sign-ups work as before, and existing accounts are unaffected",
+      "Signing in, signing up and requesting confirmation emails are now rate limited, and so are the Chrome extension, the Windows app, lead webhooks, CSV imports and bulk edits—so a runaway script or a leaked key cannot flood a workspace",
+      "Tightened database access so your data can only be reached through Followthroo itself, including any tables added in future",
+      "Reports load faster for busy workspaces: totals, daily charts and campaign numbers are counted in the database instead of being assembled from every message in the period",
+      "Fixed: a tags column in a CSV import was ignored. Tags in the file are now applied to each lead",
+      "Tasks now says when a section is showing only its first 200, instead of silently leaving the rest out",
+    ],
+  },
+  {
     version: "0.18.0",
     date: "Sep 2026",
     items: [

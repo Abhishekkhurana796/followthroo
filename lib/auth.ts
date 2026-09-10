@@ -4,6 +4,8 @@ import { organization, genericOAuth } from "better-auth/plugins";
 import { ac, orgRoles } from "./access-control";
 import { prisma } from "./db";
 import { sendSystemEmail } from "./channels/email";
+import { configured } from "./env";
+import { authRateLimitStorage } from "./api-ratelimit";
 import { roleLabel } from "./roles";
 
 /**
@@ -46,6 +48,26 @@ const trustedOrigins = Array.from(
     ].filter(Boolean)
   )
 );
+
+/**
+ * Whether password sign-ups must confirm their email before signing in.
+ *
+ * They used to be marked verified on creation, because nothing could send a
+ * confirmation. So an address was never proven to belong to whoever typed it —
+ * and with Google trusted for account linking, someone could register another
+ * person's email with a password of their own, and keep access after the real
+ * owner signed in with Google.
+ *
+ * It needs mail. Without SMTP the link can never arrive, and requiring it would
+ * lock every new password sign-up out — so without SMTP the old behaviour stays,
+ * and says so loudly every time the server starts.
+ */
+const verifyEmails = configured.email;
+if (!verifyEmails) {
+  console.error(
+    "[auth] SMTP_HOST / SMTP_USER / SMTP_PASS are not set: password sign-ups are NOT email-verified. Configure SMTP to require confirmation.",
+  );
+}
 
 /** Slugify a name/email into a unique-ish org slug. */
 function slugify(input: string): string {
@@ -93,7 +115,31 @@ export async function preferredOrganizationId(userId: string): Promise<string | 
 
 export const auth = betterAuth({
   database: prismaAdapter(prisma, { provider: "postgresql" }),
-  emailAndPassword: { enabled: true, autoSignIn: true },
+  emailAndPassword: {
+    enabled: true,
+    // Signing a brand-new account straight in would skip the confirmation.
+    autoSignIn: !verifyEmails,
+    requireEmailVerification: verifyEmails,
+  },
+  emailVerification: {
+    sendOnSignUp: verifyEmails,
+    autoSignInAfterVerification: true,
+    expiresIn: 60 * 60 * 24,
+    async sendVerificationEmail({ user, url }) {
+      const sent = await sendSystemEmail(
+        user.email,
+        "Confirm your email for Followthroo",
+        `Confirm your email address
+
+Someone — hopefully you — created a Followthroo account with this address. Confirm it to finish signing up:
+
+${url}
+
+The link works for 24 hours. If you didn't create this account, ignore this email: nothing happens, and nobody can sign in with it.`,
+      );
+      if (!sent) console.warn(`[auth] verification email not sent to ${user.email}`);
+    },
+  },
   ...(googleConfigured
     ? {
         socialProviders: {
@@ -110,16 +156,34 @@ export const auth = betterAuth({
     accountLinking: {
       enabled: true,
       trustedProviders: ["google"],
+      // Never attach a Google login to a password account whose address was never
+      // confirmed: whoever set that password may not own the inbox. better-auth's
+      // own default today — stated so an upgrade cannot quietly turn it off.
+      requireLocalEmailVerified: true,
     },
   },
-  // There is no email-verification flow yet, so email/password users would otherwise
-  // stay emailVerified:false forever — which blocks later "Sign in with Google" linking
-  // (account_not_linked). Mark new users verified on creation until a real verification
-  // flow exists. This lowers no security guarantee the app currently makes.
+  // Sign-in, sign-up and verification emails are what gets hammered. better-auth
+  // limits them per IP, in memory by default — which on Vercel means per instance,
+  // barely a limit — so the counts go to Redis when there is one.
+  rateLimit: {
+    enabled: process.env.NODE_ENV === "production",
+    window: 60,
+    max: 100,
+    customRules: {
+      "/sign-in/email": { window: 60, max: 10 },
+      "/sign-up/email": { window: 60, max: 5 },
+      "/send-verification-email": { window: 60, max: 3 },
+    },
+    ...(configured.redis ? { customStorage: authRateLimitStorage } : {}),
+  },
   databaseHooks: {
     user: {
       create: {
-        before: async (user) => ({ data: { ...user, emailVerified: true } }),
+        // With SMTP, a password sign-up starts unverified and the emailed link
+        // verifies it. Without SMTP nothing can, so it keeps the old
+        // mark-as-verified (see verifyEmails). OAuth sign-ups carry their
+        // provider's verification either way.
+        before: async (user) => ({ data: verifyEmails ? user : { ...user, emailVerified: true } }),
         // Give every new user a personal organization to own and scope data into.
         after: async (user) => {
           await createPersonalOrg(user).catch((e) =>
@@ -175,6 +239,9 @@ export const auth = betterAuth({
                 mapProfileToUser: (profile: Record<string, unknown>) => ({
                   email: String(profile.Email ?? profile.email ?? ""),
                   name: String(profile.Display_Name ?? profile.displayName ?? profile.First_Name ?? ""),
+                  // Zoho confirms an account's address before it can sign in
+                  // anywhere, so a Zoho sign-up is as verified as a Google one.
+                  emailVerified: true,
                 }),
               },
             ],

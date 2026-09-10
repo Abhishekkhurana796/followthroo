@@ -3,6 +3,7 @@ import { prisma } from "@/lib/db";
 import { ok, fail, requireDb } from "@/lib/http";
 import { suppress, logActivity } from "@/lib/crm";
 import { verifyBodyHmac, verifySharedSecret } from "@/lib/webhook-auth";
+import { LIMITS, clientIp, tooMany } from "@/lib/api-ratelimit";
 
 export const runtime = "nodejs";
 
@@ -20,6 +21,11 @@ export const runtime = "nodejs";
 export async function POST(req: NextRequest) {
   const guard = requireDb();
   if (guard) return guard;
+
+  // Before the signature check, so a flood of forged requests is turned away
+  // without reading and hashing every body.
+  const limited = await tooMany(`webhook-email:${clientIp(req)}`, LIMITS.webhook);
+  if (limited) return limited;
 
   // Read the body once, as text: the HMAC must be computed over exactly the
   // bytes sent, not over a re-serialized object.

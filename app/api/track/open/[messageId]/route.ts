@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { logActivity } from "@/lib/crm";
 import { PIXEL } from "@/lib/tracking";
+import { LIMITS, clientIp, hit } from "@/lib/api-ratelimit";
 
 export const runtime = "nodejs";
 
@@ -18,8 +19,15 @@ function pixelResponse() {
 }
 
 // GET /api/track/open/[messageId] — 1×1 pixel; records an open the first time.
-export async function GET(_req: NextRequest, { params }: Ctx) {
+export async function GET(req: NextRequest, { params }: Ctx) {
   const { messageId } = await params;
+
+  // Over the limit, the pixel is still served — a real recipient's email must
+  // never show a broken image — but nothing is looked up or written. This is an
+  // unauthenticated route, and a flood of it was a free way to load the database.
+  const { ok: withinLimit } = await hit(`track:${clientIp(req)}`, LIMITS.tracking);
+  if (!withinLimit) return pixelResponse();
+
   try {
     const message = await prisma.message.findUnique({ where: { id: messageId } });
     if (message?.organizationId) {

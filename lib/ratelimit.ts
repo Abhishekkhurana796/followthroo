@@ -10,7 +10,8 @@ import { env, configured } from "./env";
 type Redis = import("ioredis").Redis;
 let redis: Redis | null = null;
 
-async function getRedis(): Promise<Redis | null> {
+/** The shared Redis connection, or null when REDIS_URL is unset. Also used by lib/api-ratelimit.ts. */
+export async function getRedis(): Promise<Redis | null> {
   if (!configured.redis) return null;
   if (redis) return redis;
   const { default: IORedis } = await import("ioredis");
