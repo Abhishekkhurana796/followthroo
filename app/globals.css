@@ -62,6 +62,21 @@
   --scrim: rgba(10, 10, 10, 0.32);
   --btn-shadow: rgba(10, 10, 10, 0.5);
   --btn-shadow-hover: rgba(10, 10, 10, 0.6);
+
+  /* Per-channel accents — Hero's connection graph and Safety's rate-limit
+     table only, never a button or body text, so one set of values does for
+     both themes: brand-recognizable hues read fine on light or dark. Not
+     defined at all until 2026-09-11, which is why every stroke/fill that
+     referenced them silently fell back to the SVG initial value instead —
+     `none` for stroke (invisible threads) and `black` for fill (one dot
+     where three colored pulses should have been). LinkedIn's value matches
+     the badge already hardcoded in app/dashboard/linkedin/LinkedInClient.tsx.
+     Email has no single official color — the product sends through Gmail,
+     Zoho or plain SMTP, so an amber sits between the other two rather than
+     borrowing one provider's brand. */
+  --ch-email: #d97706;
+  --ch-linkedin: #0a66c2;
+  --ch-whatsapp: #25d366;
 }
 
 [data-theme="dark"] {
@@ -150,6 +165,10 @@
 
   --color-on-solid: var(--on-solid);
   --color-scrim: var(--scrim);
+
+  --color-ch-email: var(--ch-email);
+  --color-ch-linkedin: var(--ch-linkedin);
+  --color-ch-whatsapp: var(--ch-whatsapp);
 }
 
 @theme {

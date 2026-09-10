@@ -82,6 +82,15 @@ export const CHANGELOG: ChangelogEntry[] = [
   },
   {
     product: "webapp",
+    version: "0.19.1",
+    date: "Sep 2026",
+    items: [
+      "Fixed the homepage's animated “live sequence” graphic: the lines connecting each channel to the lead, and two of the three pulsing dots, were invisible — the colors they were drawn in were never actually defined, so the browser quietly fell back to no line at all. The same missing colors affected the rate-limit table further down the page",
+      "The security page's contact address is now hello@followthroo.com",
+    ],
+  },
+  {
+    product: "webapp",
     version: "0.19.0",
     date: "Sep 2026",
     items: [
