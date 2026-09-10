@@ -4,13 +4,17 @@ import ChangelogNav from "@/components/site/ChangelogNav";
 import ChangelogList from "@/components/site/ChangelogList";
 import { CHANGELOG } from "@/lib/changelog-data";
 
-export const metadata = { title: "Changelog — Followthroo" };
+export const metadata = { title: "Chrome extension changelog — Followthroo" };
 
-export default function ChangelogPage() {
-  const entries = CHANGELOG.filter((e) => e.product === "webapp");
+export default function ExtensionChangelogPage() {
+  const entries = CHANGELOG.filter((e) => e.product === "extension");
   return (
     <SiteShell>
-      <PageHero kicker="Changelog" title="What's new" subtitle="Every release, newest first." />
+      <PageHero
+        kicker="Changelog"
+        title="The Chrome extension"
+        subtitle="Every release of Followthroo for LinkedIn, newest first."
+      />
       <ChangelogNav />
       <section className="bg-canvas pb-24">
         <div className="mx-auto max-w-3xl px-6">

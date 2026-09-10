@@ -4,13 +4,17 @@ import ChangelogNav from "@/components/site/ChangelogNav";
 import ChangelogList from "@/components/site/ChangelogList";
 import { CHANGELOG } from "@/lib/changelog-data";
 
-export const metadata = { title: "Changelog — Followthroo" };
+export const metadata = { title: "Desktop app changelog — Followthroo" };
 
-export default function ChangelogPage() {
-  const entries = CHANGELOG.filter((e) => e.product === "webapp");
+export default function DesktopChangelogPage() {
+  const entries = CHANGELOG.filter((e) => e.product === "desktop");
   return (
     <SiteShell>
-      <PageHero kicker="Changelog" title="What's new" subtitle="Every release, newest first." />
+      <PageHero
+        kicker="Changelog"
+        title="The desktop app"
+        subtitle="Every release of the Windows app that sends your LinkedIn invitations, newest first."
+      />
       <ChangelogNav />
       <section className="bg-canvas pb-24">
         <div className="mx-auto max-w-3xl px-6">
