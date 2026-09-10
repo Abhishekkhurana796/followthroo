@@ -9,6 +9,13 @@ export const metadata = { title: "Changelog — Followthroo" };
  */
 const ENTRIES = [
   {
+    version: "0.19.1",
+    date: "Sep 2026",
+    items: [
+      "The Windows app download on the LinkedIn page now serves 1.11.0. It had been built and described in the 0.18.0 notes below but the download link was still pointing at 1.10.2, before connections-list acceptance detection existed",
+    ],
+  },
+  {
     version: "0.19.0",
     date: "Sep 2026",
     items: [
