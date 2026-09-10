@@ -26,6 +26,14 @@
  * The product promise ("a reply anywhere pauses the rest for that lead") is
  * kept: the halt is still lead-wide across campaigns. What changed is that only
  * case 1 satisfies it.
+ *
+ * ---- Which campaign ----
+ *
+ * The match above always knew which campaign a reply answered — and wrote it
+ * only to the activity log, so the Inbox could not say "this is a reply to your
+ * Q3 outreach". InboxMessage now keeps `campaignId` (and, for a verified reply,
+ * the Message it answers), and outbound messages keep the campaign that sent
+ * them or the member who typed them.
  */
 import { prisma } from "../db";
 import { logActivity } from "../crm";
@@ -83,7 +91,9 @@ async function matchKnownThread(orgId: string, ids: string[]) {
   if (ids.length === 0) return null;
   return prisma.inboxMessage.findFirst({
     where: { organizationId: orgId, rfcMessageId: { in: ids.map((id) => `<${id}>`) } },
-    select: { threadId: true },
+    // The campaign travels with the thread: a reply to our reply to a campaign
+    // email is still part of that campaign's conversation.
+    select: { threadId: true, campaignId: true },
     orderBy: { createdAt: "desc" },
   });
 }
@@ -166,6 +176,11 @@ export async function recordInbound(orgId: string, input: InboundInput): Promise
       inReplyTo: input.inReplyTo ?? null,
       references: parseMessageIds(input.references),
       matchKind,
+      // Only a header or thread match earns a campaign. An address match is a
+      // new message from a known person, and naming a campaign there would claim
+      // a reply that never happened.
+      campaignId: sent?.campaignId ?? knownThread?.campaignId ?? null,
+      inReplyToMessageId: sent?.id ?? null,
       sentAt: input.sentAt ?? new Date(),
     },
   });
@@ -234,6 +249,10 @@ export async function recordOutbound(
     providerMessageId?: string;
     rfcMessageId?: string | null;
     channel?: Channel;
+    /** The campaign that sent it, when one did. */
+    campaignId?: string | null;
+    /** The member who typed it, when a person did (an inbox reply). */
+    sentByUserId?: string | null;
   }
 ) {
   const channel: Channel = input.channel ?? "email";
@@ -252,6 +271,8 @@ export async function recordOutbound(
       // reply to a message that is on the thread but not a campaign send.
       rfcMessageId: input.rfcMessageId ?? null,
       matchKind: "none",
+      campaignId: input.campaignId ?? null,
+      sentByUserId: input.sentByUserId ?? null,
     },
   });
   await prisma.inboxThread.update({ where: { id: thread.id }, data: { lastMessageAt: new Date() } });

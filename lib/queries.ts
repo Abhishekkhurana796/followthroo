@@ -137,7 +137,20 @@ export async function getCompanies(orgId: string) {
     .map((r) => ({ company: r.company as string, count: r._count._all }));
 }
 
-export async function getInboxThreads(orgId: string, status?: string, leadWhere?: Prisma.LeadWhereInput) {
+/** Threads per page in the Inbox list — InboxClient's PAGE mirrors it. */
+export const INBOX_PAGE = 50;
+
+export async function getInboxThreads(
+  orgId: string,
+  status?: string,
+  leadWhere?: Prisma.LeadWhereInput,
+  /**
+   * Older than this: the last thread's lastMessageAt on the page before. The list
+   * used to stop at 100 with no way past it, so the 101st conversation did not
+   * exist as far as the Inbox was concerned.
+   */
+  before?: Date,
+) {
   const threads = await prisma.inboxThread.findMany({
     where: {
       organizationId: orgId,
@@ -145,14 +158,33 @@ export async function getInboxThreads(orgId: string, status?: string, leadWhere?
       // A reply thread belongs to whoever owns the contact. Without this a rep
       // could read a colleague's conversation by opening the inbox.
       ...(leadWhere ? { lead: leadWhere } : {}),
+      ...(before ? { lastMessageAt: { lt: before } } : {}),
     },
     include: {
       lead: { select: { id: true, firstName: true, lastName: true, email: true, company: true } },
       messages: { orderBy: { sentAt: "desc" }, take: 1 },
     },
     orderBy: { lastMessageAt: "desc" },
-    take: 100,
+    take: INBOX_PAGE,
   });
+
+  // The campaign each conversation belongs to: the latest message on the thread
+  // that names one. One query for the page, not one per thread.
+  const tagged = threads.length
+    ? await prisma.inboxMessage.findMany({
+        where: { organizationId: orgId, threadId: { in: threads.map((t) => t.id) }, campaignId: { not: null } },
+        orderBy: { sentAt: "desc" },
+        distinct: ["threadId"],
+        select: { threadId: true, campaignId: true },
+      })
+    : [];
+  const campaignIds = [...new Set(tagged.map((m) => m.campaignId).filter((v): v is string => !!v))];
+  const campaigns = campaignIds.length
+    ? await prisma.campaign.findMany({ where: { id: { in: campaignIds }, organizationId: orgId }, select: { id: true, name: true } })
+    : [];
+  const campaignName = new Map(campaigns.map((c) => [c.id, c.name]));
+  const campaignOf = new Map(tagged.map((m) => [m.threadId, m.campaignId ? (campaignName.get(m.campaignId) ?? null) : null]));
+
   return threads.map((t) => ({
     id: t.id,
     status: t.status,
@@ -162,6 +194,7 @@ export async function getInboxThreads(orgId: string, status?: string, leadWhere?
     lead: t.lead,
     preview: t.messages[0]?.body?.slice(0, 140) ?? "",
     direction: t.messages[0]?.direction ?? null,
+    campaignName: campaignOf.get(t.id) ?? null,
   }));
 }
 

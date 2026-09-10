@@ -95,6 +95,8 @@ const Report = z.object({
   // and additive — stored in activity metadata, nothing branches on it yet, so a
   // client that omits it or sends an unknown one is handled the same as today.
   code: z.string().max(64).optional(),
+  /** What was actually done. Optional: the server derives it from the action's type otherwise. */
+  kind: z.enum(["invite", "message"]).optional(),
   liMemberName: z.string().optional(),
 });
 

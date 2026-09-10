@@ -1223,7 +1223,42 @@
       if (profile) urls.push(profile.profileUrl);
       paintChips();
       if (urls.length) lookup(urls);
+      if (pageKind() === "connections") reportConnections();
     }, 400);
+  }
+
+  /**
+   * Tell Followthroo who is in your connections list, so invitations those people
+   * accepted can be marked accepted.
+   *
+   * LinkedIn announces acceptances nowhere; this list is the evidence. Only cards
+   * that say "Connected …" count — the page can also show suggestions, and one of
+   * them could be somebody with an invitation still pending. Each person is sent
+   * once per tab, not on every re-render as the page scrolls.
+   */
+  const reportedConnections = new Set();
+  async function reportConnections() {
+    const fresh = readableRows()
+      // No boundary before "connected": textContent runs adjacent elements
+      // together ("…MarketingConnected on 8 Sep"), so \bconnected misses real cards.
+      .pairs.filter((p) => /connected\b/i.test(p.card.textContent || ""))
+      .map((p) => p.data.profileUrl)
+      .filter((u) => !reportedConnections.has(u))
+      .slice(0, 200);
+    if (!fresh.length) return;
+    fresh.forEach((u) => reportedConnections.add(u));
+    const cfg = await chrome.storage.local.get(["apiBase", "token"]);
+    if (!cfg.apiBase || !cfg.token) return;
+    fetch(`${cfg.apiBase}/api/linkedin/connections/seen`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${cfg.token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ profileUrls: fresh }),
+    })
+      .then((res) => { if (!res.ok) throw new Error(String(res.status)); })
+      .catch(() => {
+        // Best effort. Forget them, so the next render tries again.
+        fresh.forEach((u) => reportedConnections.delete(u));
+      });
   }
 
   new MutationObserver(refresh).observe(document.body, { childList: true, subtree: true });

@@ -209,6 +209,12 @@ model Message {
   idempotencyKey  String        @unique
   sentAt          DateTime?
   createdAt       DateTime      @default(now())
+  /// message | invite. A LinkedIn connection request is recorded as a Message so
+  /// the timeline sees it, but nobody can reply to it — the Outbox lists the two
+  /// apart and Reports count them apart.
+  kind            String        @default("message")
+  /// The member who sent it by hand (an inbox reply). Null for campaigns and the agent.
+  sentByUserId    String?
 
   lead     Lead      @relation(fields: [leadId], references: [id], onDelete: Cascade)
   campaign Campaign? @relation(fields: [campaignId], references: [id], onDelete: SetNull)
@@ -216,6 +222,8 @@ model Message {
   @@index([organizationId])
   @@index([leadId])
   @@index([status])
+  // The Outbox: sends of one kind, newest first.
+  @@index([organizationId, kind, createdAt])
   // The reply poller looks messages up by header on every inbound mail.
   @@index([organizationId, rfcMessageId])
 }
@@ -592,6 +600,15 @@ model InboxMessage {
   /// address = the From address matched a contact, nothing more
   /// none    = unmatched
   matchKind         String   @default("none")
+  /// The campaign this message belongs to: the one that sent it (outbound), or
+  /// the one it answers (inbound, header or thread match only — an address match
+  /// is a new message, and naming a campaign there would claim a reply that
+  /// never happened).
+  campaignId        String?
+  /// Inbound, header match: the Message this replies to.
+  inReplyToMessageId String?
+  /// Outbound, typed by a person in the Inbox rather than sent by a campaign.
+  sentByUserId      String?
   sentAt            DateTime @default(now())
   createdAt         DateTime @default(now())
 
@@ -673,9 +690,18 @@ model LinkedInAction {
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
   sentAt         DateTime?
+  /// invite | message — what it does, resolved from `type` the way the desktop
+  /// app resolves it ("auto" is an invitation). Null only on rows written before
+  /// this existed; scripts/backfill-outreach-attribution.ts fills those.
+  kind           String?
+  /// When the person accepted. LinkedIn announces nothing, so this is when they
+  /// were first seen in the connections list — see recordConnectionsSeen.
+  acceptedAt     DateTime?
 
   @@index([organizationId, status])
   @@index([leadId])
+  // Reports and the Outbox's invitations tab.
+  @@index([organizationId, kind, status])
 }
 
 // ===========================================================================

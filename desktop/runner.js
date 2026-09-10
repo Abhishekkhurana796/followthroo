@@ -20,7 +20,7 @@
 const path = require("node:path");
 const fs = require("node:fs");
 const { chromium } = require("playwright-core");
-const { fillLinkedInAction } = require("./page-actions");
+const { fillLinkedInAction, readRecentConnections } = require("./page-actions");
 const { pilotAction } = require("./pilot");
 const { sendConnectionRequest } = require("./connect-flow");
 const { CODES } = require("./outcome-codes");
@@ -291,6 +291,14 @@ async function runBatch({
    * without a LinkedIn account to test them against.
    */
   launch = openBrowser,
+  /**
+   * Is it time to read the connections list for accepted invitations? Off unless
+   * the caller says otherwise, so the verification scripts — which serve every
+   * URL from a fixture — do not wander onto a page they did not set up.
+   */
+  connectionsCheckDue = () => false,
+  /** Called once the connections list has been read and reported. */
+  onConnectionsChecked = () => {},
 }) {
   const summary = {
     sent: 0,
@@ -378,6 +386,39 @@ async function runBatch({
       });
     } catch (_) {
       // Best effort — the run does not depend on it.
+    }
+
+    // Accepted invitations. LinkedIn announces them nowhere, so once every few
+    // hours the run opens your connections list before anything else and tells
+    // Followthroo who is on it (readRecentConnections in page-actions.js). Best
+    // effort — a run never stops over it — and never in a test run, which must
+    // leave no trace in the CRM.
+    if (!dryRun && connectionsCheckDue()) {
+      try {
+        emit("status", { message: "Checking who accepted your invitations…" });
+        await page.goto("https://www.linkedin.com/mynetwork/invite-connect/connections/", {
+          waitUntil: "domcontentloaded",
+          timeout: 30_000,
+        });
+        await sleep(2500 + Math.random() * 1500);
+        const profileUrls = await page.evaluate(readRecentConnections);
+        let matched = 0;
+        if (profileUrls.length) {
+          const res = await api(apiBase, "/api/linkedin/connections/seen", {
+            method: "POST",
+            token,
+            body: { profileUrls },
+          });
+          matched = (res && res.matched) || 0;
+        }
+        log.write({ event: "connections-seen", read: profileUrls.length, matched });
+        if (matched) {
+          emit("status", { message: `${matched} invitation${matched === 1 ? " was" : "s were"} accepted since the last check.` });
+        }
+        onConnectionsChecked();
+      } catch (e) {
+        log.write({ event: "connections-seen-failed", error: String((e && e.message) || e) });
+      }
     }
 
     let consecutiveFailures = 0;

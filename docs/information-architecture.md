@@ -37,20 +37,28 @@ mobile drawer both read it, so they cannot drift.
               Home         /dashboard
 SALES         Leads        /dashboard/leads
               Pipeline     /dashboard/pipeline
-COMMUNICATE   Inbox        /dashboard/inbox
-              Tasks        /dashboard/tasks
+CONNECT       Channels     /dashboard/channels
 AUTOMATE      Campaigns    /dashboard/campaigns
-              LinkedIn     /dashboard/linkedin
               Templates    /dashboard/templates
+              Tasks        /dashboard/tasks
+COMMUNICATE   Inbox        /dashboard/inbox
+              Outbox       /dashboard/outbox
 ANALYZE       Reports      /dashboard/reports
               Settings     /dashboard/settings
 ```
 
-Ten rows, as of 2026-09-05. This replaced an 18-row, five-group rail, and then
+Eleven rows, as of 2026-09-10. This replaced an 18-row, five-group rail, and then
 lost three more — Companies (a way of looking at leads, reached from Leads), Test
 emails (a model-testing harness, reached from Templates) and Calendar (a `soon`
-stub that could not be clicked). LinkedIn gained one, for sourcing only; see the
-narrowed exception in CLAUDE.md.
+stub that could not be clicked). LinkedIn gained a row on 2026-09-03 and folded
+into Channels on 2026-09-08; see the exception in CLAUDE.md.
+
+**Outbox** joined Communicate on 2026-09-10, under "who am I talking to?": what went
+out, to whom, and what sent it had no screen — sends were visible one lead at a time.
+Two tabs, because they are two different things. *Messages sent* lists every email,
+WhatsApp and LinkedIn message, naming its campaign, the member who typed it, or the AI
+agent. *LinkedIn invites* follows each connection request from queued to sent to
+accepted, with the acceptance read from the connections list.
 
 Nothing was deleted — the rail simply stopped being an index of the codebase:
 

@@ -9,6 +9,19 @@ export const metadata = { title: "Changelog — Followthroo" };
  */
 const ENTRIES = [
   {
+    version: "0.18.0",
+    date: "Sep 2026",
+    items: [
+      "New Outbox, under Communicate: everything that went out, and what sent it. Messages sent lists every email, WhatsApp and LinkedIn message with the campaign behind it—or the teammate who typed it, or the AI agent. LinkedIn invites follows every connection request from queued to sent to accepted",
+      "The Inbox now says where each conversation came from. A reply to a campaign email is marked with that campaign, a message from a known contact that is not a reply says so plainly, and WhatsApp and LinkedIn threads show which campaign last contacted the person",
+      "Reports has a LinkedIn section with real numbers: connection requests sent, how many were accepted, the acceptance rate, and how each campaign did. LinkedIn doesn’t announce acceptances, so a request counts as accepted when that person appears in your connections list—the Windows app checks it at the start of a run, at most every six hours, and the Chrome extension reads it whenever you open your Connections page",
+      "Replies you type in the Inbox now count as sent messages, so they appear in the Outbox with your name on them",
+      "The Inbox no longer stops at 100 conversations: older ones load from the bottom of the list",
+      "Fixed: a team member could open a colleague’s Inbox conversation from a direct link. Conversations now follow the same visibility rules as the Inbox list",
+      "Windows app 1.11.0: checks your connections list at the start of a run to spot invitations that were accepted",
+    ],
+  },
+  {
     version: "0.17.0",
     date: "Sep 2026",
     items: [

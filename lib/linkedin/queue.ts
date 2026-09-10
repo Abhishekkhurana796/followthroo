@@ -33,6 +33,9 @@ export async function enqueueLinkedInAction(input: {
       note: input.note ?? null,
       campaignId: input.campaignId ?? null,
       type: input.type ?? "auto",
+      // Provisional: claimActions settles it from the account's settings when an
+      // "auto" action is actually handed out.
+      kind: linkedinKind(input.type ?? "auto"),
       status: "pending",
     },
   });
@@ -210,24 +213,45 @@ export async function claimActions(account: ClaimAccount, limit: number) {
 
   const settings = (account.campaignSettings ?? {}) as Record<string, PerCampaign>;
 
+  // An explicit kind on the action is an instruction from the campaign step
+  // that created it; the account/campaign mode is only a preference for
+  // actions that never said. This used to read
+  // `settings[...]?.mode || account.mode || a.type`, and since
+  // LinkedInAccount.mode defaults to the non-empty string "auto", account.mode
+  // always won and `a.type` was unreachable — which would have made every
+  // step-level invite/message choice a silent no-op.
+  const effectiveType = (a: (typeof picked)[number]) =>
+    a.type && a.type !== "auto" ? a.type : settings[a.campaignId ?? ""]?.mode || account.mode || "auto";
+
+  // Settle what each one is now that the settings have decided it: an "auto"
+  // action queued as an invitation can go out as a message under a campaign's
+  // own mode, and the Outbox and Reports have to count what was actually done.
+  for (const kind of ["invite", "message"] as const) {
+    const ids = picked.filter((a) => linkedinKind(effectiveType(a)) === kind).map((a) => a.id);
+    if (ids.length) await prisma.linkedInAction.updateMany({ where: { id: { in: ids } }, data: { kind } });
+  }
+
   return picked.map((a) => ({
     ...a,
     // Told per action rather than read from the extension's own settings, so the
     // switch lives in one place. Turning it off in the app stops the very next
     // action, with no need for the extension to notice a config change.
     autoSend: account.autoSend === true,
-    // An explicit kind on the action is an instruction from the campaign step
-    // that created it; the account/campaign mode is only a preference for
-    // actions that never said. This used to read
-    // `settings[...]?.mode || account.mode || a.type`, and since
-    // LinkedInAccount.mode defaults to the non-empty string "auto", account.mode
-    // always won and `a.type` was unreachable — which would have made every
-    // step-level invite/message choice a silent no-op.
-    type: a.type && a.type !== "auto"
-      ? a.type
-      : settings[a.campaignId ?? ""]?.mode || account.mode || "auto",
+    type: effectiveType(a),
     leadName: [a.lead?.firstName, a.lead?.lastName].filter(Boolean).join(" ") || null,
   }));
+}
+
+/**
+ * What a LinkedIn action does, in one word.
+ *
+ * Mirrors desktop/pilot.js exactly — `goal = action.type === "message" ? "message"
+ * : "invite"` — because the desktop app decides from the type it was handed, and
+ * "auto" never becomes a message there. The outcome code cannot stand in for this:
+ * a sent message reports INVITATION_SUBMITTED as well.
+ */
+export function linkedinKind(type: string | null | undefined): "invite" | "message" {
+  return type === "message" ? "message" : "invite";
 }
 
 /**
@@ -238,10 +262,22 @@ export async function claimActions(account: ClaimAccount, limit: number) {
  */
 export async function completeAction(
   organizationId: string,
-  input: { actionId: string; status: "sent" | "failed" | "skipped" | "drafted"; result?: string; code?: string }
+  input: {
+    actionId: string;
+    status: "sent" | "failed" | "skipped" | "drafted";
+    result?: string;
+    code?: string;
+    /** What the client says it did. Absent from older clients; derived then. */
+    kind?: "invite" | "message";
+  }
 ) {
   const action = await prisma.linkedInAction.findFirst({ where: { id: input.actionId, organizationId } });
   if (!action) return null;
+
+  // The client's own word first, then what it was told at claim time, then the
+  // type it was queued with. Recorded on the row, because "how many invitations
+  // did we send" is otherwise a question nobody can answer from the data.
+  const kind = input.kind ?? (action.kind === "message" || action.kind === "invite" ? action.kind : linkedinKind(action.type));
 
   const updated = await prisma.linkedInAction.update({
     where: { id: action.id },
@@ -249,6 +285,7 @@ export async function completeAction(
       status: input.status,
       result: input.result?.slice(0, 300),
       sentAt: input.status === "sent" ? new Date() : null,
+      kind,
     },
   });
 
@@ -264,6 +301,7 @@ export async function completeAction(
           channel: "linkedin",
           renderedBody: action.note,
           status: "sent",
+          kind,
           idempotencyKey: randomUUID(),
           sentAt: new Date(),
         },
@@ -288,8 +326,81 @@ export async function completeAction(
     campaignId: action.campaignId ?? undefined,
     type: input.status === "sent" ? "linkedin_sent" : `linkedin_${input.status}`,
     channel: "linkedin",
-    meta: { actionId: action.id, result: input.result, code: input.code },
+    meta: { actionId: action.id, result: input.result, code: input.code, kind },
   });
 
   return updated;
+}
+
+/**
+ * Mark invitations accepted, from a list of people who are now connections.
+ *
+ * LinkedIn tells nobody when an invitation is accepted — no API, no webhook, no
+ * email we can read. What it does show is your connections list, newest first.
+ * So whenever that list is read — the desktop app glancing at it at the start of
+ * a run, the extension while you are on the page, a connections import — the
+ * people on it are checked against invitations still waiting, and a match was
+ * accepted.
+ *
+ * Claims nothing, so it cannot compete with the desktop app for work, and is
+ * safe to call twice with the same list: `acceptedAt` is only ever set once.
+ *
+ * Matched on the profile's handle. An invitation sent to a different form of the
+ * URL (a Sales Navigator id, a vanity URL renamed since) cannot be matched and
+ * stays "awaiting" — this undercounts rather than inventing an acceptance.
+ */
+export async function recordConnectionsSeen(organizationId: string, profileUrls: string[]) {
+  const { normalize } = await import("../identity");
+  const seen = new Set(profileUrls.map((u) => normalize("linkedin", u)).filter((v): v is string => !!v));
+  if (seen.size === 0) return { matched: 0 };
+
+  // Invitations still waiting. Bounded by what LinkedIn allows — about twenty a
+  // day per account — so even a long backlog is a small set.
+  const waiting = await prisma.linkedInAction.findMany({
+    where: {
+      organizationId,
+      status: "sent",
+      acceptedAt: null,
+      // Rows from before `kind` existed read as the desktop app treated them.
+      OR: [{ kind: "invite" }, { kind: null, type: { not: "message" } }],
+    },
+    select: { id: true, leadId: true, campaignId: true, linkedinUrl: true },
+    orderBy: { sentAt: "desc" },
+    take: 5000,
+  });
+
+  const hits = waiting.filter((a) => {
+    const key = normalize("linkedin", a.linkedinUrl);
+    return !!key && seen.has(key);
+  });
+
+  let matched = 0;
+  const at = new Date();
+  for (const a of hits) {
+    // Guarded on acceptedAt, so two clients reading the same list record it once.
+    const { count } = await prisma.linkedInAction.updateMany({
+      where: { id: a.id, acceptedAt: null },
+      data: { acceptedAt: at },
+    });
+    if (!count) continue;
+    matched++;
+    await logActivity({
+      organizationId,
+      leadId: a.leadId,
+      campaignId: a.campaignId ?? undefined,
+      type: "invite_accepted",
+      channel: "linkedin",
+      meta: { actionId: a.id },
+    });
+    await recordConversationEvent({
+      organizationId,
+      leadId: a.leadId,
+      channel: "linkedin",
+      direction: "inbound",
+      body: "Accepted your connection request",
+      status: "accepted",
+      externalId: `accepted:${a.id}`,
+    });
+  }
+  return { matched };
 }

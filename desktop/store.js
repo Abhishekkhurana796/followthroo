@@ -97,6 +97,27 @@ function noteAllowed(userDataPath) {
   return (read(userDataPath).notesToday || 0) < NOTE_DAILY_LIMIT;
 }
 
+/**
+ * How often a run may look at the connections list to spot accepted invitations.
+ *
+ * One page view at the start of a run, at most this often. The point is to
+ * notice acceptances, not to add browsing that LinkedIn could count against the
+ * account — so it is rationed like everything else the app does.
+ */
+const CONNECTIONS_CHECK_EVERY_MS = 6 * 60 * 60 * 1000;
+
+/** Is it time to look at the connections list again? */
+function connectionsCheckDue(userDataPath) {
+  const last = Date.parse(read(userDataPath).connectionsCheckedAt || "");
+  return Number.isNaN(last) || Date.now() - last >= CONNECTIONS_CHECK_EVERY_MS;
+}
+
+/** Record that the connections list was just read. */
+function markConnectionsChecked(userDataPath) {
+  return write(userDataPath, { connectionsCheckedAt: new Date().toISOString() });
+}
+
 module.exports = {
   read, write, countSend, countNote, noteAllowed, normaliseApiBase, DEFAULTS, NOTE_DAILY_LIMIT,
+  connectionsCheckDue, markConnectionsChecked, CONNECTIONS_CHECK_EVERY_MS,
 };

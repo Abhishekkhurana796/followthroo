@@ -363,6 +363,9 @@ ipcMain.handle("run:start", async (_e, { dryRun = false } = {}) => {
       dryRun,
       noteAllowed: () => store.noteAllowed(userDataPath),
       onNoteUsed: () => store.countNote(userDataPath),
+      // At most one look at the connections list every few hours, to spot accepted invitations.
+      connectionsCheckDue: () => store.connectionsCheckDue(userDataPath),
+      onConnectionsChecked: () => store.markConnectionsChecked(userDataPath),
       shouldStop: () => stopRequested,
       onEvent: (evt) => {
         if (evt.type === "action-done" && evt.status === "sent" && !dryRun) {

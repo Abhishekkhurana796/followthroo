@@ -3,13 +3,15 @@
  *
  * Loads the real content script into Chromium against small LinkedIn-shaped
  * pages, with `chrome.*` stubbed, and checks what was reported on 2026-09-10 plus
- * the "In Followthroo" chips added in the same release:
+ * what the same release added:
  *
  *   - the feed gets the launcher and nothing else — no "can't read" bar over it
- *   - on a people search the bar sits in flow, and never over the first result
+ *   - on a people search the bar sits in flow, and never over a result
  *   - Connections cards that lead with a photo-only link are still read
  *   - chip text is never read back as somebody's headline
  *   - a profile gets a chip beside its name
+ *   - on Connections, the people shown are reported so accepted invitations can
+ *     be marked — and nothing is reported from any other page
  *
  *   npx tsx scripts/verify-extension-content.ts
  *
@@ -84,7 +86,12 @@ const SEARCH = shell(`
   ).join("")}
   </ul>`);
 
-/** Connections as reported: every card leads with a photo-only link to the same profile. */
+/**
+ * Connections as reported: every card leads with a photo-only link to the same
+ * profile. No whitespace between the headline and "Connected on", as on a
+ * rendered page — so the card's text runs together ("MarketingConnected on"),
+ * which is exactly what a word-boundary match used to miss.
+ */
 const CONNECTIONS = shell(`
   <section>
   ${PEOPLE.map(
@@ -92,8 +99,7 @@ const CONNECTIONS = shell(`
     <div class="_9214eeec _904777d2" style="display:flex;gap:12px;padding:12px">
       <a href="/in/${slug}/"><div><img alt="" src="${PIXEL}" width="56" height="56"></div></a>
       <div>
-        <a href="/in/${slug}/"><p>${name}</p><p>${headline}</p></a>
-        <p>Connected on 8 September 2026</p>
+        <a href="/in/${slug}/"><p>${name}</p><p>${headline}</p></a><p>Connected on 8 September 2026</p>
       </div>
       <button>Message</button>
     </div>`,
@@ -138,6 +144,7 @@ async function open(browser: Browser, url: string, html: string) {
   const page = await context.newPage();
   const lookups: string[][] = [];
   const collected: Row[] = [];
+  const seen: string[] = [];
   const errors: string[] = [];
   page.on("pageerror", (e) => errors.push(e.message));
 
@@ -147,6 +154,8 @@ async function open(browser: Browser, url: string, html: string) {
     "Access-Control-Allow-Headers": "authorization, content-type",
     "Access-Control-Allow-Methods": "POST, OPTIONS",
   };
+  const json = (body: unknown) => ({ status: 200, headers: cors, contentType: "application/json", body: JSON.stringify(body) });
+
   await page.route(`${APP}/api/linkedin/lookup`, async (route) => {
     if (route.request().method() === "OPTIONS") return route.fulfill({ status: 204, headers: cors });
     const { urls } = route.request().postDataJSON() as { urls: string[] };
@@ -154,25 +163,26 @@ async function open(browser: Browser, url: string, html: string) {
     const results = Object.fromEntries(
       urls.map((u) => [u, /priya-shah/.test(u) ? { inCrm: true, leadId: "lead_123" } : { inCrm: false, leadId: null }]),
     );
-    return route.fulfill({ status: 200, headers: cors, contentType: "application/json", body: JSON.stringify({ ok: true, data: { results } }) });
+    return route.fulfill(json({ ok: true, data: { results } }));
   });
   await page.route(`${APP}/api/linkedin/scrape/collect`, async (route) => {
     if (route.request().method() === "OPTIONS") return route.fulfill({ status: 204, headers: cors });
     const body = route.request().postDataJSON() as { rows?: Row[] };
     collected.push(...(body.rows ?? []));
-    return route.fulfill({
-      status: 200,
-      headers: cors,
-      contentType: "application/json",
-      body: JSON.stringify({ ok: true, data: { created: body.rows?.length ?? 0, duplicates: 0 } }),
-    });
+    return route.fulfill(json({ ok: true, data: { created: body.rows?.length ?? 0, duplicates: 0 } }));
+  });
+  await page.route(`${APP}/api/linkedin/connections/seen`, async (route) => {
+    if (route.request().method() === "OPTIONS") return route.fulfill({ status: 204, headers: cors });
+    const body = route.request().postDataJSON() as { profileUrls?: string[] };
+    seen.push(...(body.profileUrls ?? []));
+    return route.fulfill(json({ ok: true, data: { matched: 0 } }));
   });
   await page.route(url, (route) => route.fulfill({ status: 200, contentType: "text/html", body: html }));
 
   await page.goto(url);
   await page.addScriptTag({ content: CONTENT });
   await page.waitForTimeout(900); // content.js debounces its first pass by 400ms
-  return { page, lookups, collected, errors, close: () => context.close() };
+  return { page, lookups, collected, seen, errors, close: () => context.close() };
 }
 
 type Box = { x: number; y: number; width: number; height: number } | null;
@@ -188,6 +198,7 @@ async function main() {
       const t = await open(browser, "https://www.linkedin.com/feed/", FEED);
       ok((await t.page.locator("#ft-bar").count()) === 0, "no bar on the feed", "(it used to cover the page)");
       ok((await t.page.locator("#ft-launcher").count()) === 1, "the launcher is still there");
+      ok(t.seen.length === 0, "nobody on the feed is reported as a connection", String(t.seen.length));
       ok(t.errors.length === 0, "no script errors", t.errors.join(" | "));
       await t.close();
     }
@@ -234,6 +245,7 @@ async function main() {
       );
       const lianne = t.collected.find((r) => r.fullName === "Lianne Mui");
       ok(lianne?.headline === "Brand Building | Modern Marketing", "headlines read correctly", lianne?.headline ?? "(missing)");
+      ok(t.seen.length === 0, "search results are not reported as connections", String(t.seen.length));
       ok(t.errors.length === 0, "no script errors", t.errors.join(" | "));
       await t.close();
     }
@@ -245,6 +257,12 @@ async function main() {
       const count = (await text(t.page.locator("#ft-bar [data-ft='count']"))) ?? "(no bar)";
       ok(count.includes("5 on this page"), "photo-first cards are read", count);
       ok(await t.page.locator("#ft-bar [data-ft='diag']").isHidden(), "no \"copy diagnostics\" — nothing failed");
+      await t.page.waitForTimeout(400);
+      ok(
+        t.seen.length === 5 && t.seen.every((u) => u.startsWith("https://www.linkedin.com/in/")),
+        "everyone shown is reported once, so accepted invitations can be marked",
+        JSON.stringify(t.seen),
+      );
       await click(t.page.locator("#ft-bar [data-ft='all']"));
       await click(t.page.locator("#ft-bar [data-ft='add']"));
       await t.page.waitForTimeout(500);
@@ -256,6 +274,7 @@ async function main() {
         JSON.stringify(t.collected.map((r) => [r.headline, r.location])),
       );
       ok(t.collected[0]?.headline === PEOPLE[0][2], "the headline is the headline", t.collected[0]?.headline ?? "(missing)");
+      ok(t.seen.length === 5, "re-renders do not report the same people again", String(t.seen.length));
       ok(t.errors.length === 0, "no script errors", t.errors.join(" | "));
       await t.close();
     }

@@ -37,7 +37,8 @@ Chrome extension already used:
 |---|---|
 | Auth | `Bearer <extToken>` — the pairing token on `LinkedInAccount`, shown under LinkedIn → Browser helper |
 | Claim work | `GET /api/linkedin/queue?limit=1` |
-| Report outcome | `POST /api/linkedin/queue` with `{ actionId, status, result }` |
+| Report outcome | `POST /api/linkedin/queue` with `{ actionId, status, result, code }` |
+| Accepted invitations | `POST /api/linkedin/connections/seen` with `{ profileUrls }` — your connections list, read at the start of a run at most every six hours (`readRecentConnections` in `page-actions.js`, rationed by `connectionsCheckDue` in `store.js`). Never in a test run. LinkedIn announces acceptances nowhere else. |
 | Daily cap, campaign selection, pacing | `claimActions` in `lib/linkedin/queue.ts` |
 | CRM side effects | `completeAction` in `lib/linkedin/queue.ts` |
 

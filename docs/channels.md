@@ -207,6 +207,30 @@ once it scrolls away the floating launcher carries the selection count. Names ar
 every profile link in a card, not just the first, because Connections cards lead with a
 photo link that has no text.
 
+**What was sent, and what was accepted (2026-09-10).** A LinkedIn action records its
+`kind` — `invite` or `message` — resolved from `type` exactly as `desktop/pilot.js`
+resolves it ("auto" is an invitation): provisionally at enqueue, and settled in
+`claimActions` once a campaign's own mode has had its say. The outcome code cannot stand
+in for it, because a sent message reports `INVITATION_SUBMITTED` too. The `Message` that
+`completeAction` writes carries the same kind, so the Outbox lists invitations apart from
+messages and Reports count them apart.
+
+LinkedIn announces an accepted invitation nowhere; the evidence is your connections
+list. `recordConnectionsSeen` (`lib/linkedin/queue.ts`) matches the profiles on it
+against invitations still waiting, sets `LinkedInAction.acceptedAt` once, and logs
+`invite_accepted`. Three readers feed it:
+
+- the desktop app opens the list at the start of a run, at most every six hours
+  (`readRecentConnections` in `desktop/page-actions.js`), and posts to
+  `/api/linkedin/connections/seen`;
+- the extension posts the cards it reads while you are on your Connections page;
+- any connections import, from `completeScrapeJob` (kind `connections_export`).
+
+Only cards that say "Connected …" count — the page can also show suggestions, one of
+whom may have an invitation pending. None of this claims queue work, so the one-claimer
+rule is untouched. Matching is by profile handle: an invitation sent to a different URL
+form stays "awaiting", which undercounts rather than inventing an acceptance.
+
 **Caps + safety:** the daily invite cap is enforced twice on purpose — server-side in
 `claimActions` against `LinkedInAccount.dailyInviteCap`, and client-side in `desktop/runner.js`
 against `MAX_PER_DAY`, with the day's tally persisted so pressing Start twice does not send

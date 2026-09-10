@@ -186,6 +186,22 @@ export async function completeScrapeJob(input: {
       finishedAt: new Date(),
     },
   });
+  // A connections list is also the only evidence LinkedIn gives that somebody
+  // accepted an invitation. Reading one for an import answers that for free.
+  if (!failed && unique.length) {
+    const job = await prisma.linkedInScrapeJob.findFirst({
+      where: { id: input.jobId, organizationId: input.organizationId },
+      select: { kind: true },
+    });
+    if (job?.kind === "connections_export") {
+      const { recordConnectionsSeen } = await import("./queue");
+      await recordConnectionsSeen(
+        input.organizationId,
+        unique.map((r) => r.profileUrl ?? "").filter(Boolean),
+      ).catch((e) => console.error("[scrape] recording accepted invitations failed:", e));
+    }
+  }
+
   return { stored: unique.length, deduped: rows.length - unique.length };
 }
 

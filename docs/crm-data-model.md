@@ -39,7 +39,23 @@ confirm dialog shows.
 ### `messages`
 `id`, `lead_id`, `campaign_id`, `channel (email/linkedin/whatsapp/social)`,
 `template_id`, `rendered_subject`, `rendered_body`, `status (queued/sent/delivered/
-bounced/replied/failed)`, `provider_id`, `sent_at`, `idempotency_key (unique)`.
+bounced/replied/failed/draft)`, `provider_id`, `sent_at`, `idempotency_key (unique)`,
+`kind (message/invite)`, `sent_by_user_id`.
+
+A LinkedIn connection request is written here with `kind: invite` so the timeline sees
+it. The Outbox (`/api/outbox`) lists `kind: message` rows as sent messages and reads
+invitations from `linkedin_actions`, which carry `kind` and `accepted_at`. "Sent by"
+reads, in order: the campaign; otherwise `sent_by_user_id` (a reply typed in the Inbox,
+which now writes a Message too); otherwise the AI agent.
+
+### `inbox_messages` attribution
+`campaign_id` is the campaign that sent an outbound message, or the one an inbound
+message answers — set only on a header or thread match, because an address match is a
+new message and naming a campaign there would claim a reply that never happened.
+`in_reply_to_message_id` is the Message a header match answers; `sent_by_user_id` is an
+Inbox reply's author. WhatsApp and LinkedIn carry no reply headers, so those threads say
+which campaign last contacted the person instead, worded as exactly that.
+`scripts/backfill-outreach-attribution.ts` fills all of this for older rows.
 
 ### `activity_log`
 `id`, `lead_id`, `campaign_id`, `type (sent/opened/clicked/delivered/bounced/replied/

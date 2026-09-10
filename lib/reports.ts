@@ -332,3 +332,105 @@ export async function getTeamPerformance(orgId: string, days = 30, userIds?: str
     };
   });
 }
+
+// ---------------------------------------------------------------------------
+// LinkedIn — invitations sent, and how many were actually accepted.
+// ---------------------------------------------------------------------------
+
+export interface LinkedInReport {
+  invitesSent: number;
+  accepted: number;
+  /** Percentage 0–100 of this window's invitations accepted so far. */
+  acceptanceRate: number;
+  /** Sent in the window and not accepted yet. */
+  awaiting: number;
+  /** Skipped because they were already a connection — not an acceptance. */
+  alreadyConnected: number;
+  failed: number;
+  messagesSent: number;
+  /** In the queue right now, whatever the window. */
+  queued: number;
+  byCampaign: { id: string | null; name: string; sent: number; accepted: number; rate: number }[];
+  series: { date: string; sent: number; accepted: number }[];
+}
+
+/**
+ * LinkedIn numbers from what happened, not from what was queued.
+ *
+ * "Sent" is an invitation the desktop app confirmed on the page. "Accepted" is
+ * one whose person has since appeared in the connections list — LinkedIn reports
+ * acceptances nowhere else (see recordConnectionsSeen in lib/linkedin/queue.ts),
+ * so this undercounts rather than guesses: an acceptance nobody has looked for
+ * yet still reads as awaiting.
+ *
+ * Reports had no LinkedIn section at all before this; a LinkedIn step counted as
+ * a generic "sent", and an accepted invitation was never recorded anywhere.
+ */
+export async function getLinkedInReport(orgId: string, days = 30): Promise<LinkedInReport> {
+  const since = new Date(Date.now() - days * DAY);
+  // Rows from before `kind` existed read as the desktop app treated them.
+  const invites = { OR: [{ kind: "invite" }, { kind: null, type: { not: "message" } }] };
+
+  const [sent, alreadyConnected, failed, messagesSent, queued] = await Promise.all([
+    // Invitations are few — LinkedIn allows about twenty a day per account — so
+    // the window's rows are read and grouped here, which gives the per-campaign
+    // and per-day splits from one query.
+    prisma.linkedInAction.findMany({
+      where: { AND: [invites, { organizationId: orgId, status: "sent", sentAt: { gte: since } }] },
+      select: { campaignId: true, sentAt: true, acceptedAt: true },
+    }),
+    prisma.linkedInAction.count({
+      where: {
+        AND: [invites, { organizationId: orgId, status: "skipped", result: { startsWith: "already connected" }, updatedAt: { gte: since } }],
+      },
+    }),
+    prisma.linkedInAction.count({ where: { organizationId: orgId, status: "failed", updatedAt: { gte: since } } }),
+    prisma.linkedInAction.count({ where: { organizationId: orgId, status: "sent", kind: "message", sentAt: { gte: since } } }),
+    prisma.linkedInAction.count({ where: { organizationId: orgId, status: { in: ["pending", "in_progress", "drafted"] } } }),
+  ]);
+
+  const accepted = sent.filter((a) => a.acceptedAt).length;
+
+  const campaignIds = [...new Set(sent.map((a) => a.campaignId).filter((v): v is string => !!v))];
+  const campaigns = campaignIds.length
+    ? await prisma.campaign.findMany({ where: { id: { in: campaignIds } }, select: { id: true, name: true, archivedAt: true } })
+    : [];
+  const nameOf = new Map(campaigns.map((c) => [c.id, c.archivedAt ? `${c.name} (deleted)` : c.name]));
+
+  const perCampaign = new Map<string, { id: string | null; name: string; sent: number; accepted: number }>();
+  for (const a of sent) {
+    const key = a.campaignId ?? "";
+    const row = perCampaign.get(key) ?? {
+      id: a.campaignId,
+      // No campaign means the bulk "Connect on LinkedIn" on the Leads screen.
+      name: a.campaignId ? (nameOf.get(a.campaignId) ?? "Deleted campaign") : "From the Leads screen",
+      sent: 0,
+      accepted: 0,
+    };
+    row.sent++;
+    if (a.acceptedAt) row.accepted++;
+    perCampaign.set(key, row);
+  }
+
+  const buckets = new Map<string, { sent: number; accepted: number }>();
+  for (let i = 0; i <= days; i++) buckets.set(dayKey(new Date(since.getTime() + i * DAY)), { sent: 0, accepted: 0 });
+  for (const a of sent) {
+    const s = a.sentAt && buckets.get(dayKey(a.sentAt));
+    if (s) s.sent++;
+    const acc = a.acceptedAt && buckets.get(dayKey(a.acceptedAt));
+    if (acc) acc.accepted++;
+  }
+
+  return {
+    invitesSent: sent.length,
+    accepted,
+    acceptanceRate: pct(accepted, sent.length),
+    awaiting: sent.length - accepted,
+    alreadyConnected,
+    failed,
+    messagesSent,
+    queued,
+    byCampaign: [...perCampaign.values()].map((r) => ({ ...r, rate: pct(r.accepted, r.sent) })).sort((a, b) => b.sent - a.sent),
+    series: [...buckets.entries()].map(([date, v]) => ({ date, ...v })),
+  };
+}
