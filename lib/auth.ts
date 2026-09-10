@@ -68,6 +68,29 @@ async function createPersonalOrg(user: { id: string; name?: string | null; email
   return org;
 }
 
+/**
+ * Which workspace a new session should open in.
+ *
+ * This used to be the OLDEST membership. Every account gets a personal workspace
+ * the moment it is created (above), so for anyone who signed up and then accepted
+ * an invitation, "oldest" meant that empty personal workspace — not the team they
+ * joined. Accepting switched the one session it happened in; every later sign-in
+ * dropped them back. Tasks and notifications are scoped to the active workspace,
+ * so work assigned to them looked like it had never arrived.
+ *
+ * Now: the workspace they last switched to, if they still belong to it; otherwise
+ * the one they joined most recently, which is the invitation they accepted.
+ */
+export async function preferredOrganizationId(userId: string): Promise<string | null> {
+  const [user, memberships] = await Promise.all([
+    prisma.user.findUnique({ where: { id: userId }, select: { lastActiveOrganizationId: true } }),
+    prisma.member.findMany({ where: { userId }, orderBy: { createdAt: "desc" }, select: { organizationId: true } }),
+  ]);
+  const last = user?.lastActiveOrganizationId;
+  if (last && memberships.some((m) => m.organizationId === last)) return last;
+  return memberships[0]?.organizationId ?? null;
+}
+
 export const auth = betterAuth({
   database: prismaAdapter(prisma, { provider: "postgresql" }),
   emailAndPassword: { enabled: true, autoSignIn: true },
@@ -107,13 +130,27 @@ export const auth = betterAuth({
     },
     session: {
       create: {
-        // Attach the user's (first / owned) org as the active tenant on each new session.
-        before: async (session) => {
-          const member = await prisma.member.findFirst({
-            where: { userId: session.userId },
-            orderBy: { createdAt: "asc" },
-          });
-          return { data: { ...session, activeOrganizationId: member?.organizationId ?? null } };
+        // Open each new session in the workspace the person was last working in.
+        before: async (session) => ({
+          data: { ...session, activeOrganizationId: await preferredOrganizationId(session.userId) },
+        }),
+      },
+      update: {
+        // Remember a workspace switch so the next sign-in opens there too. The
+        // organization plugin's setActive writes through this same session
+        // update, which covers the sidebar switcher and accepting an invitation.
+        after: async (session) => {
+          const orgId = (session as { activeOrganizationId?: string | null }).activeOrganizationId;
+          if (!orgId) return;
+          await prisma.user
+            .updateMany({
+              where: {
+                id: session.userId,
+                OR: [{ lastActiveOrganizationId: null }, { lastActiveOrganizationId: { not: orgId } }],
+              },
+              data: { lastActiveOrganizationId: orgId },
+            })
+            .catch((e) => console.error("[auth] failed to remember the active workspace:", e));
         },
       },
     },

@@ -71,6 +71,9 @@ async function sendViaGmailApi(
 const NO_ACCOUNT =
   "No sending account connected. Connect a mailbox in Settings → Sending accounts before sending.";
 
+/** Whether the missing-SMTP warning has been logged in this process. */
+let warnedUnconfigured = false;
+
 /**
  * Internal mail: Followthroo notifying its OWN users (new-lead alerts, SLA escalations).
  *
@@ -81,7 +84,17 @@ const NO_ACCOUNT =
  * a lead, so it bypasses suppression and the outbound rate limiter by design.
  */
 export async function sendSystemEmail(to: string, subject: string, body: string): Promise<boolean> {
-  if (!configured.email) return false;
+  if (!configured.email) {
+    // Said once, loudly. Returning false in silence is how "I was never emailed
+    // about my task" went undiagnosed — every caller treats email as best-effort.
+    if (!warnedUnconfigured) {
+      warnedUnconfigured = true;
+      console.warn(
+        "[email] SMTP_HOST / SMTP_USER / SMTP_PASS are not set — task, lead and invitation emails are not being sent. In-app notifications still work.",
+      );
+    }
+    return false;
+  }
   try {
     const nodemailer = await import("nodemailer");
     const t = nodemailer.createTransport({

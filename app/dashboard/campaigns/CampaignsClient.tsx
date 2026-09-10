@@ -329,6 +329,47 @@ export default function CampaignsPage() {
     }
   }
 
+  /**
+   * Delete, after saying exactly what stops.
+   *
+   * The dry run asks the server what would happen first, because that answer is
+   * the useful part of the confirmation: "5 queued LinkedIn invitations are
+   * cancelled" is the sentence that stops someone deleting a campaign they only
+   * meant to pause.
+   */
+  async function deleteCampaign(c: Campaign) {
+    setMsg(null);
+    try {
+      const impact = await api<{ stopping: number; cancelling: number; archived: boolean }>(
+        `/api/campaigns/${c.id}?dryRun=1`,
+        { method: "DELETE" },
+      );
+      const effects = [
+        impact.stopping
+          ? `${impact.stopping} ${impact.stopping === 1 ? "person" : "people"} partway through the sequence stop receiving it.`
+          : null,
+        impact.cancelling
+          ? `${impact.cancelling} queued LinkedIn ${impact.cancelling === 1 ? "invitation is" : "invitations are"} cancelled.`
+          : null,
+        impact.archived
+          ? "Messages already sent stay on each lead's timeline and keep naming this campaign."
+          : "Nothing has been sent from it yet, so it is removed completely.",
+      ].filter(Boolean);
+      const yes = await confirm({
+        title: `Delete "${c.name}"?`,
+        body: effects.join(" "),
+        confirmLabel: "Delete campaign",
+        tone: "danger",
+      });
+      if (!yes) return;
+      await api(`/api/campaigns/${c.id}`, { method: "DELETE" });
+      setMsg({ kind: "success", text: `"${c.name}" deleted.` });
+      mutateCampaigns();
+    } catch (e) {
+      setMsg({ kind: "error", text: (e as Error).message });
+    }
+  }
+
   return (
     <>
       <DashHeader
@@ -627,6 +668,7 @@ export default function CampaignsPage() {
                     <div className="mt-6 flex items-center justify-between border-t border-line pt-4">
                       <span className="text-xs text-ink-soft">{c._count?.enrollments ?? 0} enrolled · {dn.length} node(s)</span>
                       <div className="flex items-center gap-2">
+                        <button onClick={() => deleteCampaign(c)} aria-label={`Delete ${c.name}`} title="Delete campaign" className="rounded-xl border border-line bg-surface p-2 text-ink-soft transition hover:border-danger/30 hover:bg-danger-soft hover:text-danger"><Trash2 className="h-3.5 w-3.5" /></button>
                         <button onClick={() => startEdit(c)} className="flex items-center gap-1 rounded-xl border border-line bg-surface px-3 py-2 text-xs font-semibold transition hover:bg-tint"><Pencil className="h-3.5 w-3.5" /> Edit</button>
                         {c.status === "done" ? (
                           <button onClick={() => reactivateCampaign(c)} className="flex items-center gap-1 rounded-xl border border-success/30 bg-success-soft px-3 py-2 text-xs font-semibold text-success-strong transition hover:bg-success-soft"><Rocket className="h-3.5 w-3.5" /> Reactivate</button>

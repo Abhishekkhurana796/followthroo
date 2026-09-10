@@ -36,7 +36,7 @@ export const KNOWN_SOURCES: SourceInfo[] = [
     key: "linkedin_search",
     label: "LinkedIn search",
     instructions:
-      "Contacts pulled from a LinkedIn search, company page, group or event, via the Followthroo extension. Nothing to configure — paste a LinkedIn URL under Leads → Add Lead → Find leads.",
+      "Contacts brought in from LinkedIn with the Followthroo extension — ticked on a people search, your connections, a company's people or a group's members. Nothing to configure.",
   },
   {
     key: "linkedin_profile",

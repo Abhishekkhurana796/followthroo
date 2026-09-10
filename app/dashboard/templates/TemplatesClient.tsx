@@ -4,7 +4,7 @@ import { useMemo, useState } from "react";
 import useSWR from "swr";
 import { api } from "@/lib/client";
 import { Banner, DashHeader, EmptyState, Input, Label, Panel, Select, Textarea, useConfirm } from "@/components/ui";
-import { FileText, Pencil, Copy, Archive, Eye, Send, History, Search, Plus, X, AlertTriangle, Bot } from "lucide-react";
+import { FileText, Pencil, Copy, Archive, Eye, Send, History, Search, Plus, X, AlertTriangle, Bot, RotateCcw, Trash2 } from "lucide-react";
 import Link from "next/link";
 
 type Template = { id: string; channel: string; name: string; subject: string | null; body: string; updatedAt?: string };
@@ -52,6 +52,11 @@ const EMPTY_FORM = { channel: "email", name: "", subject: "", body: "" };
 
 export default function TemplatesPage() {
   const { data: templates = [], mutate } = useSWR<Template[]>("/api/templates");
+  // The archived list, fetched only once someone opens it.
+  const [showArchived, setShowArchived] = useState(false);
+  const { data: archived = [], mutate: mutateArchived } = useSWR<Template[]>(
+    showArchived ? "/api/templates?archived=1" : null,
+  );
   const [form, setForm] = useState(EMPTY_FORM);
   const [msg, setMsg] = useState<{ kind: "error" | "success" | "info"; text: string } | null>(null);
   const [busy, setBusy] = useState(false);
@@ -99,7 +104,7 @@ export default function TemplatesPage() {
   async function archive(t: Template) {
     const yes = await confirm({
       title: `Archive "${t.name}"?`,
-      body: "It disappears from this list and from the campaign builder. Messages already sent keep their wording, and running campaigns are unaffected.",
+      body: "It disappears from this list and from the campaign builder. Messages already sent keep their wording, and running campaigns are unaffected. You can restore it, or delete it for good, from Archived.",
       confirmLabel: "Archive",
       tone: "danger",
     });
@@ -108,6 +113,36 @@ export default function TemplatesPage() {
       await api(`/api/templates/${t.id}`, { method: "DELETE" });
       setMsg({ kind: "success", text: `"${t.name}" archived.` });
       mutate();
+      mutateArchived();
+    } catch (e) {
+      setMsg({ kind: "error", text: (e as Error).message });
+    }
+  }
+
+  async function restore(t: Template) {
+    try {
+      await api(`/api/templates/${t.id}`, { body: { action: "restore" } });
+      setMsg({ kind: "success", text: `"${t.name}" is back in your templates.` });
+      mutate();
+      mutateArchived();
+    } catch (e) {
+      setMsg({ kind: "error", text: (e as Error).message });
+    }
+  }
+
+  /** Permanent. The server refuses while a running campaign still uses it. */
+  async function deleteForever(t: Template) {
+    const yes = await confirm({
+      title: `Delete "${t.name}" permanently?`,
+      body: "It cannot be restored. Messages already sent keep their wording.",
+      confirmLabel: "Delete permanently",
+      tone: "danger",
+    });
+    if (!yes) return;
+    try {
+      await api(`/api/templates/${t.id}?hard=true`, { method: "DELETE" });
+      setMsg({ kind: "success", text: `"${t.name}" deleted.` });
+      mutateArchived();
     } catch (e) {
       setMsg({ kind: "error", text: (e as Error).message });
     }
@@ -170,7 +205,42 @@ export default function TemplatesPage() {
         <div className="space-y-4">
           {msg && <Banner kind={msg.kind}>{msg.text}</Banner>}
 
-          {templates.length > 0 && (
+          {/* Archive used to be a one-way door: the template vanished, and nothing
+              in the app could bring it back or remove it for good. */}
+          <div className="flex justify-end">
+            <button
+              type="button"
+              onClick={() => setShowArchived((v) => !v)}
+              className="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium text-ink-soft hover:bg-tint hover:text-ink"
+            >
+              {showArchived ? (
+                <><X className="h-3.5 w-3.5" /> Back to templates</>
+              ) : (
+                <><Archive className="h-3.5 w-3.5" /> Archived</>
+              )}
+            </button>
+          </div>
+
+          {showArchived &&
+            (archived.length === 0 ? (
+              <p className="py-8 text-center text-sm text-ink-soft">Nothing archived.</p>
+            ) : (
+              archived.map((t) => (
+                <Panel key={t.id}>
+                  <div className="flex items-start justify-between gap-3">
+                    <h3 className="min-w-0 font-display text-lg font-bold text-ink-soft">{t.name}</h3>
+                    <span className="shrink-0 rounded-full bg-tint px-2.5 py-0.5 font-mono text-xs">{t.channel}</span>
+                  </div>
+                  <pre className="mt-2 max-h-24 overflow-y-auto whitespace-pre-wrap font-sans text-sm text-ink-faint">{t.body}</pre>
+                  <div className="mt-3 flex flex-wrap gap-2 border-t border-line pt-3">
+                    <IconButton icon={RotateCcw} label="Restore" onClick={() => restore(t)} />
+                    <IconButton icon={Trash2} label="Delete permanently" onClick={() => deleteForever(t)} />
+                  </div>
+                </Panel>
+              ))
+            ))}
+
+          {!showArchived && templates.length > 0 && (
             <div className="relative">
               <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-ink-faint" />
               <Input
@@ -182,7 +252,7 @@ export default function TemplatesPage() {
             </div>
           )}
 
-          {templates.length === 0 ? (
+          {showArchived ? null : templates.length === 0 ? (
             <EmptyState
               icon={FileText}
               title="No templates yet"

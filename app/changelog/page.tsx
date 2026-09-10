@@ -9,6 +9,26 @@ export const metadata = { title: "Changelog — Followthroo" };
  */
 const ENTRIES = [
   {
+    version: "0.17.0",
+    date: "Sep 2026",
+    items: [
+      "Fixed: tasks assigned to a teammate never reached them—nothing on their task list and nothing in their notifications. Signing in always opened the oldest workspace on the account, and for anyone who joined a team by invitation that was the empty personal workspace created when they signed up, so the work was sitting one workspace away. Signing in now opens the workspace you last used, or else the team you joined most recently",
+      "The notification bell also counts unread notifications waiting in your other workspaces, with a Switch button beside each, so work assigned to you somewhere else can no longer go unnoticed",
+      "Campaigns can now be deleted, by owners and admins. Before you confirm, it says what will stop—how many people are partway through the sequence and how many LinkedIn connection requests are still queued. A campaign that has already sent messages leaves your list but stays in the records, so replies and reports can still say which campaign they came from",
+      "Fixed: deleting a campaign used to leave its queued LinkedIn connection requests behind, where the desktop app could still send them. Connection requests from a deleted campaign are now cancelled and never sent",
+      "Fixed: a team member could edit or delete a lead they were not allowed to open, if they had its link. Editing and deleting now follow the same visibility rules as viewing",
+      "Chrome extension 3.1.0: the Followthroo bar no longer covers the LinkedIn feed with a “can’t read this page” message—it only appears on pages that list people. It stays above the results instead of sliding over the first person as you scroll, and once it is out of view the F button shows how many people you have ticked",
+      "Chrome extension 3.1.0: fixed adding people from your LinkedIn Connections page. Each connection’s photo links to their profile before their name does, and the extension only ever read that first, empty link—so it found every connection and could not read a single name",
+      "Chrome extension 3.1.0: every person in a LinkedIn search, on your Connections page and on a profile now shows whether they are already in Followthroo. “In Followthroo” opens the lead, and a profile that is not in Followthroo yet has an Add button right beside the name",
+      "The Leads table has an Added by column: who brought each lead in and how—by hand, from a CSV, or from LinkedIn with the extension—or which source sent it, when no person did. Each lead’s own page says the same, with the date",
+      "Leads can be assigned one at a time: choose an owner straight from the Owner column, from the lead’s page, or while adding the lead, and the new owner is notified. The Owner column also now shows the owner of leads that are not in a pipeline, which used to read as a dash",
+      "Import CSV now shows the columns it understands—an email or a LinkedIn URL is all a row needs, plus name, company, title, phone and tags—with a sample file to start from. Any other column is kept on the lead and can be used in templates, and after an import it lists why any rows were skipped",
+      "Archived templates can be found again: Templates has an Archived list, where each one can be restored or deleted permanently",
+      "Removed the paste-a-LinkedIn-link importer from the LinkedIn page and from Add Lead. Bring people in from LinkedIn with the Chrome extension, or in bulk with a CSV that has a LinkedIn URL column",
+      "People a team member adds with the extension now count as theirs, so they appear in that person’s leads instead of landing unassigned where they could not see them",
+    ],
+  },
+  {
     version: "0.16.2",
     date: "Sep 2026",
     items: [

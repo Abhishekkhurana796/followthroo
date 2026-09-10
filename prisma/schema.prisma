@@ -127,6 +127,10 @@ model Campaign {
   createdBy        String?
   createdAt        DateTime        @default(now())
   updatedAt        DateTime        @updatedAt
+  /// Deleted by the user but kept because it has history: its messages, replies
+  /// and invitations still name it in the Inbox, Outbox and Reports. A campaign
+  /// that never sent anything is deleted outright instead (api/campaigns/[id]).
+  archivedAt       DateTime?
   sendingAccountId String?
   sendingAccount   SendingAccount? @relation(fields: [sendingAccountId], references: [id], onDelete: SetNull)
 
@@ -299,6 +303,11 @@ model User {
   themePreference       String? // "light" | "dark" | "system"
   notificationPrefs     Json? // { taskReminders, dailyDigest } — null = defaults on
   lastDigestAt          DateTime? // guards the daily digest against double-sending
+  /// The workspace this person last switched to; a new session opens there.
+  /// Without it every sign-in landed in the OLDEST membership — for an invited
+  /// teammate, the empty personal workspace created at sign-up — so work
+  /// assigned to them in the team they joined looked like it never arrived.
+  lastActiveOrganizationId String?
 
   @@map("user")
 }

@@ -97,8 +97,11 @@ One table, full width. Columns: Lead · Company · Source · Stage · Owner · L
 activity · **Next action**. That last column is the product; it is styled loudest on
 purpose and links straight into the record.
 
-`+ Add Lead` opens a dialog offering *Add manually · Import CSV · Find leads (soon)*
-over a short form — an email **or** a LinkedIn URL is the only requirement. Groups
+`+ Add Lead` opens a dialog offering *Add manually · Import CSV*: a short form where
+an email **or** a LinkedIn URL is the only requirement and an owner can be picked,
+and an import tab that lists the columns it understands with a sample file. (A
+*Find leads* URL importer lived here until 2026-09-10; see
+[linkedin-sourcing-ux.md](linkedin-sourcing-ux.md).) Groups
 (static lists, same thing as tags) moved into a dialog so they stop competing with the
 table for space.
 

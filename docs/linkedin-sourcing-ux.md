@@ -1,7 +1,16 @@
 # LinkedIn sourcing — UX
 
-**Last updated:** 2026-09-03
-**Status:** draft
+**Last updated:** 2026-09-10
+**Status:** needs-review — the paste-a-URL input described below was removed
+
+> **Superseded 2026-09-10.** The client asked for the URL field ("Bring people in")
+> to go — from the LinkedIn screen and from Add Lead → Find leads alike. People now
+> come in two ways: ticked on LinkedIn itself with the extension's in-page bar (people
+> search, Connections, a company's people, a group's members — its "Add all results"
+> still queues the bulk job and the review step below), or in bulk by CSV with a
+> `linkedin url` column. `lib/linkedin/detect.ts` stays: the extension's bulk job and
+> the server still classify pages with it. The rest of this document is kept as the
+> record of why the URL was the input while it existed.
 
 The design behind bringing contacts *in* from LinkedIn. Reference spec for what
 each scraper yields is [phantombuster.md](phantombuster.md); this is how it is

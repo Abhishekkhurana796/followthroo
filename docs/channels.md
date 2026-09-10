@@ -191,6 +191,22 @@ a write, so two clients polling one queue can each hold the same action and each
 and an invitation cannot be recalled. Any third client replaces the desktop app rather than
 running beside it.
 
+**Deleting a campaign never strands an invitation.** `LinkedInAction.campaignId` has no
+foreign key, so the old bare delete left a campaign's queued actions `pending` for the
+desktop app to send. `DELETE /api/campaigns/[id]` now cancels `pending|in_progress|drafted`
+actions (→ `skipped`) and stops live enrollments in one transaction, and `selectClaimable`
+refuses any action whose campaign is gone or archived. A campaign with sent history is
+archived (`Campaign.archivedAt`) rather than removed, so attribution survives.
+
+**The sourcing bar (extension 3.1.0).** `extension/content.js` puts a bar and a checkbox per
+row above LinkedIn lists — people search, your Connections, a company's people, a group's
+members — and only there. On the feed it once counted the profile
+links in a post stream as "a list we could not read" and covered the page with that
+message. It sits in flow rather than sticky, so it never slides over the first results;
+once it scrolls away the floating launcher carries the selection count. Names are read from
+every profile link in a card, not just the first, because Connections cards lead with a
+photo link that has no text.
+
 **Caps + safety:** the daily invite cap is enforced twice on purpose — server-side in
 `claimActions` against `LinkedInAccount.dailyInviteCap`, and client-side in `desktop/runner.js`
 against `MAX_PER_DAY`, with the day's tally persisted so pressing Start twice does not send

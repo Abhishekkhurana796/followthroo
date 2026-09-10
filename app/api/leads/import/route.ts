@@ -10,10 +10,12 @@ import { invalidate } from "@/lib/cache";
 export const runtime = "nodejs";
 
 // Known columns map onto lead fields; everything else becomes a custom variable.
+// Keep in step with IMPORT_COLUMNS in app/dashboard/leads/LeadsClient.tsx, which
+// tells people what this accepts.
 const KNOWN = new Set([
   "email", "firstname", "name", "lastname", "phone",
   "linkedinurl", "linkedin", "linkedinprofile", "linkedinprofilelink", "profile", "profilelink", "profileurl",
-  "company", "title",
+  "company", "title", "tags",
 ]);
 
 function normalizeRow(row: Record<string, string>) {

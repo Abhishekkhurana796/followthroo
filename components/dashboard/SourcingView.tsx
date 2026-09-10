@@ -66,7 +66,7 @@ export function SourcingView() {
       <EmptyState
         icon={Linkedin}
         title="Nothing sourced yet"
-        body="Add Lead → Find leads, then paste a LinkedIn search, profile, company, post, group or event. Your browser reads it and the people show up here for review."
+        body="Open a people search or your connections on LinkedIn and use the Followthroo extension. People you tick are added straight away; “Add all results” reads the whole search in the background and it shows up here for review."
       />
     );
   }

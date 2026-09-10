@@ -108,6 +108,22 @@ async function selectClaimable(account: ClaimAccount, limit: number) {
     include: { lead: { select: LEAD_FOR_ACTION } },
   });
 
+  // Deleting a campaign cancels what it queued, but an advance already running
+  // at that moment can still enqueue one more — and the old delete left queued
+  // actions behind entirely. An action whose campaign no longer exists (or is
+  // archived) is never handed out: an invitation cannot be recalled.
+  const campaignIds = [...new Set(candidates.map((a) => a.campaignId).filter((v): v is string => !!v))];
+  const liveCampaigns = new Set(
+    campaignIds.length
+      ? (
+          await prisma.campaign.findMany({
+            where: { id: { in: campaignIds }, organizationId, archivedAt: null },
+            select: { id: true },
+          })
+        ).map((c) => c.id)
+      : [],
+  );
+
   const usedCache = new Map<string, number>();
   const usedFor = async (cid: string) => {
     if (!usedCache.has(cid)) {
@@ -126,6 +142,7 @@ async function selectClaimable(account: ClaimAccount, limit: number) {
     if (a.lead?.optedOut) continue;
     const cid = a.campaignId;
     if (cid) {
+      if (!liveCampaigns.has(cid)) continue;
       if (selected.length && !selected.includes(cid)) continue;
       const s = settings[cid];
       if (s?.enabled === false) continue;

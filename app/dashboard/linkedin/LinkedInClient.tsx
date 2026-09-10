@@ -9,7 +9,6 @@ import {
 } from "lucide-react";
 import { api } from "@/lib/client";
 import { Banner, DashHeader, Input, Label, useConfirm } from "@/components/ui";
-import { FindLeadsPanel } from "@/components/dashboard/FindLeadsPanel";
 import { SourcingView } from "@/components/dashboard/SourcingView";
 import { EXTENSION_STORE_URL, DESKTOP_APP_URL } from "@/lib/constants";
 
@@ -112,37 +111,34 @@ export default function LinkedInClient() {
     <>
       <DashHeader
         title="LinkedIn"
-        subtitle="Bring people into your CRM from LinkedIn. Sending happens in campaigns."
+        subtitle="People you bring in from LinkedIn, and the connection that sends your invitations."
       />
 
       <div className="mx-auto max-w-3xl space-y-8 p-8">
         {msg && <Banner kind={msg.kind}>{msg.text}</Banner>}
         {scopeError && <ScopeErrorBanner />}
 
-        {/* ---- The one thing this screen is for ---- */}
-        <section>
-          <h2 className="font-display text-lg font-extrabold">Bring people in</h2>
-          <p className="mt-1 text-sm text-ink-soft">
-            Paste any LinkedIn page. We work out what it is — you never pick a tool.
-          </p>
-          <div className="mt-4">
-            <FindLeadsPanel onQueued={() => mutate()} />
-          </div>
-          <p className="mt-3 text-xs text-ink-faint">
-            A people search, everyone at a company, who reacted to a post, a group, an event, or your
-            own connections.
-          </p>
-        </section>
-
+        {/* A paste-a-link importer ("Bring people in") stood here until
+            2026-09-10, when the client asked for it to go. People are brought in
+            where they already are — ticked on LinkedIn with the extension — or in
+            bulk by CSV. What remains is what those imports produced. */}
         <section>
           <div className="mb-3 flex items-baseline justify-between">
-            <h2 className="font-display text-base font-bold">Recent</h2>
+            <h2 className="font-display text-base font-bold">Recent imports</h2>
             {usage && (
               <span className="font-mono text-[11px] text-ink-faint">
                 {usage.remaining.toLocaleString()} of {usage.cap.toLocaleString()} rows left today
               </span>
             )}
           </div>
+          <p className="mb-3 text-sm text-ink-soft">
+            Open a people search or your connections on LinkedIn and tick who you want — the Followthroo
+            extension adds them. For a long list, use{" "}
+            <Link href="/dashboard/leads" className="font-medium text-ink underline">
+              Import CSV
+            </Link>{" "}
+            on Leads with a LinkedIn URL column.
+          </p>
           <SourcingView />
         </section>
 

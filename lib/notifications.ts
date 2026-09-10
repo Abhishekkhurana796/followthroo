@@ -87,13 +87,29 @@ export interface NotificationRow {
   createdAt: Date;
 }
 
-/** The bell's payload: recent notifications plus the unread count. */
+/** Unread notifications waiting in one of the person's other workspaces. */
+export interface ElsewhereRow {
+  organizationId: string;
+  name: string;
+  unread: number;
+}
+
+/**
+ * The bell's payload: recent notifications, the unread count, and unread counts
+ * from the person's other workspaces.
+ *
+ * `elsewhere` exists because a notification is scoped to the workspace it was
+ * raised in, and the bell only reads the active one. A teammate signed in to the
+ * wrong workspace — which every invited teammate was, until lib/auth.ts stopped
+ * defaulting to the oldest membership — saw an empty bell while their tasks sat
+ * one switch away. That should never again look like "nobody told me".
+ */
 export async function listNotifications(
   organizationId: string,
   userId: string,
   limit = 30,
-): Promise<{ items: NotificationRow[]; unread: number }> {
-  const [items, unread] = await Promise.all([
+): Promise<{ items: NotificationRow[]; unread: number; elsewhere: ElsewhereRow[] }> {
+  const [items, unread, others] = await Promise.all([
     prisma.notification.findMany({
       where: { organizationId, userId },
       orderBy: { createdAt: "desc" },
@@ -101,8 +117,27 @@ export async function listNotifications(
       select: { id: true, kind: true, title: true, body: true, href: true, readAt: true, createdAt: true },
     }),
     prisma.notification.count({ where: { organizationId, userId, readAt: null } }),
+    prisma.notification.groupBy({
+      by: ["organizationId"],
+      where: { userId, readAt: null, organizationId: { not: organizationId } },
+      _count: { _all: true },
+    }),
   ]);
-  return { items, unread };
+
+  // Only workspaces they still belong to: a removed member's old notifications
+  // would otherwise offer a Switch that setActive then refuses.
+  const orgs = others.length
+    ? await prisma.organization.findMany({
+        where: { id: { in: others.map((o) => o.organizationId) }, members: { some: { userId } } },
+        select: { id: true, name: true },
+      })
+    : [];
+  const nameById = new Map(orgs.map((o) => [o.id, o.name]));
+  const elsewhere = others
+    .filter((o) => nameById.has(o.organizationId))
+    .map((o) => ({ organizationId: o.organizationId, name: nameById.get(o.organizationId)!, unread: o._count._all }));
+
+  return { items, unread, elsewhere };
 }
 
 /**

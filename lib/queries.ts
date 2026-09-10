@@ -112,7 +112,8 @@ export async function getTemplates(orgId: string) {
 
 export function getCampaigns(orgId: string) {
   return prisma.campaign.findMany({
-    where: { organizationId: orgId },
+    // Archived = deleted by the user but kept so history can still name it.
+    where: { organizationId: orgId, archivedAt: null },
     include: CAMPAIGN_INCLUDE,
     orderBy: { createdAt: "desc" },
   });
@@ -221,8 +222,17 @@ type LeadRowBase = { id: string; leadSourceId: string | null };
  * batched throughout: one page of 50 contacts costs a fixed handful of queries,
  * not 50 × 4.
  */
-export async function enrichLeadRows<T extends LeadRowBase>(orgId: string, leads: T[]) {
-  if (leads.length === 0) return [] as (T & { source: string | null; ownerName: string | null; lastActivityAt: Date | null; nextAction: NextAction | null })[];
+export async function enrichLeadRows<
+  T extends LeadRowBase & { ownerId: string | null; createdById: string | null; createdKind: string },
+>(orgId: string, leads: T[]) {
+  type Enriched = T & {
+    source: string | null;
+    ownerName: string | null;
+    createdByName: string | null;
+    lastActivityAt: Date | null;
+    nextAction: NextAction | null;
+  };
+  if (leads.length === 0) return [] as Enriched[];
 
   const ids = leads.map((l) => l.id);
   const sourceIds = [...new Set(leads.map((l) => l.leadSourceId).filter((s): s is string => !!s))];
@@ -245,22 +255,32 @@ export async function enrichLeadRows<T extends LeadRowBase>(orgId: string, leads
   ]);
 
   const sourceLabel = new Map(sources.map((s) => [s.id, s.label]));
-  const ownerByLead = new Map(items.map((i) => [i.leadId, i.ownerId]));
+  const pipelineOwnerByLead = new Map(items.map((i) => [i.leadId, i.ownerId]));
   const lastByLead = new Map<string, Date>();
   for (const e of latest) if (!lastByLead.has(e.leadId)) lastByLead.set(e.leadId, e.occurredAt);
 
-  const ownerIds = [...new Set([...ownerByLead.values()].filter((s): s is string => !!s))];
-  const owners = ownerIds.length
-    ? await prisma.user.findMany({ where: { id: { in: ownerIds } }, select: { id: true, name: true, email: true } })
-    : [];
-  const ownerName = new Map(owners.map((o) => [o.id, o.name || o.email]));
+  // The contact's own ownerId first — it is what assignment writes and what the
+  // scoped list filters on. This used to read only the open pipeline item, so a
+  // contact assigned from the Leads screen but in no pipeline showed "—".
+  const ownerOf = (l: T) => l.ownerId ?? pipelineOwnerByLead.get(l.id) ?? null;
 
-  return leads.map((l) => {
-    const oid = ownerByLead.get(l.id) ?? null;
+  const userIds = [
+    ...new Set(leads.flatMap((l) => [ownerOf(l), l.createdById]).filter((s): s is string => !!s)),
+  ];
+  const users = userIds.length
+    ? await prisma.user.findMany({ where: { id: { in: userIds } }, select: { id: true, name: true, email: true } })
+    : [];
+  const nameOf = new Map(users.map((u) => [u.id, u.name || u.email]));
+
+  return leads.map((l): Enriched => {
+    const oid = ownerOf(l);
     return {
       ...l,
       source: l.leadSourceId ? (sourceLabel.get(l.leadSourceId) ?? null) : null,
-      ownerName: oid ? (ownerName.get(oid) ?? null) : null,
+      ownerName: oid ? (nameOf.get(oid) ?? null) : null,
+      // Who added it, which is not who owns it: importing 500 contacts does not
+      // make you the rep working all 500.
+      createdByName: l.createdById ? (nameOf.get(l.createdById) ?? null) : null,
       lastActivityAt: lastByLead.get(l.id) ?? null,
       nextAction: actions.get(l.id) ?? null,
     };
@@ -327,6 +347,9 @@ export async function getLeadDetail(orgId: string, leadId: string, scopeWhere?: 
   // resolve them here rather than storing a denormalised copy that goes stale.
   const ownerIds = [
     ...new Set([
+      // The contact's own owner and who added it, so the record can name both.
+      lead.ownerId,
+      lead.createdById,
       ...lead.pipelineItems.map((i) => i.ownerId),
       ...lead.tasks.map((t) => t.ownerId),
     ].filter((id): id is string => !!id)),

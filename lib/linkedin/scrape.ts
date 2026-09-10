@@ -225,6 +225,10 @@ export async function importScrapedRows(input: {
   organizationId: string;
   jobId: string;
   rowIndexes?: number[];
+  /** The member importing — recorded as who added each new contact. */
+  actorId?: string | null;
+  /** extension (ticked on the page) | linkedin_bulk (a reviewed background job). */
+  createdKind?: string;
 }) {
   const { ingestMany } = await import("../ingest");
 
@@ -255,6 +259,8 @@ export async function importScrapedRows(input: {
         channel: "linkedin" as const,
         direction: "inbound" as const,
         sourceKey,
+        actorId: input.actorId ?? null,
+        createdKind: input.createdKind ?? "linkedin_bulk",
         profile: {
           firstName: r.firstName ?? first ?? null,
           lastName: r.lastName ?? (rest.length ? rest.join(" ") : null),

@@ -36,6 +36,10 @@ export async function ingestEvent(organizationId: string, event: InboundEvent): 
     profile: event.profile,
     sourceKey: event.sourceKey,
     source: event.sourceKey,
+    // Provenance for the "Added by" column: the person when one did it,
+    // otherwise the source that sent it.
+    createdById: event.actorId ?? null,
+    createdKind: event.createdKind ?? (event.actorId ? "user" : "webhook"),
   });
 
   const email = event.identities.find((i) => i.kind === "email")?.value;
@@ -98,7 +102,12 @@ export async function ingestEvent(organizationId: string, event: InboundEvent): 
     // and the member dashboard actually read, and without it a webhook lead is
     // invisible to every rep now that there is no shared pool.
     if (!alreadyInPipeline) {
-      const ownerId = item.ownerId ?? (await resolveLeadOwner(organizationId, { sourceKey: event.sourceKey }));
+      // The person importing is the fallback owner, as for a CSV or a manual add.
+      // Without it a member's own extension import, under a manual rule, landed
+      // with no owner and no creator — outside their scope, invisible to them.
+      const ownerId =
+        item.ownerId ??
+        (await resolveLeadOwner(organizationId, { sourceKey: event.sourceKey, actorId: event.actorId ?? null }));
       if (ownerId) {
         await prisma.lead.update({ where: { id: resolved.leadId }, data: { ownerId } });
       }
