@@ -25,4 +25,11 @@ contextBridge.exposeInMainWorld("ft", {
     ipcRenderer.on("run:event", listener);
     return () => ipcRenderer.removeListener("run:event", listener);
   },
+  installUpdate: () => ipcRenderer.invoke("update:install"),
+  /** Same pattern as onEvent, on its own channel — an update is not a run. */
+  onUpdate: (handler) => {
+    const listener = (_e, payload) => handler(payload);
+    ipcRenderer.on("update:event", listener);
+    return () => ipcRenderer.removeListener("update:event", listener);
+  },
 });

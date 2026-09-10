@@ -9,6 +9,13 @@ export const metadata = { title: "Changelog — Followthroo" };
  */
 const ENTRIES = [
   {
+    version: "0.19.2",
+    date: "Sep 2026",
+    items: [
+      "Windows app 1.12.0: it now updates itself. A new build downloads in the background — never while invitations are sending — and a small “Restart to update” appears in the panel once it's ready. This is the first version that can do this, so anyone on an earlier build still needs to download once by hand from the LinkedIn page; every build after this one keeps itself current",
+    ],
+  },
+  {
     version: "0.19.1",
     date: "Sep 2026",
     items: [
