@@ -32,6 +32,16 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    product: "webapp",
+    version: "0.20.6",
+    date: "Sep 2026",
+    items: [
+      "Fixed: a company's lead count on the Companies list could disagree with its own detail page — \"Mobikonnect\" showing 2 leads on one screen and 3 on the next. The list grouped companies by exact spelling, so \"Mobikonnect\" and \"mobikonnect\" counted as two different companies with two different totals; it now groups the same way the detail page already matched, ignoring case",
+      "A company can now be renamed or deleted from its own page. Renaming moves every lead there to the new name; deleting only removes the company from those leads — nobody's contact record is deleted",
+      "The Team page now says what each role can actually do, next to every member — not just while inviting someone new",
+    ],
+  },
+  {
     product: "extension",
     version: "3.1.4",
     date: "Sep 2026",

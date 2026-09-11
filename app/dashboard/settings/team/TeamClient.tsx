@@ -234,14 +234,18 @@ export default function TeamClient() {
                           <Select
                             value={m.role}
                             onChange={(e) => changeRole(m.id, e.target.value as Role)}
+                            title={ROLE_INFO[m.role].description}
                             className="w-36 !py-1.5 text-xs"
                           >
                             {ASSIGNABLE_ROLES.map((r) => (
-                              <option key={r} value={r}>{ROLE_INFO[r].label}</option>
+                              <option key={r} value={r} title={ROLE_INFO[r].description}>{ROLE_INFO[r].label}</option>
                             ))}
                           </Select>
                         ) : (
-                          <span className="flex items-center gap-1 rounded-lg bg-tint px-2.5 py-1 text-xs font-medium capitalize">
+                          <span
+                            className="flex items-center gap-1 rounded-lg bg-tint px-2.5 py-1 text-xs font-medium capitalize"
+                            title={ROLE_INFO[m.role].description}
+                          >
                             {m.role === "owner" && <Shield className="h-3 w-3" />} {roleLabel(m.role)}
                           </span>
                         )}
@@ -256,6 +260,12 @@ export default function TeamClient() {
                         )}
                       </div>
                     </div>
+
+                    {/* What the role actually means — the invite form above already
+                        says this per role as you pick one; this row never did, so
+                        changing (or just reading) someone's role meant guessing or
+                        going back to the invite form to remember. */}
+                    <p className="pl-0.5 text-xs text-ink-faint">{ROLE_INFO[m.role].description}</p>
 
                     {/* Org hierarchy (PRD §4): which department this person's pipeline
                         work belongs to, and who the SLA escalation chain walks to. */}

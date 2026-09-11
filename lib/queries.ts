@@ -123,18 +123,28 @@ export function getSegments(orgId: string) {
   return prisma.segment.findMany({ where: { organizationId: orgId }, orderBy: { createdAt: "desc" } });
 }
 
-/** Companies derived from contacts (grouped by the `company` field). */
+/**
+ * Companies derived from contacts (grouped by the `company` field).
+ *
+ * Grouped by `LOWER(TRIM(company))`, not the raw string: Postgres GROUP BY is
+ * case-sensitive, so "Mobikonnect" and "MobiKonnect" used to land in two
+ * separate rows, each undercounting — the list showed "Mobikonnect · 2 leads"
+ * while the company's own detail page (which reads every lead whose company
+ * matches case-*insensitively*, see `company` param in app/api/leads/route.ts)
+ * correctly showed all 3. `MIN(company)` picks one casing to display,
+ * deterministically, since SQL can't select the raw column outside an
+ * aggregate once you group by an expression of it.
+ */
 export async function getCompanies(orgId: string) {
-  const rows = await prisma.lead.groupBy({
-    by: ["company"],
-    where: { organizationId: orgId, company: { not: null } },
-    _count: { _all: true },
-    orderBy: { _count: { company: "desc" } },
-    take: 200,
-  });
-  return rows
-    .filter((r) => (r.company ?? "").trim() !== "")
-    .map((r) => ({ company: r.company as string, count: r._count._all }));
+  const rows = await prisma.$queryRaw<{ company: string; count: number }[]>`
+    SELECT MIN(company) AS company, COUNT(*)::int AS count
+    FROM "Lead"
+    WHERE "organizationId" = ${orgId} AND company IS NOT NULL AND trim(company) <> ''
+    GROUP BY LOWER(TRIM(company))
+    ORDER BY COUNT(*) DESC
+    LIMIT 200
+  `;
+  return rows.map((r) => ({ company: r.company, count: Number(r.count) }));
 }
 
 /** Threads per page in the Inbox list — InboxClient's PAGE mirrors it. */

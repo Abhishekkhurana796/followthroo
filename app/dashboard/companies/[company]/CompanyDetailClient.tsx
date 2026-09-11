@@ -2,10 +2,11 @@
 
 import { useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import useSWR from "swr";
-import { Building2, ArrowLeft, Rocket, FolderPlus, Linkedin as LinkedinIcon } from "lucide-react";
+import { Building2, ArrowLeft, Rocket, FolderPlus, Linkedin as LinkedinIcon, Pencil, Trash2 } from "lucide-react";
 import { api } from "@/lib/client";
-import { Banner, DashHeader, Panel, Select, Skeleton, useConfirm } from "@/components/ui";
+import { Banner, DashHeader, Panel, Select, Skeleton, useConfirm, usePrompt } from "@/components/ui";
 
 type Lead = { id: string; firstName: string | null; lastName: string | null; email: string | null; linkedinUrl: string | null; stage: string };
 type LeadsResponse = { items: Lead[]; total: number };
@@ -22,6 +23,41 @@ export default function CompanyDetailClient({ company }: { company: string }) {
   const leads = data?.items ?? [];
   const ids = leads.map((l) => l.id);
   const confirm = useConfirm();
+  const prompt = usePrompt();
+  const router = useRouter();
+
+  async function renameCompany() {
+    const name = await prompt({
+      title: "Rename company",
+      body: `Every lead currently at ${company} moves to the new name.`,
+      label: "Company name",
+      placeholder: company,
+      confirmLabel: "Rename",
+    });
+    if (!name || !name.trim() || name.trim() === company) return;
+    try {
+      await api(`/api/companies/${encodeURIComponent(company)}`, { method: "PATCH", body: { name: name.trim() } });
+      router.replace(`/dashboard/companies/${encodeURIComponent(name.trim())}`);
+    } catch (e) {
+      setMsg({ kind: "error", text: (e as Error).message });
+    }
+  }
+
+  async function deleteCompany() {
+    const okConfirm = await confirm({
+      title: `Delete ${company}?`,
+      body: `This removes the company grouping only — ${leads.length} lead${leads.length === 1 ? "" : "s"} stay in Followthroo, just without a company on file.`,
+      confirmLabel: "Delete company",
+      tone: "danger",
+    });
+    if (!okConfirm) return;
+    try {
+      await api(`/api/companies/${encodeURIComponent(company)}`, { method: "DELETE" });
+      router.replace("/dashboard/companies");
+    } catch (e) {
+      setMsg({ kind: "error", text: (e as Error).message });
+    }
+  }
 
   async function enrollAll(campaignId: string) {
     if (!campaignId || ids.length === 0) return;
@@ -50,9 +86,17 @@ export default function CompanyDetailClient({ company }: { company: string }) {
         title={company}
         subtitle={`${leads.length} lead${leads.length === 1 ? "" : "s"} at this company`}
         action={
-          <Link href="/dashboard/companies" className="btn btn-ghost !py-2 !text-sm">
-            <ArrowLeft className="h-4 w-4" /> All companies
-          </Link>
+          <div className="flex items-center gap-2">
+            <button onClick={renameCompany} className="btn btn-ghost !py-2 !text-sm">
+              <Pencil className="h-4 w-4" /> Rename
+            </button>
+            <button onClick={deleteCompany} className="btn btn-ghost !py-2 !text-sm !text-danger">
+              <Trash2 className="h-4 w-4" /> Delete
+            </button>
+            <Link href="/dashboard/companies" className="btn btn-ghost !py-2 !text-sm">
+              <ArrowLeft className="h-4 w-4" /> All companies
+            </Link>
+          </div>
         }
       />
 
