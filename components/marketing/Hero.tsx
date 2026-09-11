@@ -44,8 +44,8 @@ function ConnectionGraph() {
       ))}
       {/* lead node */}
       <g className="lk-lead" transform={`translate(${LEAD.x - 26} ${LEAD.y - 26})`}>
-        <rect width="52" height="52" rx="16" fill="var(--color-ink)" />
-        <text x="26" y="33" textAnchor="middle" fill="var(--color-ink-invert)" fontSize="20" fontFamily="var(--font-display)" fontWeight="700">
+        <rect width="52" height="52" rx="16" fill="var(--color-accent)" />
+        <text x="26" y="33" textAnchor="middle" fill="var(--color-accent-contrast)" fontSize="20" fontFamily="var(--font-display)" fontWeight="700">
           JD
         </text>
       </g>

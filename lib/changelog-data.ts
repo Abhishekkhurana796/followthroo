@@ -59,6 +59,54 @@ export const CHANGELOG: ChangelogEntry[] = [
     ],
   },
   {
+    product: "webapp",
+    version: "0.20.5",
+    date: "Sep 2026",
+    items: [
+      "Added native Next.js App Router robots generator (/robots.txt) and sitemap generator (/sitemap.xml) to index public marketing pages while disallowing application dashboard/auth endpoints",
+    ],
+  },
+  {
+    product: "webapp",
+    version: "0.20.4",
+    date: "Sep 2026",
+    items: [
+      "Optimized SEO, AEO, and GEO surface with dynamic OpenGraph image generation (/opengraph-image), plain-text LLM product summary (/llms.txt), and enriched metadata across marketing pages",
+    ],
+  },
+  {
+    product: "webapp",
+    version: "0.20.3",
+    date: "Sep 2026",
+    items: [
+      "Added interactive FAQ component with live category search and FAQPage JSON-LD schema across the homepage and pricing page",
+    ],
+  },
+  {
+    product: "webapp",
+    version: "0.20.2",
+    date: "Sep 2026",
+    items: [
+      "Integrated GDPR cookie consent management (ft-consent cookie) and connected Google Analytics 4 tracking (G-SHMQHNSM8D) gated on explicit user opt-in",
+    ],
+  },
+  {
+    product: "webapp",
+    version: "0.20.1",
+    date: "Sep 2026",
+    items: [
+      "Upgraded top navigation with lemlist-style multi-column Product and Resources mega-menus (@floating-ui/react hover panels), interactive mobile accordions, and a 3-item CTA cluster ('Log in', 'Get a demo', and 'Sign up for free')",
+    ],
+  },
+  {
+    product: "webapp",
+    version: "0.20.0",
+    date: "Sep 2026",
+    items: [
+      "Redesigned the entire color system with a lemlist-inspired blue and navy theme: navy ink (#213856), slate blue (#566f8f), electric blue brand accents (#316bff), gradient primary buttons, borderless soft-shadow secondary buttons, and a unified blue-node brand mark",
+    ],
+  },
+  {
     product: "extension",
     version: "3.1.4",
     date: "Sep 2026",

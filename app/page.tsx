@@ -4,6 +4,7 @@ import ChannelCards from "@/components/marketing/ChannelCards";
 import HowItWorks from "@/components/marketing/HowItWorks";
 import Safety from "@/components/marketing/Safety";
 import SendingInfrastructure from "@/components/marketing/SendingInfrastructure";
+import FAQ from "@/components/marketing/FAQ";
 import StudioStrip from "@/components/site/StudioStrip";
 import CTA from "@/components/marketing/CTA";
 
@@ -37,6 +38,7 @@ export default function Home() {
         <HowItWorks />
         <Safety />
         <SendingInfrastructure />
+        <FAQ />
         {/* CTA renders the Footer, so everything else must stay above it. */}
         <StudioStrip />
         <CTA />

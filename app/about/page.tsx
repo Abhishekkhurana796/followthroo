@@ -2,7 +2,15 @@ import SiteShell from "@/components/site/SiteShell";
 import PageHero from "@/components/site/PageHero";
 import { Prose, CTABand } from "@/components/site/blocks";
 
-export const metadata = { title: "About — Followthroo" };
+export const metadata = {
+  title: "About — Followthroo",
+  description: "Followthroo exists to align messy, scattered outreach into one clear, consistent story — across Email, LinkedIn, and WhatsApp.",
+  openGraph: {
+    title: "About — Followthroo",
+    description: "Followthroo exists to align messy, scattered outreach into one clear, consistent story — across Email, LinkedIn, and WhatsApp.",
+    url: "https://followthroo.com/about",
+  },
+};
 
 export default function AboutPage() {
   return (

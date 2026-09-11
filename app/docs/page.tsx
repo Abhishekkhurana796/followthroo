@@ -3,7 +3,15 @@ import SiteShell from "@/components/site/SiteShell";
 import PageHero from "@/components/site/PageHero";
 import { Boxes, Waypoints, Braces, Bot, Database, Gauge, TerminalSquare, Activity } from "lucide-react";
 
-export const metadata = { title: "Docs — Followthroo" };
+export const metadata = {
+  title: "Documentation — Followthroo",
+  description: "Learn how to set up multi-channel sequences, mailbox warm-up, rate limits, and CRM integrations in Followthroo.",
+  openGraph: {
+    title: "Documentation — Followthroo",
+    description: "Learn how to set up multi-channel sequences, mailbox warm-up, rate limits, and CRM integrations in Followthroo.",
+    url: "https://followthroo.com/docs",
+  },
+};
 
 const LINKS = [
   { icon: Boxes, title: "Channels", href: "/channels", body: "Email, LinkedIn, WhatsApp, and social." },

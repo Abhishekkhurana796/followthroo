@@ -12,7 +12,7 @@ export function FeatureGrid({
         {items.map((it) => (
           <div key={it.title} className="rounded-2xl border border-line bg-surface p-6 shadow-sm">
             {it.icon && (
-              <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-ink text-ink-invert">
+              <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-accent/10 text-accent">
                 <it.icon className="h-5 w-5" />
               </div>
             )}

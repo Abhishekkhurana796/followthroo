@@ -65,7 +65,13 @@ export default function ChannelCards() {
               key={c.title}
               className="glass-dark group flex h-[340px] w-[280px] shrink-0 flex-col rounded-[24px] p-7 transition-transform duration-300 hover:-translate-y-1.5"
             >
-              <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-white text-[#0a0a0a]">
+              {/* bg-white is a literal color, not the --surface token — it never
+                  flips with theme, since this chip sits on `.glass-dark`,
+                  which stays dark regardless of theme. The icon's own color
+                  has to match that: text-ink would flip to near-white in dark
+                  mode and vanish against this same white chip, so it stays a
+                  hardcoded hex too — just the new navy, not the old black. */}
+              <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-white text-[#213856]">
                 <c.icon className="h-6 w-6" />
               </div>
               <div className="mt-auto">
