@@ -33,6 +33,23 @@ export interface ChangelogEntry {
 export const CHANGELOG: ChangelogEntry[] = [
   {
     product: "webapp",
+    version: "0.20.7",
+    date: "Sep 2026",
+    items: [
+      "New footer, on every page: five real columns (Get started, Product, Resources, Company, Legal) instead of four, and a small mark centered on the divider above it",
+      "New page for the Windows app at /desktop — what it does, why it isn't the Chrome extension, and the download, in the same place the extension already had its own page",
+    ],
+  },
+  {
+    product: "extension",
+    version: "3.1.5",
+    date: "Sep 2026",
+    items: [
+      "Recolored to match: navy text and the same blue accent as the rest of Followthroo, in both the in-page bar and the popup/settings pages, in light and dark",
+    ],
+  },
+  {
+    product: "webapp",
     version: "0.20.6",
     date: "Sep 2026",
     items: [

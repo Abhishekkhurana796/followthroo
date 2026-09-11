@@ -1,20 +1,26 @@
 import Link from "next/link";
 import { ThemeToggle } from "@/components/dashboard/ThemeToggle";
-
-/** The "Konnect" mark. */
-function Mark() {
-  return (
-    <svg width="24" height="24" viewBox="0 0 26 26" fill="none" aria-hidden>
-      <line x1="7" y1="13" x2="19" y2="13" stroke="var(--color-action)" strokeWidth="2.4" />
-      <circle cx="7" cy="13" r="5" fill="var(--color-brand)" />
-      <circle cx="19" cy="13" r="5" fill="var(--color-canvas)" stroke="var(--color-brand)" strokeWidth="2.4" />
-    </svg>
-  );
-}
+import Mark from "@/components/site/Mark";
 
 const BRANDSTAC_URL = "https://brandstac.com";
 
+/**
+ * Structure lifted from lemlist.com's real footer (5 link columns, a small
+ * circular mark straddling the top divider, a dark rounded bottom bar) —
+ * confirmed live via Playwright, not guessed. Content is entirely ours:
+ * every link below is a real Followthroo page, nothing padded to match
+ * lemlist's column depth artificially.
+ */
 const COLUMNS: { title: string; links: { label: string; href: string }[] }[] = [
+  {
+    title: "Get started",
+    links: [
+      { label: "Pricing", href: "/pricing" },
+      { label: "Log in", href: "/sign-in" },
+      { label: "Sign up for free", href: "/sign-up" },
+      { label: "Get a demo", href: "/contact" },
+    ],
+  },
   {
     title: "Product",
     links: [
@@ -23,6 +29,20 @@ const COLUMNS: { title: string; links: { label: string; href: string }[] }[] = [
       { label: "Templates", href: "/templates" },
       { label: "AI Agent", href: "/ai-agent" },
       { label: "CRM", href: "/crm" },
+      { label: "Chrome extension", href: "/extension" },
+      { label: "Desktop app", href: "/desktop" },
+      { label: "Rate limits", href: "/rate-limits" },
+    ],
+  },
+  {
+    title: "Resources",
+    links: [
+      { label: "Blog", href: "/blog" },
+      { label: "Docs", href: "/docs" },
+      { label: "API reference", href: "/api-reference" },
+      { label: "Changelog", href: "/changelog" },
+      { label: "Status", href: "/status" },
+      { label: "Structured data for LLMs", href: "/llms.txt" },
     ],
   },
   {
@@ -30,18 +50,7 @@ const COLUMNS: { title: string; links: { label: string; href: string }[] }[] = [
     links: [
       { label: "About", href: "/about" },
       { label: "Careers", href: "/careers" },
-      { label: "Blog", href: "/blog" },
       { label: "Contact", href: "/contact" },
-    ],
-  },
-  {
-    title: "Resources",
-    links: [
-      { label: "Docs", href: "/docs" },
-      { label: "API", href: "/api-reference" },
-      { label: "Rate limits", href: "/rate-limits" },
-      { label: "Status", href: "/status" },
-      { label: "Changelog", href: "/changelog" },
     ],
   },
   {
@@ -51,70 +60,62 @@ const COLUMNS: { title: string; links: { label: string; href: string }[] }[] = [
       { label: "Terms", href: "/terms" },
       { label: "GDPR", href: "/gdpr" },
       { label: "Security", href: "/security" },
+      { label: "Extension privacy", href: "/extension-privacy" },
     ],
   },
 ];
 
 export default function Footer() {
   return (
-    <footer className="border-t border-line bg-canvas py-16">
-      <div className="mx-auto max-w-6xl px-6">
-        <div className="grid gap-10 sm:grid-cols-2 lg:grid-cols-6">
-          <div className="lg:col-span-2">
-            <Link href="/" className="flex items-center gap-2 font-display text-lg font-bold">
-              <Mark /> Followthroo
-            </Link>
-            <p className="mt-4 max-w-xs text-sm text-ink-soft">
-              Personalized outreach across every channel — sequenced, throttled, and human.
-            </p>
-            <p className="mt-4 text-sm text-ink-soft">
-              A product by{" "}
-              <a
-                href={BRANDSTAC_URL}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="font-semibold text-ink underline-offset-4 hover:underline"
-              >
-                brandstac
-              </a>
-            </p>
+    <footer className="bg-canvas pb-10">
+      {/* The divider the mark sits on top of — same trick lemlist's footer
+          uses: a hairline with a small badge straddling it dead-center,
+          rather than a logo column competing with the link columns. */}
+      <div className="relative w-full">
+        <div className="h-px w-full bg-line" />
+        <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 rounded-xl border border-line bg-surface p-1.5 shadow-sm">
+          <Mark size={28} />
+        </div>
+      </div>
+
+      <div className="mx-auto mt-12 flex max-w-6xl flex-wrap gap-8 px-6 sm:gap-12 lg:gap-16">
+        {COLUMNS.map((col) => (
+          <div key={col.title} className="w-[calc(50%-1rem)] sm:w-auto">
+            <div className="font-mono text-xs font-semibold uppercase tracking-widest text-ink-soft">{col.title}</div>
+            <ul className="mt-3 space-y-2">
+              {col.links.map((l) => (
+                <li key={l.label}>
+                  <Link href={l.href} className="text-sm text-ink-soft transition-colors hover:text-ink">
+                    {l.label}
+                  </Link>
+                </li>
+              ))}
+            </ul>
           </div>
+        ))}
+      </div>
 
-          {COLUMNS.map((col) => (
-            <div key={col.title}>
-              <div className="font-mono text-xs uppercase tracking-widest text-ink-soft">{col.title}</div>
-              <ul className="mt-4 space-y-2.5">
-                {col.links.map((l) => (
-                  <li key={l.label}>
-                    <Link href={l.href} className="text-sm text-ink-soft transition-colors hover:text-ink">
-                      {l.label}
-                    </Link>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          ))}
-        </div>
-
-        <div className="mt-14 flex flex-col items-center justify-between gap-3 border-t border-line pt-6 text-xs text-ink-soft sm:flex-row">
-          <span>© {new Date().getFullYear()} Followthroo. All rights reserved.</span>
-          {/* The public site had no way to change theme at all: the provider was
-              mounted inside the dashboard shell, so a visitor who prefers dark
-              got whatever their system said and could not say otherwise. */}
-          <ThemeToggle />
-          <span className="font-mono">
-            Built by{" "}
-            <a
-              href={BRANDSTAC_URL}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="transition-colors hover:text-ink"
-            >
-              brandstac
-            </a>{" "}
-            — New Delhi
-          </span>
-        </div>
+      {/* The dark bar — always dark, deliberately not `bg-ink`/`text-ink-invert`:
+          those tokens FLIP in dark mode (ink becomes near-white there), which
+          would turn this into a light bar exactly when the rest of the page
+          goes dark. `.band-dark` (globals.css) is the codebase's existing
+          "stays dark regardless of theme" pattern — same one ChannelCards
+          already relies on — used here instead for exactly that reason.
+          lemlist's own bar pairs copyright with a language switcher; we have
+          no i18n, so the theme toggle sits just above it instead, in normal
+          flow, where its own light/dark tokens are correct either way. */}
+      <div className="mx-auto mt-14 flex max-w-6xl justify-end px-6">
+        <ThemeToggle />
+      </div>
+      <div className="band-dark mx-6 mt-3 flex flex-col items-center justify-between gap-3 rounded-xl px-4 py-3 sm:flex-row">
+        <span className="text-sm">© {new Date().getFullYear()} Followthroo. All rights reserved.</span>
+        <span className="font-mono text-xs opacity-70">
+          Built by{" "}
+          <a href={BRANDSTAC_URL} target="_blank" rel="noopener noreferrer" className="hover:opacity-100">
+            brandstac
+          </a>{" "}
+          — New Delhi
+        </span>
       </div>
     </footer>
   );

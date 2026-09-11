@@ -24,7 +24,7 @@
   if (window.__ftBarLoaded) return; // survives LinkedIn's SPA re-renders
   window.__ftBarLoaded = true;
 
-  const ACCENT = "#4B31E6";
+  const ACCENT = "#316BFF";
   const BAR_ID = "ft-bar";
   const CHECK_CLASS = "ft-row-check";
 
@@ -80,13 +80,16 @@
     const set = (k, v) => root.style.setProperty(k, v);
     set("--ft-surface", dark ? "#1b1f23" : "#ffffff");
     set("--ft-raised", dark ? "#26292d" : "#ffffff");
-    set("--ft-ink", dark ? "#e8e8ea" : "#0a0a0a");
-    set("--ft-soft", dark ? "#9aa0a6" : "#5b5b66");
-    set("--ft-line", dark ? "rgba(255,255,255,.14)" : "#e3e3e6");
-    set("--ft-shadow", dark ? "rgba(0,0,0,.55)" : "rgba(10,10,10,.13)");
+    // Navy ink, matching the web app's own light/dark ink (app/globals.css) —
+    // the extension used to be a shade of plain black/white, from when the
+    // whole product was monochrome-plus-indigo rather than blue.
+    set("--ft-ink", dark ? "#f0f4f8" : "#213856");
+    set("--ft-soft", dark ? "#94a3b8" : "#566f8f");
+    set("--ft-line", dark ? "rgba(255,255,255,.14)" : "#e2e8f0");
+    set("--ft-shadow", dark ? "rgba(0,0,0,.55)" : "rgba(33,56,86,.13)");
     set("--ft-ok", dark ? "#4ade80" : "#0f7b52");
     set("--ft-err", dark ? "#f87171" : "#b91c1c");
-    set("--ft-tint", dark ? "rgba(139,123,255,.16)" : "#f3f1fe");
+    set("--ft-tint", dark ? "rgba(77,130,255,.16)" : "#eaf0ff");
     // The accent is the one thing that does not move: it is the identity.
     set("--ft-accent", ACCENT);
     set("--ft-on-accent", "#ffffff");
