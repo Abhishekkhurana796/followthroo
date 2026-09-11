@@ -37,7 +37,10 @@ export function CTABand({
   return (
     <section className="bg-canvas pb-24 pt-8">
       <div className="mx-auto max-w-6xl px-6">
-        <div className="relative overflow-hidden rounded-[32px] bg-ink px-8 py-16 text-center text-ink-invert sm:px-14">
+        {/* band-dark, not bg-ink — see the same fix in marketing/CTA.tsx:
+            --ink flips pale in dark mode, so this band would turn light
+            exactly when the rest of the page does. */}
+        <div className="relative overflow-hidden rounded-[32px] band-dark px-8 py-16 text-center sm:px-14">
           <div className="pointer-events-none absolute inset-0 opacity-[0.08] grid-dots" style={{ filter: "invert(1)" }} />
           <div className="relative">
             <h2 className="font-display mx-auto max-w-2xl text-[clamp(1.8rem,4vw,3rem)] font-extrabold">{title}</h2>
