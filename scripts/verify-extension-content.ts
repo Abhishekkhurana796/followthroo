@@ -87,6 +87,39 @@ const SEARCH = shell(`
   </ul>`);
 
 /**
+ * A virtualised results list: each row is an inner flex div — the element our
+ * selectors actually match — one level inside a `position: absolute` outer
+ * wrapper the windowing library owns, all siblings inside a relatively-
+ * positioned spacer. That extra wrapper level is what "insert before
+ * `cards[0]`'s own parent" got wrong: `cards[0].parentElement` resolved to
+ * the *absolutely positioned* wrapper, not the spacer, so the old code's
+ * `list.parentElement.insertBefore(el, list)` landed the bar one level too
+ * deep — as a normal-flow sibling *inside the spacer*, before the first
+ * wrapper. A normal-flow element doesn't get pushed anywhere by an absolutely
+ * positioned sibling — and isn't pushed *out of the way* by one either — so
+ * it rendered at the spacer's own flow top, exactly where the first
+ * absolutely-positioned row already sat: the same overlap reported live,
+ * scoped down to the two rules of CSS that cause it.
+ */
+const SEARCH_VIRTUALIZED = shell(`
+  <div style="padding:8px 0"><span>People</span> <span>Actively hiring</span> <span>1st</span> <span>2nd</span></div>
+  <h2>About 2,300 results</h2>
+  <div style="position:relative;height:${PEOPLE.length * 84}px">${PEOPLE.map(
+    ([slug, name, headline, location], i) => `
+    <div style="position:absolute;top:${i * 84}px;left:0;right:0;height:80px">
+      <div style="display:flex;gap:12px">
+        <a href="https://www.linkedin.com/in/${slug}/"><img alt="" src="${PIXEL}" width="48" height="48"></a>
+        <div>
+          <a href="https://www.linkedin.com/in/${slug}/"><span aria-hidden="true">${name}</span></a> <span>• 3rd+</span>
+          <div>${headline}</div>
+          <div>${location}</div>
+        </div>
+        <button>Connect</button>
+      </div>
+    </div>`,
+  ).join("")}</div>`);
+
+/**
  * Connections as reported: every card leads with a photo-only link to the same
  * profile. No whitespace between the headline and "Connected on", as on a
  * rendered page — so the card's text runs together ("MarketingConnected on"),
@@ -246,6 +279,35 @@ async function main() {
       const lianne = t.collected.find((r) => r.fullName === "Lianne Mui");
       ok(lianne?.headline === "Brand Building | Modern Marketing", "headlines read correctly", lianne?.headline ?? "(missing)");
       ok(t.seen.length === 0, "search results are not reported as connections", String(t.seen.length));
+      ok(t.errors.length === 0, "no script errors", t.errors.join(" | "));
+      await t.close();
+    }
+
+    // ---- virtualised search results ---------------------------------------------
+    // Guards the property "insert before the list" gave up on being able to
+    // guarantee: a plain sibling inserted next to rows that are themselves
+    // `position: absolute` (a windowed/virtual-scroll list — LinkedIn's own
+    // results, on at least some layouts) does nothing to move them, so the
+    // only placement immune to this is outside the list's container entirely.
+    console.log("virtualised search results (rows position: absolute)");
+    {
+      const t = await open(browser, "https://www.linkedin.com/search/results/people/?keywords=marketing", SEARCH_VIRTUALIZED);
+      const bar = t.page.locator("#ft-bar");
+      ok((await bar.count()) === 1, "bar is mounted");
+      const barBox = await box(bar);
+      const rowBoxes = await Promise.all(
+        (await t.page.locator('main div[style*="position:absolute"]').all()).map((r) => box(r)),
+      );
+      ok(rowBoxes.length === PEOPLE.length, "found every virtualised row", String(rowBoxes.length));
+      const covered = rowBoxes.filter((b) => overlaps(barBox, b)).length;
+      ok(covered === 0, "the bar does not overlap a single absolutely-positioned row", `${covered} covered`);
+      const firstRowTop = rowBoxes[0]?.y ?? -1;
+      const barBottom = barBox ? barBox.y + barBox.height : -1;
+      ok(
+        barBottom >= 0 && firstRowTop >= barBottom,
+        "the bar renders entirely above the first row, not into the list itself",
+        `bar bottom ${barBottom}, first row top ${firstRowTop}`,
+      );
       ok(t.errors.length === 0, "no script errors", t.errors.join(" | "));
       await t.close();
     }

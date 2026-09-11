@@ -40,7 +40,7 @@ function text(el, selectors) {
 
 /** Canonical profile URL: no query, no trailing slash, always absolute. */
 function profileHref(el) {
-  const a = el.querySelector('a[href*="/in/"]');
+  const a = el ? ((el.matches && el.matches('a[href*="/in/"]')) ? el : el.querySelector('a[href*="/in/"]')) : null;
   if (!a) return "";
   try {
     const u = new URL(a.getAttribute("href"), "https://www.linkedin.com");
@@ -67,9 +67,8 @@ function cleanName(raw) {
 }
 
 const CARD_SELECTORS = [
-  // Attribute hooks first: these have outlived the class names, which LinkedIn
-  // retires without notice. `reusable-search__result-container` and
-  // `entity-result` were people-search staples for years and are now gone.
+  'a[href*="/in/"][componentkey]',
+  '[componentkey*="SearchResults"]',
   '[data-view-name="search-entity-result"]',
   "[data-chameleon-result-urn]",
   "li.reusable-search__result-container",
@@ -106,7 +105,7 @@ function structuralCards(doc) {
 
   let best = [];
   for (const children of byParent.values()) {
-    const rows = Array.from(children).filter((c) => c.querySelector('a[href*="/in/"]'));
+    const rows = Array.from(children).filter((c) => (c.matches && c.matches('a[href*="/in/"]')) || c.querySelector('a[href*="/in/"]'));
     if (rows.length < 3) continue;
     const distinct = new Set(rows.map((r) => profileHref(r)));
     if (distinct.size < rows.length) continue; // a card's internals, not the list
@@ -153,10 +152,12 @@ function readPersonCards(doc) {
         ".entity-result__title-text a span",
         "span[dir='ltr'] span[aria-hidden='true']",
         ".artdeco-entity-lockup__title",
+        'a[href*="/in/"] span[aria-hidden="true"]',
+        'a[href*="/in/"]',
+        'div[id]',
+        'h3',
       ]) ||
-      // Last resort: the profile link's own text. A row whose name we cannot
-      // read is not a row we can use, so this is the floor rather than a guess.
-      text(card, ['a[href*="/in/"] span[aria-hidden="true"]', 'a[href*="/in/"]']);
+      ((card.querySelector('img[alt]') || {}).alt || "");
     const { name, degree: inlineDegree } = cleanName(raw);
     if (!name) continue;
 

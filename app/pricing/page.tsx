@@ -3,8 +3,17 @@ import { Check } from "lucide-react";
 import SiteShell from "@/components/site/SiteShell";
 import PageHero from "@/components/site/PageHero";
 import { CTABand } from "@/components/site/blocks";
+import FAQ from "@/components/marketing/FAQ";
 
-export const metadata = { title: "Pricing — Followthroo" };
+export const metadata = {
+  title: "Pricing — Followthroo",
+  description: "Simple pricing that scales with your outreach — start free, upgrade when you add channels and volume. No card required to begin.",
+  openGraph: {
+    title: "Pricing — Followthroo",
+    description: "Simple pricing that scales with your outreach — start free, upgrade when you add channels and volume. No card required to begin.",
+    url: "https://followthroo.com/pricing",
+  },
+};
 
 const TIERS = [
   {
@@ -50,36 +59,36 @@ export default function PricingPage() {
           {TIERS.map((t) => (
             <div
               key={t.name}
-              className={`relative flex flex-col rounded-[24px] border p-8 ${
-                t.highlighted ? "border-ink bg-ink text-ink-invert shadow-xl" : "border-line bg-surface"
+              className={`relative flex flex-col rounded-[24px] border p-8 transition-all duration-200 ${
+                t.highlighted
+                  ? "border-accent bg-accent/5 shadow-xl ring-2 ring-accent/30"
+                  : "border-line bg-surface shadow-sm"
               }`}
             >
               {t.highlighted && (
-                <span className="absolute right-6 top-6 rounded-full bg-ink-invert px-3 py-1 font-mono text-[10px] uppercase tracking-widest text-ink">
+                <span className="absolute right-6 top-6 rounded-full bg-accent px-3 py-1 font-mono text-[10px] uppercase tracking-widest text-white">
                   Popular
                 </span>
               )}
-              <div className="font-mono text-xs uppercase tracking-widest opacity-70">{t.name}</div>
+              <div className="font-mono text-xs uppercase tracking-widest text-accent font-semibold">{t.name}</div>
               <div className="mt-4 flex items-baseline gap-2">
                 <span className="font-display text-4xl font-extrabold">{t.price}</span>
-                <span className={`text-sm ${t.highlighted ? "text-white/60" : "text-ink-soft"}`}>{t.period}</span>
+                <span className="text-sm text-ink-soft">{t.period}</span>
               </div>
-              <p className={`mt-3 text-sm ${t.highlighted ? "text-white/70" : "text-ink-soft"}`}>{t.blurb}</p>
+              <p className="mt-3 text-sm text-ink-soft">{t.blurb}</p>
 
               <ul className="mt-6 flex-1 space-y-3">
                 {t.features.map((f) => (
                   <li key={f} className="flex items-start gap-2 text-sm">
-                    <Check className={`mt-0.5 h-4 w-4 shrink-0 ${t.highlighted ? "text-white" : "text-ink"}`} />
-                    <span className={t.highlighted ? "text-white/85" : ""}>{f}</span>
+                    <Check className={`mt-0.5 h-4 w-4 shrink-0 ${t.highlighted ? "text-accent" : "text-ink-soft"}`} />
+                    <span className="text-ink">{f}</span>
                   </li>
                 ))}
               </ul>
 
               <Link
                 href={t.name === "Scale" ? "/contact" : "/dashboard"}
-                className={`btn mt-8 justify-center ${
-                  t.highlighted ? "bg-ink-invert !text-ink hover:opacity-90" : "btn-primary"
-                }`}
+                className={`btn mt-8 justify-center ${t.highlighted ? "btn-primary" : "btn-ghost"}`}
               >
                 {t.cta}
               </Link>
@@ -88,6 +97,7 @@ export default function PricingPage() {
         </div>
       </section>
 
+      <FAQ />
       <CTABand title="Not sure which plan? Start free and grow into it." />
     </SiteShell>
   );

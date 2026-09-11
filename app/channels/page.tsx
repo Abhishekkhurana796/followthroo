@@ -3,7 +3,15 @@ import PageHero from "@/components/site/PageHero";
 import { FeatureGrid, CTABand } from "@/components/site/blocks";
 import { Mail, Linkedin, MessageCircle, MessagesSquare } from "lucide-react";
 
-export const metadata = { title: "Channels — Followthroo" };
+export const metadata = {
+  title: "Outreach Channels — Followthroo",
+  description: "One inbox for every way to reach a lead — Email, LinkedIn, WhatsApp, and social orchestrated from a single sequence.",
+  openGraph: {
+    title: "Outreach Channels — Followthroo",
+    description: "One inbox for every way to reach a lead — Email, LinkedIn, WhatsApp, and social orchestrated from a single sequence.",
+    url: "https://followthroo.com/channels",
+  },
+};
 
 export default function ChannelsPage() {
   return (

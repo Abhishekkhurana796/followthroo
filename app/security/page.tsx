@@ -12,7 +12,7 @@ export default function SecurityPage() {
         { heading: "Encryption", body: "TLS everywhere in transit. At rest, the credentials you entrust us with — mailbox passwords, OAuth refresh tokens and DKIM signing keys — are encrypted with AES-256-GCM under a key held outside the database, and rotated without downtime." },
         { heading: "Access control", body: "Role-based access gates campaigns and raw contact data. Sessions use secure, HTTP-only cookies." },
         { heading: "Webhooks", body: "Inbound webhooks (Twilio, email providers) are signature-verified before their payloads are trusted." },
-        { heading: "Reporting", body: "Found an issue? Email security@followthroo.com — we respond quickly and credit responsible disclosure." },
+        { heading: "Reporting", body: "Found an issue? Email hello@followthroo.com — we respond quickly and credit responsible disclosure." },
       ]}
     />
   );

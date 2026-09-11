@@ -137,12 +137,8 @@ export function detectScrapeKind(raw: string): Detected | null {
   // Your own network, before the generic /mynetwork paths.
   if (path.startsWith("/mynetwork/invite-connect/connections")) return as("connections_export");
 
-  // Searches: people search only. A jobs or content search has no contacts in it.
-  if (path.startsWith("/search/results/people")) return as("search_export");
-  if (path.startsWith("/search/results")) return null;
-
-  // Sales Navigator lead search uses a different host path but the same idea.
-  if (path.startsWith("/sales/search/people")) return as("search_export");
+  // Searches: people & general search results.
+  if (path.startsWith("/search/results") || path.startsWith("/sales/search")) return as("search_export");
 
   if (/^\/company\/[^/]+\/people/.test(path)) return as("company_employees");
   if (/^\/company\/[^/]+/.test(path)) return as("company_scrape");

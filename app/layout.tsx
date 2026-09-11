@@ -1,6 +1,8 @@
 import type { Metadata, Viewport } from "next";
 import "./globals.css";
 import { ThemeProvider } from "@/components/dashboard/ThemeProvider";
+import CookieConsent from "@/components/site/CookieConsent";
+import GoogleAnalytics from "@/components/site/GoogleAnalytics";
 
 export const metadata: Metadata = {
   title: "Followthroo — Multi-Channel Outreach",
@@ -15,8 +17,8 @@ export const viewport: Viewport = {
   // Matched to --canvas in each theme so the browser chrome doesn't disagree
   // with the page behind it.
   themeColor: [
-    { media: "(prefers-color-scheme: light)", color: "#ffffff" },
-    { media: "(prefers-color-scheme: dark)", color: "#0b0b0f" },
+    { media: "(prefers-color-scheme: light)", color: "#fbfbfb" },
+    { media: "(prefers-color-scheme: dark)", color: "#0b111e" },
   ],
   width: "device-width",
   initialScale: 1,
@@ -51,7 +53,20 @@ export default function RootLayout({
             which meant the marketing site had no way to change theme at all —
             the tokens were stamped by the script above, but nothing could
             switch them. */}
-        <ThemeProvider>{children}</ThemeProvider>
+        <ThemeProvider>
+          {children}
+          {/* Mounted here, not inside SiteShell: the homepage (app/page.tsx)
+              builds its own Nav+Footer composition rather than using
+              SiteShell, so anything placed only there silently never reaches
+              it — the single most-visited marketing page. Both components
+              self-exclude from the authenticated dashboard instead (see
+              lib/marketing-paths.ts) — a customer mid-work in their CRM has
+              consented to nothing and isn't marketing-site traffic, so this
+              layout being shared with the dashboard can't be the thing that
+              scopes them. */}
+          <CookieConsent />
+          <GoogleAnalytics />
+        </ThemeProvider>
       </body>
     </html>
   );

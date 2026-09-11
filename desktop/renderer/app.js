@@ -15,6 +15,7 @@ const el = {
   who: $("who"), whoCount: $("whoCount"), whoNote: $("whoNote"),
   signin: $("signin"), signinBtn: $("signinBtn"), collapse: $("collapse"),
   reload: $("reload"),
+  update: $("update"), updateText: $("updateText"), updateBtn: $("updateBtn"),
 };
 
 let cap = 20;
@@ -298,6 +299,50 @@ window.ft.onEvent((evt) => {
       loadQueue();
       break;
   }
+});
+
+/**
+ * A build found in the background. Nothing here can interrupt a run — main.js
+ * never checks while one is in progress, and refuses to install while one
+ * starts after a check already found something — so this only ever has to
+ * represent "found it", "here's how far", and "ready when you are".
+ */
+window.ft.onUpdate((evt) => {
+  switch (evt.type) {
+    case "available":
+      el.update.classList.add("show");
+      el.updateText.textContent = `Downloading v${evt.version}…`;
+      el.updateBtn.style.display = "none";
+      break;
+    case "downloading":
+      el.update.classList.add("show");
+      el.updateText.textContent = `Downloading the update — ${evt.percent}%`;
+      break;
+    case "ready":
+      el.update.classList.add("show");
+      el.updateText.textContent = `v${evt.version} is ready.`;
+      el.updateBtn.style.display = "";
+      break;
+    case "none":
+    case "error":
+      // Nothing to say about a check that found nothing, or one that failed —
+      // it tries again on its own next time, and a message here would read as
+      // something the person is meant to act on.
+      el.update.classList.remove("show");
+      break;
+  }
+});
+
+el.updateBtn.addEventListener("click", async () => {
+  el.updateBtn.disabled = true;
+  el.updateBtn.textContent = "Restarting…";
+  const res = await window.ft.installUpdate();
+  if (!res.ok) {
+    el.updateBtn.disabled = false;
+    el.updateBtn.textContent = "Restart to update";
+    el.updateText.textContent = res.error;
+  }
+  // On success the app quits and relaunches on its own — nothing left to do here.
 });
 
 load();

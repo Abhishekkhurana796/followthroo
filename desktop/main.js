@@ -20,6 +20,7 @@ const {
   app, BrowserWindow, WebContentsView, ipcMain, dialog, shell, powerSaveBlocker, session,
 } = require("electron");
 const path = require("node:path");
+const { autoUpdater } = require("electron-updater");
 const store = require("./store");
 const { runBatch, MAX_PER_DAY } = require("./runner");
 
@@ -145,6 +146,57 @@ const send = (channel, payload) => {
 };
 
 /* ------------------------------------------------------------------ */
+/* Keeping the app itself up to date                                    */
+/* ------------------------------------------------------------------ */
+
+/**
+ * The same public Vercel Blob store the installer is published to (see
+ * desktop/README.md's "Publishing a new build"). Not read from settings like
+ * `apiBase` — the update feed is a property of which build shipped, not of
+ * which Followthroo deployment someone points it at, so it is fixed the way
+ * the app's own identity is.
+ */
+const UPDATE_FEED_URL = "https://wet59gidjhcn7yck.public.blob.vercel-storage.com";
+
+// No blockmap is published alongside the installer (see the README), so a
+// differential download would have nothing to diff against and electron-
+// updater would have to fall back to a full download anyway. Asking for it
+// up front skips a request that can only fail.
+autoUpdater.disableDifferentialDownload = true;
+// Fetch the new installer as soon as one is found; only *running* it still
+// needs a click (see update:install below) and never happens mid-run.
+autoUpdater.autoDownload = true;
+// quitAndInstall below is the only path that may ever install an update, and
+// only once a run cannot be in progress — never on a bare app quit.
+autoUpdater.autoInstallOnAppQuit = false;
+autoUpdater.setFeedURL({ provider: "generic", url: UPDATE_FEED_URL, channel: "latest" });
+
+autoUpdater.on("update-available", (info) => send("update:event", { type: "available", version: info.version }));
+autoUpdater.on("update-not-available", () => send("update:event", { type: "none" }));
+autoUpdater.on("download-progress", (p) =>
+  send("update:event", { type: "downloading", percent: Math.round(p.percent) })
+);
+autoUpdater.on("update-downloaded", (info) => send("update:event", { type: "ready", version: info.version }));
+autoUpdater.on("error", (e) => send("update:event", { type: "error", message: String((e && e.message) || e) }));
+
+/**
+ * A run owns a Chrome window mid-invitation; an update landing on top of that
+ * is exactly the kind of surprise `before-quit` already exists to prevent. So
+ * checking is skipped outright while one is in flight, rather than checking
+ * and then hoping nobody clicks Restart until it ends.
+ */
+function maybeCheckForUpdates() {
+  // electron-updater expects a packaged, versioned install to compare against
+  // the feed. `npm start` runs the source directly under a stock Electron
+  // build, which isn't one — it would just fail on every launch in
+  // development, so there is nothing to update there.
+  if (!app.isPackaged || running) return;
+  autoUpdater
+    .checkForUpdates()
+    .catch((e) => send("update:event", { type: "error", message: String((e && e.message) || e) }));
+}
+
+/* ------------------------------------------------------------------ */
 /* Signing in through the real browser                                  */
 /* ------------------------------------------------------------------ */
 
@@ -252,6 +304,14 @@ app.whenReady().then(() => {
   // A cold start launched by the protocol carries the URL in argv.
   const deepLink = process.argv.find((a) => a.startsWith("followthroo://"));
   if (deepLink) completeSignIn(deepLink);
+
+  // A few seconds after open, so an update check never competes with the
+  // pairing and queue calls a fresh window already makes on load. After that,
+  // every few hours — long enough that a person who leaves the app open for a
+  // day still gets a build shipped that morning, short enough that "download
+  // the new version" is never the reason a run was refused.
+  setTimeout(maybeCheckForUpdates, 8_000);
+  setInterval(maybeCheckForUpdates, 4 * 60 * 60 * 1000);
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
@@ -387,6 +447,22 @@ ipcMain.handle("run:start", async (_e, { dryRun = false } = {}) => {
     sleepBlocker = null;
     send("run:event", { type: "idle" });
   }
+});
+
+/**
+ * Restart into the downloaded update. Refuses during a run for the same
+ * reason `before-quit` does — an invitation mid-flight, on a Chrome window
+ * about to be torn down. `quitAndInstall` only runs at all once this returns
+ * ok, so by the time it fires `running` is already false and `before-quit`'s
+ * own prompt never has a reason to appear.
+ */
+ipcMain.handle("update:install", () => {
+  if (running) return { ok: false, error: "Wait for the current run to finish first." };
+  // isSilent, isForceRunAfterSilentInstall — the NSIS installer wizard (this
+  // app is `oneClick: false`) is for someone doing it by hand; a click on
+  // "Restart to update" should not open it again for a choice already made.
+  autoUpdater.quitAndInstall(true, true);
+  return { ok: true };
 });
 
 ipcMain.handle("auth:signin", () => {

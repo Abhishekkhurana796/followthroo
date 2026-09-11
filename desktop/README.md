@@ -267,8 +267,8 @@ The build produces two files in `desktop/dist/`, both about 80MB:
 
 | File | Use |
 |---|---|
-| `Followthroo for LinkedIn Setup 1.0.0.exe` | The installer. Start menu entry, uninstaller. This is the one to publish. |
-| `Followthroo for LinkedIn 1.0.0.exe` | Portable. Runs from wherever it sits, installs nothing. Useful for a locked-down machine or a quick trial. |
+| `followthroo-linkedin-setup-1.0.0.exe` | The installer. Start menu entry, uninstaller, and the one that auto-updates. This is the one to publish. |
+| `Followthroo for LinkedIn 1.0.0.exe` | Portable. Runs from wherever it sits, installs nothing. Useful for a locked-down machine or a quick trial — but see Auto-update below: it never self-updates. |
 
 **Do not put either in `public/`.** An 80MB binary there rides along in every
 Vercel deployment and lands in git forever. Host it as an object and point
@@ -306,23 +306,42 @@ correctly, with the route as the only mutable part.
 
 ### Publishing a new build
 
-Three steps, in order. Skipping the upload ships a download button that 404s.
+Four steps, in order. Skipping the installer upload ships a download button
+that 404s; skipping the `latest.yml` upload ships a build nobody's existing
+copy will ever hear about (see Auto-update below).
 
 1. Bump `desktop/package.json`, `DESKTOP_APP_VERSION` in `lib/constants.ts` and
    the version badge in `desktop/renderer/index.html` — same commit.
-2. Build and upload, from `desktop/` after `npm run dist`:
+2. Build, from `desktop/`: `npm run dist`.
+3. Upload the installer, write-once as before, and `latest.yml`, which is
+   meant to be overwritten every time — it's how an already-installed copy
+   finds out a newer version exists:
 
-```bash
-V=$(node -p "require('./package.json').version")
-RW=$(grep -m1 '^BLOB_READ_WRITE_TOKEN=' ../.env.local | cut -d= -f2- | tr -d '"\r')
-vercel blob put "dist/Followthroo for LinkedIn Setup $V.exe" \
-  --pathname "followthroo-linkedin-setup-$V.exe" \
-  --access public --rw-token "$RW"
-```
+   ```bash
+   V=$(node -p "require('./package.json').version")
+   RW=$(grep -m1 '^BLOB_READ_WRITE_TOKEN=' ../.env.local | cut -d= -f2- | tr -d '"\r')
+   vercel blob put "dist/followthroo-linkedin-setup-$V.exe" \
+     --pathname "followthroo-linkedin-setup-$V.exe" \
+     --access public --rw-token "$RW"
+   vercel blob put "dist/latest.yml" \
+     --pathname "latest.yml" \
+     --access public --allow-overwrite true --cache-control-max-age 300 \
+     --rw-token "$RW"
+   ```
 
-3. Deploy the web app, so the route redirects to the version just uploaded.
+4. Deploy the web app, so `/api/desktop/download` redirects to the version
+   just uploaded, for anyone downloading fresh.
 
-Two flags that are not optional, each of which cost a failed attempt:
+`nsis.artifactName` in `package.json`'s `build` config names the installer
+`followthroo-linkedin-setup-<version>.exe` directly, so what lands in `dist/`
+already matches the pathname it needs to be published at — no rename step.
+`--publish never` (already in the `dist` script) stops electron-builder from
+attempting an automated publish of its own; it still writes `dist/latest.yml`
+locally because the `publish` config in `package.json` is present, and that
+file is what step 3's second upload needs.
+
+Two flags on the installer upload that are not optional, each of which cost a
+failed attempt:
 
 - `--rw-token` — without it the CLI finds `VERCEL_OIDC_TOKEN` in `.env.local`
   but no `BLOB_STORE_ID`, and refuses with a message about setting both or
@@ -330,9 +349,50 @@ Two flags that are not optional, each of which cost a failed attempt:
 - `--access public` — required, and the point: a private blob needs a signed URL,
   which a customer clicking a download link does not have.
 
-`--allow-overwrite` is deliberately **not** used any more. Versioned pathnames
-are write-once; needing to overwrite one means a build was published twice under
+`--allow-overwrite` stays off the installer. Versioned pathnames are
+write-once; needing to overwrite one means a build was published twice under
 the same version, which is the thing the caching bug above punished.
+`latest.yml` is the deliberate exception — it has no version in its name, has
+to change on every release, and `--cache-control-max-age 300` keeps a stale
+copy from surviving at the edge for the default 30 days while a machine keeps
+asking whether it's up to date.
+
+### Auto-update
+
+`electron-updater` (`main.js`), pointed at the same public Blob store —
+`autoUpdater.setFeedURL({ provider: "generic", url: <the base above> })`. The
+generic provider is exactly the read-only-feed shape this project already had:
+electron-builder never uploads anything on its own, it only writes `latest.yml`
+locally, and this project's own `vercel blob put` puts it where the running
+app already knows to look.
+
+- **Checked** 8 seconds after the window opens, then every 4 hours, and never
+  while a run is in progress (`maybeCheckForUpdates` in `main.js`) — a run owns
+  a Chrome window mid-invitation, and an update landing on top of that is
+  exactly the surprise `before-quit`'s own prompt exists to prevent elsewhere.
+- **Downloaded** automatically once found, in the background. Nothing about
+  downloading needs a person's attention.
+- **Installed** only on a click. The panel shows a small "Restart to update"
+  once the download finishes (`app.js`'s `onUpdate` handler); clicking it
+  calls `quitAndInstall`, which itself refuses if a run has started in the
+  meantime.
+- **No differential downloads.** `autoUpdater.disableDifferentialDownload =
+  true` — the blockmap electron-builder generates alongside the installer is
+  never uploaded, so a diff has nothing to diff against. Every update is a
+  full ~80MB download; simpler to publish correctly than chasing a partial
+  transfer that silently falls back to a full one anyway.
+- **Only the installed build self-updates.** The portable `.exe` has nowhere
+  installed to replace itself into, so someone running it has to notice a new
+  version exists on their own — the portable download is for a locked-down
+  machine or a quick trial, not for someone who should stay current.
+- **Unsigned, same as the installer itself.** electron-updater does not
+  require a code-signing certificate to fetch and apply an update; Windows
+  SmartScreen's prompt is the same one-time cost described under Code signing
+  above, not a new one per update.
+- **This version is the floor.** Auto-update only works for someone already
+  running a build that has this wiring in it. Anyone on an older installer has
+  to download once by hand; from whatever version first shipped this, they
+  never have to again.
 
 ### The alternatives, and why not
 
@@ -379,9 +439,9 @@ goes up to 128px, so it needs regenerating rather than copying.
 - **Windows only.** electron-builder can target macOS from the same source, but
   it needs an Apple Developer certificate and notarization to be openable at all,
   which is a larger job than the Windows signing above.
-- **No auto-update.** LinkedIn changes its markup often, and without an update
-  channel a selector fix strands every installed copy. `electron-updater` plus a
-  release feed is the next thing this needs.
+- **Auto-update reaches the installed build only** (see Auto-update above).
+  The portable `.exe` and anyone still on a pre-1.12.0 installer have to
+  download by hand at least once more.
 - **The machine has to be on.** Nothing sends overnight or with the laptop shut.
   That is the honest trade for not holding anyone's LinkedIn session.
 - **`queueStats` and `stop_all` are org-wide** (`lib/linkedin/queue.ts`,
