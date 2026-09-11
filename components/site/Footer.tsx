@@ -104,11 +104,12 @@ export default function Footer() {
           lemlist's own bar pairs copyright with a language switcher; we have
           no i18n, so the theme toggle sits just above it instead, in normal
           flow, where its own light/dark tokens are correct either way. */}
-      <div className="mx-auto mt-14 flex max-w-6xl justify-end px-6">
+      <div className="mx-auto mt-14 flex max-w-6xl justify-center px-6">
         <ThemeToggle />
       </div>
-      <div className="band-dark mx-6 mt-3 flex flex-col items-center justify-between gap-3 rounded-xl px-4 py-3 sm:flex-row">
+      <div className="band-dark mx-6 mt-3 flex flex-col items-center justify-center gap-2 rounded-xl px-4 py-3 text-center sm:flex-row sm:gap-4">
         <span className="text-sm">© {new Date().getFullYear()} Followthroo. All rights reserved.</span>
+        <span className="hidden opacity-40 sm:inline">·</span>
         <span className="font-mono text-xs opacity-70">
           Built by{" "}
           <a href={BRANDSTAC_URL} target="_blank" rel="noopener noreferrer" className="hover:opacity-100">

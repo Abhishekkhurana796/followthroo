@@ -33,6 +33,15 @@ export interface ChangelogEntry {
 export const CHANGELOG: ChangelogEntry[] = [
   {
     product: "webapp",
+    version: "0.20.8",
+    date: "Sep 2026",
+    items: [
+      "Fixed: the homepage's closing pitch and every page's plain \"Start reaching leads\" band were unreadable in dark mode — white text on what should have been a dark panel, but the panel itself was quietly turning pale since dark mode is exactly when the color it used for its background flips light",
+      "The footer's theme switch and \"Built by brandstac\" line are centered now, instead of pinned to opposite edges",
+    ],
+  },
+  {
+    product: "webapp",
     version: "0.20.7",
     date: "Sep 2026",
     items: [
