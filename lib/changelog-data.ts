@@ -33,6 +33,14 @@ export interface ChangelogEntry {
 export const CHANGELOG: ChangelogEntry[] = [
   {
     product: "webapp",
+    version: "0.27.0",
+    date: "Sep 2026",
+    items: [
+      "llms.txt now covers enrichment and AI Posts/Autopilot (previously missing), adds the homepage FAQ as direct Q&A pairs for answer engines to quote, a \"who it's for\" section, and links to the changelog, desktop app and extension pages",
+    ],
+  },
+  {
+    product: "webapp",
     version: "0.26.0",
     date: "Sep 2026",
     items: [
