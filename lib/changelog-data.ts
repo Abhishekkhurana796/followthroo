@@ -32,6 +32,23 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    product: "desktop",
+    version: "1.12.1",
+    date: "Sep 2026",
+    items: [
+      "Fixed: signing in with Google or Zoho in the Followthroo side of the window opened Chrome, signed Chrome in, and left the app signed out. It now goes through your browser the same way the panel's own Sign in button does, and brings you back signed in",
+    ],
+  },
+  {
+    product: "webapp",
+    version: "0.20.9",
+    date: "Sep 2026",
+    items: [
+      "Inside the Windows app, the sign-in and sign-up pages now offer \"Sign in with Google or Zoho in your browser\" instead of buttons that can't work there. This reaches copies of the app that are already installed, without waiting for an update",
+      "Fixed: \"Try signing in again\" after a failed Windows app sign-in finished in the browser and never went back to the app",
+    ],
+  },
+  {
     product: "webapp",
     version: "0.20.8",
     date: "Sep 2026",

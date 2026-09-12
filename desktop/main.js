@@ -22,6 +22,7 @@ const {
 const path = require("node:path");
 const { autoUpdater } = require("electron-updater");
 const store = require("./store");
+const { isAppUrl, isProviderSignIn } = require("./navigation");
 const { runBatch, MAX_PER_DAY } = require("./runner");
 
 let win = null;
@@ -83,26 +84,46 @@ function createWindow() {
   webView = new WebContentsView({
     webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true },
   });
+  // Lets the web app tell it is in here, so its sign-in page can offer the
+  // browser handoff instead of Google and Zoho buttons that cannot work.
+  // Appended, not replaced — and nothing of Google's ever loads in this view, so
+  // it is not the spoofing the sign-in comment further down rules out.
+  webView.webContents.setUserAgent(`${webView.webContents.getUserAgent()} FollowthrooDesktop/${app.getVersion()}`);
   win.contentView.addChildView(webView);
   webView.webContents.loadURL(`${appOrigin()}/dashboard`);
   layout();
   win.on("resize", layout);
 
-  // Keep the embedded view on our own app. Anything else — a Google sign-in, a
-  // help article, the 80MB installer download link — belongs in the real
-  // browser, where the user can see the address bar.
+  // Keep the embedded view on our own app. Anything else — a help article, the
+  // 80MB installer download link — belongs in the real browser, where the user
+  // can see the address bar.
+  //
+  // A Google or Zoho sign-in is the exception. Opening the provider's own URL in
+  // the browser signed the browser in and left this app signed out, because
+  // nothing on that path ever reaches /desktop-auth. It starts the same handoff
+  // as the panel's Sign in button instead.
   const external = ({ url }) => {
-    if (/^https:\/\//i.test(url)) shell.openExternal(url);
+    if (isProviderSignIn(url)) startExternalSignIn();
+    else if (/^https:\/\//i.test(url)) shell.openExternal(url);
     return { action: "deny" };
   };
   win.webContents.setWindowOpenHandler(external);
   webView.webContents.setWindowOpenHandler(external);
 
   webView.webContents.on("will-navigate", (e, url) => {
-    if (!url.startsWith(appOrigin())) {
-      e.preventDefault();
-      shell.openExternal(url);
-    }
+    if (isAppUrl(url, appOrigin())) return;
+    e.preventDefault();
+    if (isProviderSignIn(url)) startExternalSignIn();
+    else shell.openExternal(url);
+  });
+
+  // A server-side redirect does not fire will-navigate. A sign-in link that went
+  // through one on its way to Google would otherwise load Google's page right
+  // here, which Google refuses.
+  webView.webContents.on("will-redirect", (e, url) => {
+    if (!isProviderSignIn(url)) return;
+    e.preventDefault();
+    startExternalSignIn();
   });
 
   // Once the web app has a session, we can pair without anyone pasting a token.

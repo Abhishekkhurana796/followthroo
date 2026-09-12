@@ -68,7 +68,8 @@ export default function DesktopAuthPage() {
           <>
             <h1 className="font-display text-xl font-extrabold">That didn&apos;t work</h1>
             <p className="mt-2 text-sm text-ink-soft">{error}</p>
-            <a href="/sign-in?desktop=1" className="btn btn-primary mt-5 !py-2.5 !text-sm">
+            {/* Back through /desktop-auth, or a successful retry signs in the browser and stops there. */}
+            <a href="/sign-in?redirect=%2Fdesktop-auth" className="btn btn-primary mt-5 !py-2.5 !text-sm">
               Try signing in again
             </a>
           </>

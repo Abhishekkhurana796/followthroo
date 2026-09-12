@@ -59,6 +59,7 @@ be recalled.
 | `runner.js` | The run itself: claim → navigate → act → report, with the stop conditions. |
 | `page-actions.js` | What happens on the LinkedIn page. Shared with the verification scripts. |
 | `store.js` | Settings and today's count, as JSON in the OS app-data folder. |
+| `navigation.js` | Which URLs the web view may load, and which are a Google/Zoho sign-in that has to go through the browser. Plain Node, so it can be checked without Electron. |
 
 `page-actions.js` is the one to be careful with. It runs inside the page, so it
 must stay self-contained — no imports, no closure over module scope — because
@@ -78,6 +79,25 @@ That split is a security boundary, not a layout choice. The panel's preload can
 launch browser automation against the user's LinkedIn; attaching it to remote
 content would hand that reach to anything the page loads. **The web view gets no
 preload at all.** If you ever find yourself adding one, stop.
+
+### Signing in
+
+Signing in never finishes inside the app: Google checks the user agent and
+refuses embedded browsers. The panel's **Sign in** button opens
+`/sign-in?redirect=/desktop-auth` in the system browser; `/desktop-auth` turns
+that browser's session into a one-time code and hands it back over
+`followthroo://`, and `completeSignIn` in `main.js` adopts it.
+
+The web view's own Google and Zoho buttons take the same route. Before 1.12.1
+they did not: the view sent the provider's URL itself to the browser, which
+signed the *browser* in — its state cookie lived in the app, and it returned to
+`/dashboard`, not `/desktop-auth` — and left the app signed out. `navigation.js`
+now recognises a provider sign-in and starts the handoff instead of opening the
+URL. The view's user agent ends in `FollowthrooDesktop/<version>`, and the
+sign-in page (`components/auth/SocialSignIn.tsx`) uses that — or Electron's
+default user agent, for older installs — to show one "in your browser" button
+in place of buttons that cannot work there. Email and password still sign in
+inside the app.
 
 A third window appears during a run: the Chrome that Playwright drives. That one
 is the one to leave alone, and a red bar across the top of every page it visits
