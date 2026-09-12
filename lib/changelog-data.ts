@@ -33,6 +33,17 @@ export interface ChangelogEntry {
 export const CHANGELOG: ChangelogEntry[] = [
   {
     product: "webapp",
+    version: "0.25.0",
+    date: "Sep 2026",
+    items: [
+      "New: Posts, under Automate. Write and schedule a LinkedIn post by hand or with AI — pick a model, find a trending topic with sources, and either save it as a draft or schedule it",
+      "Autopilot: a standing job that finds topics on a schedule (every N days, or chosen weekdays) and writes a draft for you to approve, or publishes straight to your feed with no review step",
+      "One uploaded image per post. Instagram shows as \"coming soon\", with a Notify me",
+      "AI posts cost 10 credits on a standard model, 20 on premium, charged per variant only once it's actually written",
+    ],
+  },
+  {
+    product: "webapp",
     version: "0.24.0",
     date: "Sep 2026",
     items: [

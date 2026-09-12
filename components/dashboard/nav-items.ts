@@ -1,6 +1,6 @@
 import {
   LayoutDashboard, Users, Rocket, FileText, Inbox, Send,
-  ListChecks, BarChart3, Settings, GitBranch, Radio,
+  ListChecks, BarChart3, Settings, GitBranch, Radio, PenSquare,
   type LucideIcon,
 } from "lucide-react";
 import type { TourTargetId } from "./tour/target";
@@ -48,6 +48,14 @@ export type NavGroup = { title?: string; items: NavItem[] };
  * Sequences is deliberately absent. In this product a sequence *is* a campaign
  * — CampaignsClient calls them that — and two rows leading to one screen is
  * exactly what this file exists to prevent.
+ *
+ * **Posts joined Automate on 2026-09-13** (P3). It earns its own row rather
+ * than folding into Campaigns or Channels for the same reason LinkedIn itself
+ * did before the 2026-09-08 restructure: it is not a step in an outreach
+ * sequence and not a channel you send through — it is standing, scheduled
+ * work against your OWN feed (Autopilot), plus the drafts and history that
+ * work produces. A destination with a URL, one click from the rail, same as
+ * everything else here.
  */
 export const NAV_GROUPS: NavGroup[] = [
   { items: [{ label: "Home", href: "/dashboard", icon: LayoutDashboard }] },
@@ -66,6 +74,7 @@ export const NAV_GROUPS: NavGroup[] = [
     title: "Automate",
     items: [
       { label: "Campaigns", href: "/dashboard/campaigns", icon: Rocket },
+      { label: "Posts", href: "/dashboard/posts", icon: PenSquare },
       { label: "Templates", href: "/dashboard/templates", icon: FileText },
       { label: "Tasks", href: "/dashboard/tasks", icon: ListChecks },
     ],
