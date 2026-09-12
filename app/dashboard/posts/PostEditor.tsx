@@ -204,6 +204,10 @@ export default function PostEditor({ postId }: { postId?: string }) {
         {aiOpen && (
           <Panel className="h-fit space-y-4">
             <h2 className="font-display text-sm font-bold uppercase tracking-wide text-ink-soft">Write with AI</h2>
+            {/* Repeated here, not just at the top of the left column — this panel is
+                where the user is looking when a research or write call fails, and an
+                error that only appears elsewhere reads as "nothing happened". */}
+            {error && <Banner kind="error">{error}</Banner>}
             <div>
               <Label>Model</Label>
               <Select value={model} onChange={(e) => setModel(e.target.value)}>
