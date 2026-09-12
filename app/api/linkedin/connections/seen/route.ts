@@ -31,5 +31,7 @@ export async function POST(req: NextRequest) {
   const parsed = Body.safeParse(await req.json().catch(() => null));
   if (!parsed.success) return withCors(fail("Expected { profileUrls: string[] }, up to 200.", 422));
 
-  return withCors(ok(await recordConnectionsSeen(account.organizationId, parsed.data.profileUrls)));
+  return withCors(
+    ok(await recordConnectionsSeen(account.organizationId, parsed.data.profileUrls, account.autoEnrichOnAccept)),
+  );
 }

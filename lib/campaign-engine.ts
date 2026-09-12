@@ -15,7 +15,7 @@ import { logActivity } from "./crm";
 import { jitterMs } from "./ratelimit";
 import { enqueueJob } from "./queue";
 import { processSendJob } from "./job-processor";
-import type { Enrollment } from "@prisma/client";
+import type { Enrollment, Campaign } from "@prisma/client";
 import { INVITE_NOTE_MAX, worstCaseNoteLength } from "./linkedin/note";
 import { startOfOrgDay } from "./org-day";
 import { isOutOfCredits, type Refusal } from "./billing/meter";
@@ -59,7 +59,10 @@ export const SendNode = z.object({
 export const ConditionNode = z.object({
   id: z.string(),
   type: z.literal("condition"),
-  on: z.enum(["replied", "not_replied", "opened", "not_opened", "clicked"]),
+  /// has_email / has_phone read the lead as it stands right now — including a
+  /// value an Enrich step (or anything else) just filled in — not an event
+  /// since enrollment, the way replied/opened/clicked do.
+  on: z.enum(["replied", "not_replied", "opened", "not_opened", "clicked", "has_email", "has_phone"]),
   withinDays: z.number().min(0).optional(),
   onYes: z.string().nullable().optional(),
   onNo: z.string().nullable().optional(),
@@ -72,10 +75,24 @@ export const WaitNode = z.object({
   next: z.string().nullable().optional(),
 });
 
+/// Find email and phone from a 1st-degree connection's LinkedIn Contact info,
+/// via the desktop app. Parks the enrollment until the lookup finishes, or
+/// for at most 7 days if it never does (a lead who was never a connection,
+/// or whose lookup nobody's desktop app ever picked up) — see
+/// lib/linkedin/enrich.ts and resumeAfterEnrich below.
+export const EnrichNode = z.object({
+  id: z.string(),
+  type: z.literal("enrich"),
+  next: z.string().nullable().optional(),
+});
+
 export const ExitNode = z.object({ id: z.string(), type: z.literal("exit") });
 
-export const CampaignNode = z.discriminatedUnion("type", [SendNode, ConditionNode, WaitNode, ExitNode]);
+export const CampaignNode = z.discriminatedUnion("type", [SendNode, ConditionNode, WaitNode, EnrichNode, ExitNode]);
 export type CampaignNode = z.infer<typeof CampaignNode>;
+
+/** How long an Enrich step waits for its lookup before moving on regardless. */
+const ENRICH_TIMEOUT_MS = 7 * 86_400_000;
 
 /**
  * What a step actually does on LinkedIn.
@@ -320,6 +337,104 @@ export async function resumeWaitingForCredits(organizationId: string) {
   return resumed;
 }
 
+/**
+ * The `enrich` node itself: queue a lookup and park the enrollment on this
+ * exact node, or — if this call is the 7-day timeout firing on a lookup that
+ * never finished — give up waiting and move on anyway.
+ *
+ * Distinguishing "first time here" from "the timeout fired" is done by
+ * whether a LinkedInEnrichment row for this enrollment+node is still open:
+ * completeEnrichment moves the enrollment on the moment it finishes (see
+ * resumeAfterEnrich below), so the only way advanceEnrollment reaches this
+ * node a second time is the parked nextRunAt elapsing unanswered.
+ */
+async function advanceEnrich(enr: Enrollment & { campaign: Campaign }, node: z.infer<typeof EnrichNode>) {
+  const orgId = enr.organizationId ?? enr.campaign.organizationId;
+  if (!orgId) return finish(enr.id, "stopped");
+
+  const { enqueueEnrichment } = await import("./linkedin/enrich");
+  const open = await prisma.linkedInEnrichment.findFirst({
+    where: { enrollmentId: enr.id, nodeId: node.id, status: { in: ["pending", "in_progress"] } },
+  });
+
+  if (!open) {
+    const lead = await prisma.lead.findUnique({ where: { id: enr.leadId }, select: { linkedinUrl: true } });
+    if (lead?.linkedinUrl) {
+      await enqueueEnrichment({
+        organizationId: orgId,
+        leadId: enr.leadId,
+        linkedinUrl: lead.linkedinUrl,
+        source: "campaign",
+        campaignId: enr.campaignId,
+        enrollmentId: enr.id,
+        nodeId: node.id,
+      });
+    }
+    // Parked here, at this exact node, until completeEnrichment moves it on —
+    // or up to 7 days, whichever comes first. No lead.linkedinUrl means there
+    // is nothing to look up; the timeout still applies, so the campaign
+    // simply moves on in 7 days rather than stalling forever.
+    await prisma.enrollment.update({ where: { id: enr.id }, data: { nextRunAt: new Date(Date.now() + ENRICH_TIMEOUT_MS) } });
+    await enqueueJob({ kind: "advance", enrollmentId: enr.id }, ENRICH_TIMEOUT_MS);
+    return;
+  }
+
+  // Still open after 7 days: the lead never became a 1st-degree connection,
+  // or no desktop app ever picked the lookup up. Not a failure of the
+  // sequence — it moves on exactly as it would if the lookup had come back
+  // empty.
+  await prisma.linkedInEnrichment.updateMany({
+    where: { id: open.id, status: "pending" },
+    data: { status: "skipped", result: "timed out — 7 days with no 1st-degree connection or no desktop app to run it" },
+  });
+  await logActivity({
+    organizationId: orgId,
+    leadId: enr.leadId,
+    campaignId: enr.campaignId,
+    type: "enrollment_advanced",
+    meta: { from: node.id, reason: "enrich_timeout" },
+  }).catch(() => {});
+
+  const nextId = node.next ?? null;
+  if (!nextId) return finish(enr.id, "completed");
+  const graph = normalizeSequence(enr.campaign.sequence);
+  const nextNode = graph.nodes[nextId];
+  if (!nextNode) return finish(enr.id, "completed");
+  await scheduleAdvance(enr.id, nextNode);
+}
+
+/**
+ * Called from lib/linkedin/enrich.ts the moment a lookup finishes: move the
+ * enrollment past the Enrich step immediately, rather than waiting for its
+ * 7-day timeout. A no-op if the enrollment has since stopped, or moved off
+ * this node some other way (the timeout already fired, the campaign was
+ * stopped) — `currentNodeId` no longer matching `nodeId` is exactly that race,
+ * caught by the same claim-style guard advanceEnrollment uses elsewhere.
+ */
+export async function resumeAfterEnrich(enrollmentId: string, nodeId: string) {
+  const enr = await prisma.enrollment.findUnique({ where: { id: enrollmentId }, include: { campaign: true } });
+  if (!enr || enr.status !== "active" || enr.currentNodeId !== nodeId) return;
+  const orgId = enr.organizationId ?? enr.campaign.organizationId;
+  if (!orgId) return;
+
+  const graph = normalizeSequence(enr.campaign.sequence);
+  const node = graph.nodes[nodeId];
+  const nextId = node && node.type === "enrich" ? node.next : null;
+
+  await logActivity({
+    organizationId: orgId,
+    leadId: enr.leadId,
+    campaignId: enr.campaignId,
+    type: "enrollment_advanced",
+    meta: { from: nodeId, reason: "enrich_completed" },
+  }).catch(() => {});
+
+  if (!nextId) return finish(enr.id, "completed");
+  const nextNode = graph.nodes[nextId];
+  if (!nextNode) return finish(enr.id, "completed");
+  await scheduleAdvance(enr.id, nextNode);
+}
+
 /** Has the lead replied since this enrollment began (optionally within N days)? */
 /**
  * Has this contact replied since being enrolled?
@@ -367,6 +482,14 @@ async function evaluateCondition(enr: Enrollment, node: z.infer<typeof Condition
     case "opened": return hasActivity(enr, "opened");
     case "not_opened": return !(await hasActivity(enr, "opened"));
     case "clicked": return hasActivity(enr, "clicked");
+    case "has_email":
+    case "has_phone": {
+      // Read now, not at enrollment time — this is what makes Enrich → "has
+      // email?" → Email useful: the value it's checking may have been filled
+      // in moments ago by the Enrich step just before it.
+      const lead = await prisma.lead.findUnique({ where: { id: enr.leadId }, select: { email: true, phone: true } });
+      return !!(node.on === "has_email" ? lead?.email : lead?.phone);
+    }
     default: return false;
   }
 }
@@ -438,6 +561,8 @@ export async function advanceEnrollment(enrollmentId: string): Promise<void> {
     nextId = node.next ?? null;
   } else if (node.type === "wait") {
     nextId = node.next ?? null;
+  } else if (node.type === "enrich") {
+    return advanceEnrich(enr, node);
   } else if (node.type === "condition") {
     const yes = await evaluateCondition(enr, node);
     await prisma.enrollment.update({

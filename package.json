@@ -2,7 +2,7 @@
   "name": "followthroo",
   "version": "0.1.0",
   "private": true,
-  "description": "Followthroo \u2014 AI-powered multi-channel outreach platform (email, LinkedIn, WhatsApp, social).",
+  "description": "Followthroo — AI-powered multi-channel outreach platform (email, LinkedIn, WhatsApp, social).",
   "scripts": {
     "dev": "next dev",
     "build": "prisma generate && next build",
@@ -22,6 +22,7 @@
     "@floating-ui/react": "^0.27.20",
     "@prisma/client": "^6.1.0",
     "@upstash/qstash": "^2.7.2",
+    "@vercel/blob": "^2.8.0",
     "better-auth": "^1.6.23",
     "clsx": "^2.1.1",
     "gsap": "^3.15.0",

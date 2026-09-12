@@ -4,7 +4,7 @@ import { useState } from "react";
 import useSWR from "swr";
 import {
   Plus, X, Rocket, Mail, Link as LinkIcon, MessageSquare, Clock, ArrowDown,
-  Sparkles, Server, GitBranch, LayoutTemplate, PenLine, Trash2, Users, StopCircle, Pencil, Square,
+  Sparkles, Server, GitBranch, LayoutTemplate, PenLine, Trash2, Users, StopCircle, Pencil, Square, IdCard,
 } from "lucide-react";
 import { api } from "@/lib/client";
 import { Banner, DashHeader, Dialog, Input, Label, Panel, Select, useConfirm } from "@/components/ui";
@@ -88,7 +88,15 @@ type SendNode = {
   noteFor?: "everyone" | "picked" | "none";
   waitDays: number;
 };
-type CondNode = { type: "condition"; on: "replied" | "opened" | "clicked"; yes: "stop" | "continue"; no: "stop" | "continue" };
+type CondNode = {
+  type: "condition";
+  on: "replied" | "opened" | "clicked" | "has_email" | "has_phone";
+  yes: "stop" | "continue";
+  no: "stop" | "continue";
+};
+/** Find email and phone from LinkedIn Contact info. No fields of its own — see
+ *  lib/campaign-engine.ts's EnrichNode and lib/linkedin/enrich.ts. */
+type EnrichNode = { type: "enrich" };
 /**
  * A node the builder cannot create but must not destroy.
  *
@@ -98,10 +106,11 @@ type CondNode = { type: "condition"; on: "replied" | "opened" | "clicked"; yes: 
  * quietly corrupted is worse than a button you do not have.
  */
 type OpaqueNode = { type: "opaque"; raw: Record<string, unknown> };
-type BuilderNode = SendNode | CondNode | OpaqueNode;
+type BuilderNode = SendNode | CondNode | EnrichNode | OpaqueNode;
 
 const newSend = (waitDays = 0): SendNode => ({ type: "send", stepType: "email", templateId: "", waitDays });
 const newCond = (): CondNode => ({ type: "condition", on: "replied", yes: "stop", no: "continue" });
+const newEnrich = (): EnrichNode => ({ type: "enrich" });
 
 const PRESETS: { name: string; blurb: string; nodes: BuilderNode[] }[] = [
   { name: "3-step email drip", blurb: "Three emails, spaced a few days apart.", nodes: [newSend(0), newSend(3), newSend(5)] },
@@ -129,6 +138,9 @@ function toGraph(nodes: BuilderNode[]) {
       // Preserved verbatim apart from its position in the chain.
       const { ...rest } = n.raw;
       return rest.type === "exit" ? { ...rest, id } : { ...rest, id, next: nextId };
+    }
+    if (n.type === "enrich") {
+      return { id, type: "enrich", next: nextId };
     }
     if (n.type === "send") {
       const { channel, linkedinAction } = splitStepType(n.stepType);
@@ -178,8 +190,10 @@ function fromGraph(seq: unknown): BuilderNode[] {
         no: n.onNo ? "continue" : "stop",
       } as CondNode;
     }
-    // Anything that is not a send or a condition is kept as-is rather than being
-    // flattened into a send, which is what used to happen to wait and exit.
+    if (n.type === "enrich") return { type: "enrich" } as EnrichNode;
+    // Anything that is not a send, a condition or an enrich is kept as-is
+    // rather than being flattened into a send, which is what used to happen
+    // to wait and exit.
     if (n.type !== "send") return { type: "opaque", raw: n } as OpaqueNode;
     return asSend(n);
   });
@@ -456,13 +470,21 @@ export default function CampaignsPage() {
                         <div className="pl-4">
                           <div className="mb-4 flex items-center justify-between">
                             <div className="flex items-center gap-2">
-                              {n.type === "send" ? channelIcon(n.stepType) : n.type === "opaque" ? <Clock className="h-5 w-5 text-ink-soft" /> : <GitBranch className="h-5 w-5 text-warning" />}
+                              {n.type === "send"
+                                ? channelIcon(n.stepType)
+                                : n.type === "opaque"
+                                  ? <Clock className="h-5 w-5 text-ink-soft" />
+                                  : n.type === "enrich"
+                                    ? <IdCard className="h-5 w-5 text-accent" />
+                                    : <GitBranch className="h-5 w-5 text-warning" />}
                               <span className="font-display text-xs font-bold uppercase tracking-wide">
                                 {n.type === "send"
                                   ? STEP_TYPES.find((s) => s.value === n.stepType)?.label ?? n.stepType
                                   : n.type === "opaque"
                                     ? String(n.raw.type)
-                                    : "Condition"}
+                                    : n.type === "enrich"
+                                      ? "Find email and phone"
+                                      : "Condition"}
                               </span>
                             </div>
                             <button type="button" onClick={() => setNodes((ns) => ns.filter((_, idx) => idx !== i))} className="rounded p-1 text-ink-soft transition hover:bg-danger-soft hover:text-danger">
@@ -584,6 +606,14 @@ export default function CampaignsPage() {
                                 : `Waits ${String(n.raw.waitDays ?? 1)} day(s).`}{" "}
                               Kept as it is — this builder can show it but not change it.
                             </p>
+                          ) : n.type === "enrich" ? (
+                            <p className="text-xs text-ink-soft">
+                              Opens the lead&apos;s LinkedIn Contact info on the desktop app and saves any email and phone
+                              it finds — only once they&apos;re a 1st-degree connection. Up to 3 credits, with 1 back for
+                              each of email or phone LinkedIn doesn&apos;t show; free if not a connection. Waits up to 7
+                              days for that to happen, then the sequence continues either way — check with a Condition
+                              step below.
+                            </p>
                           ) : (
                             <div className="grid gap-3">
                               <div>
@@ -592,6 +622,8 @@ export default function CampaignsPage() {
                                   <option value="replied">Replied</option>
                                   <option value="opened">Opened (needs tracking)</option>
                                   <option value="clicked">Clicked (needs tracking)</option>
+                                  <option value="has_email">Has an email address</option>
+                                  <option value="has_phone">Has a phone number</option>
                                 </Select>
                               </div>
                               <div className="grid grid-cols-2 gap-2">
@@ -624,6 +656,9 @@ export default function CampaignsPage() {
                     </button>
                     <button type="button" onClick={() => setNodes((ns) => [...ns, newCond()])} className="flex items-center gap-1 rounded-full border-2 border-dashed border-warning/40 bg-surface px-3 py-2 text-xs font-medium text-warning-strong transition hover:border-warning/40">
                       <GitBranch className="h-4 w-4" /> Condition
+                    </button>
+                    <button type="button" onClick={() => setNodes((ns) => [...ns, newEnrich()])} className="flex items-center gap-1 rounded-full border-2 border-dashed border-accent/40 bg-surface px-3 py-2 text-xs font-medium text-accent-strong transition hover:border-accent/40">
+                      <IdCard className="h-4 w-4" /> Find email &amp; phone
                     </button>
                   </div>
                 </div>

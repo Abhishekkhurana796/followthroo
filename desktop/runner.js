@@ -23,6 +23,7 @@ const { chromium } = require("playwright-core");
 const { fillLinkedInAction, readRecentConnections } = require("./page-actions");
 const { pilotAction } = require("./pilot");
 const { sendConnectionRequest } = require("./connect-flow");
+const { runEnrichmentLane } = require("./enrich-flow");
 const { CODES } = require("./outcome-codes");
 
 /**
@@ -299,6 +300,16 @@ async function runBatch({
   connectionsCheckDue = () => false,
   /** Called once the connections list has been read and reported. */
   onConnectionsChecked = () => {},
+  /**
+   * How many Contact-info lookups the enrichment lane may run once the
+   * invite lane above stops on its own (empty queue, cap reached, or the
+   * ordinary "ran out of consecutive room" failures) — never after a fatal
+   * stop (login wall, LinkedIn's own limit), which ends the whole run.
+   * 0 (the default) skips the lane entirely, which is what every existing
+   * caller — including scripts/verify-desktop-runner.ts — gets unless it
+   * opts in.
+   */
+  enrichCap = 0,
 }) {
   const summary = {
     sent: 0,
@@ -422,17 +433,24 @@ async function runBatch({
     }
 
     let consecutiveFailures = 0;
+    // Whether it's safe to move on to the enrichment lane once this loop ends
+    // — true unless something suggested the browser, the account, or the
+    // person running it wants everything to stop, not just this lane. See
+    // the enrichment-lane call right after this loop for what reads it.
+    let inviteLaneHealthy = true;
 
     while (progress() < cap) {
       if (shouldStop()) {
         summary.stoppedBecause = "You stopped the run.";
         emit("status", { message: summary.stoppedBecause });
+        inviteLaneHealthy = false;
         break;
       }
 
       if (summary.attempted >= maxAttempts) {
         summary.stoppedBecause = `Stopped after ${maxAttempts} attempts with only ${summary.sent} sent — the queue keeps returning people who cannot be invited.`;
         emit("fatal", { message: summary.stoppedBecause });
+        inviteLaneHealthy = false;
         break;
       }
 
@@ -444,6 +462,7 @@ async function runBatch({
       } catch (e) {
         summary.stoppedBecause = String((e && e.message) || e);
         emit("fatal", { message: summary.stoppedBecause });
+        inviteLaneHealthy = false;
         break;
       }
 
@@ -468,6 +487,11 @@ async function runBatch({
           'Automatic sending is off. Turn on "Send invites automatically" in Followthroo → LinkedIn, then press Start.';
         log.write({ event: "gate", code: CODES.AUTOMATIC_SENDING_DISABLED, message: summary.stoppedBecause });
         emit("fatal", { code: CODES.AUTOMATIC_SENDING_DISABLED, message: summary.stoppedBecause });
+        // Conservative on purpose: a workspace that hasn't turned on automatic
+        // sending for invites might still want enrichment to run on its own,
+        // but that is a product decision left for whoever picks this up next
+        // (see docs/enrichment.md) rather than assumed here.
+        inviteLaneHealthy = false;
         break;
       }
 
@@ -642,6 +666,7 @@ async function runBatch({
       if (outcome.fatal) {
         summary.stoppedBecause = outcome.result;
         emit("fatal", { message: outcome.result });
+        inviteLaneHealthy = false;
         break;
       }
 
@@ -650,6 +675,7 @@ async function runBatch({
       if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
         summary.stoppedBecause = `Stopped after ${MAX_CONSECUTIVE_FAILURES} failures in a row — something has changed on LinkedIn, or this account is being throttled.`;
         emit("fatal", { message: summary.stoppedBecause });
+        inviteLaneHealthy = false;
         break;
       }
 
@@ -680,6 +706,26 @@ async function runBatch({
         emit("tick", { remaining: i });
         await sleep(1000);
       }
+    }
+
+    // The enrichment lane, once invites are out of the way — only when the
+    // invite lane stopped because it ran out of capacity (empty queue, cap
+    // reached), never because something told it to stop outright. Skipped
+    // entirely for a dry run and enrichCap 0, the default for every caller
+    // that hasn't opted in (including scripts/verify-desktop-runner.ts).
+    if (!dryRun && inviteLaneHealthy && enrichCap > 0 && !shouldStop()) {
+      emit("status", { message: "Looking up contact info…" });
+      const enrichSummary = await runEnrichmentLane({
+        page,
+        apiBase,
+        token,
+        cap: enrichCap,
+        log,
+        onEvent,
+        shouldStop,
+      });
+      summary.enrich = enrichSummary;
+      log.write({ event: "enrich-lane-end", ...enrichSummary });
     }
   } finally {
     await context.close().catch(() => {});

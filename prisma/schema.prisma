@@ -95,18 +95,19 @@ model Lead {
   /// stay distinguishable in reporting.
   createdKind String  @default("user")
 
-  messages           Message[]
-  activities         ActivityLog[]
-  enrollments        Enrollment[]
-  inboxThreads       InboxThread[]
-  contactIdentities  ContactIdentity[]
-  tasks              Task[]
-  notes              Note[]
-  leadSource         LeadSource?         @relation(fields: [leadSourceId], references: [id])
-  leadSourceId       String?
-  pipelineItems      PipelineItem[]
-  conversationEvents ConversationEvent[]
-  linkedInActions    LinkedInAction[]
+  messages            Message[]
+  activities          ActivityLog[]
+  enrollments         Enrollment[]
+  inboxThreads        InboxThread[]
+  contactIdentities   ContactIdentity[]
+  tasks               Task[]
+  notes               Note[]
+  leadSource          LeadSource?          @relation(fields: [leadSourceId], references: [id])
+  leadSourceId        String?
+  pipelineItems       PipelineItem[]
+  conversationEvents  ConversationEvent[]
+  linkedInActions     LinkedInAction[]
+  linkedInEnrichments LinkedInEnrichment[]
 
   @@unique([organizationId, email])
   @@index([organizationId])
@@ -303,14 +304,14 @@ model User {
   // These are read/written server-side via /api/onboarding, not through the
   // session payload — a cookie-cached session would keep replaying a finished
   // tour until the cache expired.
-  onboardingCompletedAt DateTime?
-  onboardingSkippedAt   DateTime?
-  onboardingStep        Int? // last-seen step index, so a mid-tour reload resumes
-  tourVersion           Int? // TOUR_VERSION they finished; a bump re-offers the tour
-  checklistState        Json? // { dismissedAt } — completion itself is always derived
-  themePreference       String? // "light" | "dark" | "system"
-  notificationPrefs     Json? // { taskReminders, dailyDigest } — null = defaults on
-  lastDigestAt          DateTime? // guards the daily digest against double-sending
+  onboardingCompletedAt    DateTime?
+  onboardingSkippedAt      DateTime?
+  onboardingStep           Int? // last-seen step index, so a mid-tour reload resumes
+  tourVersion              Int? // TOUR_VERSION they finished; a bump re-offers the tour
+  checklistState           Json? // { dismissedAt } — completion itself is always derived
+  themePreference          String? // "light" | "dark" | "system"
+  notificationPrefs        Json? // { taskReminders, dailyDigest } — null = defaults on
+  lastDigestAt             DateTime? // guards the daily digest against double-sending
   /// The workspace this person last switched to; a new session opens there.
   /// Without it every sign-in landed in the OLDEST membership — for an invited
   /// teammate, the empty personal workspace created at sign-up — so work
@@ -585,38 +586,38 @@ model InboxThread {
 }
 
 model InboxMessage {
-  id                String   @id @default(uuid())
-  organizationId    String? // tenant scope
-  threadId          String
-  direction         String // "inbound" | "outbound"
-  fromAddr          String?
-  toAddr            String?
-  subject           String?
-  body              String?
-  providerMessageId String? // Gmail message id / IMAP UID / SMTP id
+  id                 String   @id @default(uuid())
+  organizationId     String? // tenant scope
+  threadId           String
+  direction          String // "inbound" | "outbound"
+  fromAddr           String?
+  toAddr             String?
+  subject            String?
+  body               String?
+  providerMessageId  String? // Gmail message id / IMAP UID / SMTP id
   /// RFC-822 threading headers, kept verbatim. providerMessageId above is the
   /// provider's opaque id and is useless for correlation across mailboxes;
   /// these are the ones every mail client actually threads on.
-  rfcMessageId      String?
-  inReplyTo         String?
-  references        String[] @default([])
+  rfcMessageId       String?
+  inReplyTo          String?
+  references         String[] @default([])
   /// How this message was tied to a campaign — see lib/inbox/store.ts.
   /// header  = In-Reply-To/References matched a Message we sent (a real reply)
   /// thread  = continues a thread we already know
   /// address = the From address matched a contact, nothing more
   /// none    = unmatched
-  matchKind         String   @default("none")
+  matchKind          String   @default("none")
   /// The campaign this message belongs to: the one that sent it (outbound), or
   /// the one it answers (inbound, header or thread match only — an address match
   /// is a new message, and naming a campaign there would claim a reply that
   /// never happened).
-  campaignId        String?
+  campaignId         String?
   /// Inbound, header match: the Message this replies to.
   inReplyToMessageId String?
   /// Outbound, typed by a person in the Inbox rather than sent by a campaign.
-  sentByUserId      String?
-  sentAt            DateTime @default(now())
-  createdAt         DateTime @default(now())
+  sentByUserId       String?
+  sentAt             DateTime @default(now())
+  createdAt          DateTime @default(now())
 
   thread InboxThread @relation(fields: [threadId], references: [id], onDelete: Cascade)
 
@@ -666,6 +667,15 @@ model LinkedInAccount {
   selectedCampaignIds String[]  @default([]) // empty = drain all campaigns' LinkedIn actions
   campaignSettings    Json      @default("{}") // per-campaign override: { [campaignId]: { cap, minDelaySec, maxDelaySec, mode, enabled } }
   lastSeenAt          DateTime?
+  /// Contact-info lookups (P2). Kept low on purpose — opening a profile's Contact
+  /// info all day is exactly the pattern LinkedIn's abuse detection is tuned for,
+  /// so this is a much smaller number than dailyScrapeCap (a row read from a
+  /// results page) or dailyInviteCap.
+  dailyEnrichCap      Int       @default(150)
+  /// Off by default: queue an enrichment automatically once an invitation is
+  /// accepted (recordConnectionsSeen), rather than only from the Leads bulk
+  /// action, the lead record, or a campaign Enrich step.
+  autoEnrichOnAccept  Boolean   @default(false)
 
   // ---- Official LinkedIn OAuth ----
   // Sign In with LinkedIn (OpenID Connect) + Share on LinkedIn. This is the
@@ -673,17 +683,17 @@ model LinkedInAccount {
   // lets us post as them. It does NOT grant search, invites or messaging —
   // no LinkedIn API tier sells those, which is why the extension still exists
   // alongside this rather than being replaced by it. See lib/linkedin/oauth.ts.
-  liMemberId          String? // OIDC `sub` — LinkedIn's stable id for the person
-  liPictureUrl        String?
-  liEmail             String?
-  liAccessToken       String? // ENCRYPTED — lib/db-encryption.ts
-  liRefreshToken      String? // ENCRYPTED — partner-gated, usually absent
-  liTokenExpiresAt    DateTime? // 60 days from consent; no refresh for most apps
-  liScopes            String[]  @default([])
-  liConnectedAt       DateTime?
+  liMemberId       String? // OIDC `sub` — LinkedIn's stable id for the person
+  liPictureUrl     String?
+  liEmail          String?
+  liAccessToken    String? // ENCRYPTED — lib/db-encryption.ts
+  liRefreshToken   String? // ENCRYPTED — partner-gated, usually absent
+  liTokenExpiresAt DateTime? // 60 days from consent; no refresh for most apps
+  liScopes         String[]  @default([])
+  liConnectedAt    DateTime?
 
-  createdAt           DateTime  @default(now())
-  updatedAt           DateTime  @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@unique([organizationId, userId])
   @@index([organizationId])
@@ -721,6 +731,48 @@ model LinkedInAction {
   @@index([leadId])
   // Reports and the Outbox's invitations tab.
   @@index([organizationId, kind, status])
+}
+
+/// A request to read one person's LinkedIn Contact info, run by the desktop app
+/// on a 1st-degree connection. See lib/linkedin/enrich.ts.
+model LinkedInEnrichment {
+  id             String    @id @default(uuid())
+  organizationId String
+  leadId         String
+  lead           Lead      @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  linkedinUrl    String
+  /// pending | in_progress (desktop app has it open) | done | skipped (not a
+  /// 1st-degree connection) | failed (technical — profile gone, page changed)
+  status         String    @default("pending")
+  /// manual (Leads bulk action or the lead record) | bulk (same, kept distinct
+  /// from "manual" only for reporting) | campaign (an Enrich step) |
+  /// auto_accept (autoEnrichOnAccept, right after an invite was accepted)
+  source         String
+  campaignId     String?
+  enrollmentId   String?
+  /// The campaign node this came from — completing it is what tells
+  /// scheduleAdvance which Enrich step to move past.
+  nodeId         String?
+  attempts       Int       @default(0)
+  /// 1st | 2nd | 3rd | out_of_network — what the desktop app read off the page.
+  /// Only a 1st-degree connection's Contact info is ever opened.
+  degree         String?
+  foundEmail     String?
+  foundPhone     String?
+  /// Websites, IM handles, birthday, "connected since" — whatever else Contact
+  /// info showed, kept for the record even though only email/phone feed the CRM.
+  extra          Json      @default("{}")
+  /// What this lookup actually cost, once known — see enrichmentCharge in
+  /// lib/billing/plans.ts. Null while still pending or in_progress.
+  creditsCharged Int?
+  result         String? // desktop-reported detail, same convention as LinkedInAction
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  completedAt    DateTime?
+
+  @@index([organizationId, status])
+  @@index([leadId])
+  @@index([enrollmentId])
 }
 
 // ===========================================================================
@@ -1346,4 +1398,119 @@ model DomainDnsRecord {
 
   @@unique([domainId, kind, host])
   @@index([domainId])
+}
+
+// ===========================================================================
+// Posts + Autopilot (P3): AI-written LinkedIn posts, scheduled or reviewed.
+// See docs/posts.md and lib/posts/.
+// ===========================================================================
+
+/// One LinkedIn (or, once it ships, Instagram) post: written by hand, by the
+/// AI panel, or by an Autopilot. `status` is the single source of truth for
+/// where it sits — a draft nobody reviewed, a scheduled one waiting on QStash,
+/// or the outcome of trying to publish it.
+model Post {
+  id             String    @id @default(uuid())
+  organizationId String
+  userId         String // whose LinkedIn connection this posts through — personal profiles only
+  platform       String    @default("linkedin") // linkedin | instagram (instagram: "coming soon", never scheduled)
+  /// draft (being written) | needs_review (an autopilot draft, unapproved) |
+  /// scheduled (queued to publish) | publishing (the job is running) |
+  /// published | failed | skipped (needs_review's slot passed with no approval)
+  status         String    @default("draft")
+  body           String
+  mediaUrl       String? // Vercel Blob URL — an uploaded image, or one an autopilot picked
+  mediaAlt       String?
+  scheduledAt    DateTime?
+  publishedAt    DateTime?
+  /// LinkedIn's own post URN once published — lib/linkedin/post.ts.
+  externalUrn    String?
+  error          String?
+  autopilotId    String?
+  runId          String? // which AutopilotRun produced this, for "why did this get written"
+  /// The OpenRouter model id used to write it — kept per-post because an
+  /// autopilot's own model can change after the fact.
+  model          String?
+  /// The topic card it was written from: { query, sources: [{title,url}], why }
+  topic          Json?
+  /// What writing this cost, once known. Null for a post nobody ever asked AI
+  /// to write — publishing something you wrote yourself is free.
+  creditsCharged Int?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@index([organizationId, status])
+  @@index([autopilotId])
+}
+
+/// A standing instruction: "every N days (or these weekdays), find a topic
+/// about X, write it, and either publish or hold it for review."
+model Autopilot {
+  id                    String    @id @default(uuid())
+  organizationId        String
+  userId                String
+  platform              String    @default("linkedin")
+  name                  String
+  query                 String // what to search for trending topics about
+  hashtags              String[]  @default([])
+  brief                 String? // tone/angle instructions for the writer
+  /// A curated model id from lib/posts/models.ts — never a raw OpenRouter
+  /// string typed by a customer, so the credit cost printed beside it is
+  /// always the cost actually charged.
+  model                 String
+  /// 1-3. Autopilot forces this to 1 when mode is "auto" — auto-publish never
+  /// writes more than the one that goes out.
+  variants              Int       @default(1)
+  /// auto (published on schedule, no human step) | review (a needs_review
+  /// draft is created ahead of the slot and must be approved to publish)
+  mode                  String    @default("review")
+  /// { type: "every_n_days", n, time } | { type: "weekdays", days: number[], time }
+  /// `time` is "HH:MM" in `timezoneOffsetMinutes`.
+  schedule              Json
+  /// A fixed UTC offset, not an IANA zone — the same simplification
+  /// lib/org-day.ts makes for business hours, and for the same reason: it
+  /// turns "when is this due" into arithmetic instead of DST-aware calendar
+  /// math. 330 = IST.
+  timezoneOffsetMinutes Int       @default(330)
+  /// How many hours before the slot a review draft is created. Auto mode
+  /// ignores this — its job runs the slot itself, ~15 minutes early.
+  reviewLeadHours       Int       @default(3)
+  enabled               Boolean   @default(true)
+  /// When this autopilot next fires — either "create the review draft" or
+  /// "publish", depending on mode. The posts-sweep claims on this column.
+  nextRunAt             DateTime?
+  lastRunAt             DateTime?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  @@index([organizationId, enabled])
+  @@index([nextRunAt])
+}
+
+/// One firing of an autopilot: what topics it found, and whether it produced
+/// a post. Kept mainly so "why did this draft get written" has an answer.
+model AutopilotRun {
+  id          String   @id @default(uuid())
+  autopilotId String
+  /// found_topics | drafted | published | skipped_no_topics | failed
+  status      String
+  topics      Json     @default("[]")
+  error       String?
+  createdAt   DateTime @default(now())
+
+  @@index([autopilotId])
+}
+
+/// "Notify me" on the Instagram coming-soon page. Nothing more than a mailing
+/// list until Instagram actually ships.
+model ProductInterest {
+  id             String   @id @default(uuid())
+  organizationId String
+  userId         String
+  /// instagram_posts — the only thing this exists for today; a bare string
+  /// rather than an enum so a second "notify me" doesn't need a migration.
+  feature        String
+  createdAt      DateTime @default(now())
+
+  @@unique([organizationId, userId, feature])
 }

@@ -35,17 +35,44 @@ export interface PostResult {
 }
 
 /**
- * Publish text to the connected member's feed.
- *
- * Deliberately text-only for now. Images and documents each need a separate
- * upload-then-reference dance against a different endpoint, and shipping them
- * half-done would mean a post that silently loses its attachment.
+ * Register an image with LinkedIn, upload its bytes, and return the asset
+ * URN a post's `content.media` references. Two-step, per LinkedIn's Images
+ * API: `initializeUpload` hands back a signed PUT URL and the asset's own
+ * URN, then the bytes go straight to that URL — never through our own
+ * `/rest/*` surface.
+ */
+async function uploadImage(accessToken: string, memberUrn: string, imageBytes: Uint8Array): Promise<string> {
+  const init = await fetch("https://api.linkedin.com/rest/images?action=initializeUpload", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+      "LinkedIn-Version": API_VERSION,
+      "X-Restli-Protocol-Version": "2.0.0",
+    },
+    body: JSON.stringify({ initializeUploadRequest: { owner: memberUrn } }),
+  });
+  if (!init.ok) throw new Error(`LinkedIn refused to start the image upload (${init.status}).`);
+  const initJson = (await init.json()) as { value: { uploadUrl: string; image: string } };
+
+  const put = await fetch(initJson.value.uploadUrl, { method: "PUT", body: imageBytes as BodyInit });
+  if (!put.ok) throw new Error(`Uploading the image bytes failed (${put.status}).`);
+
+  return initJson.value.image; // e.g. "urn:li:image:C4E10AQ..."
+}
+
+/**
+ * Publish text — and, when given, one image — to the connected member's
+ * feed. `imageUrl` is fetched server-side (a Vercel Blob URL, typically) and
+ * re-uploaded to LinkedIn; the bytes never touch the browser.
  */
 export async function postToFeed(opts: {
   organizationId: string;
   userId: string;
   text: string;
   visibility?: PostVisibility;
+  imageUrl?: string | null;
+  imageAlt?: string | null;
 }): Promise<PostResult> {
   const account = await prisma.linkedInAccount.findUnique({
     where: { organizationId_userId: { organizationId: opts.organizationId, userId: opts.userId } },
@@ -72,8 +99,23 @@ export async function postToFeed(opts: {
     };
   }
 
+  const authorUrn = `urn:li:person:${account.liMemberId}`;
+  let media: { id: string; altText?: string } | undefined;
+  if (opts.imageUrl) {
+    try {
+      const imgRes = await fetch(opts.imageUrl);
+      if (!imgRes.ok) throw new Error(`could not fetch the image (${imgRes.status})`);
+      const bytes = new Uint8Array(await imgRes.arrayBuffer());
+      const imageUrn = await uploadImage(account.liAccessToken, authorUrn, bytes);
+      media = { id: imageUrn, ...(opts.imageAlt ? { altText: opts.imageAlt } : {}) };
+    } catch (e) {
+      console.error("[linkedin/post] image upload failed, posting text only:", e);
+      return { ok: false, error: `Couldn't attach the image: ${e instanceof Error ? e.message : String(e)}` };
+    }
+  }
+
   const body = {
-    author: `urn:li:person:${account.liMemberId}`,
+    author: authorUrn,
     commentary: opts.text,
     visibility: opts.visibility ?? "PUBLIC",
     distribution: {
@@ -83,6 +125,7 @@ export async function postToFeed(opts: {
     },
     lifecycleState: "PUBLISHED",
     isReshareDisabledByAuthor: false,
+    ...(media ? { content: { media } } : {}),
   };
 
   const res = await fetch(POSTS_URL, {

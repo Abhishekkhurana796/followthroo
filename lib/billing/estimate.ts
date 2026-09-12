@@ -13,6 +13,7 @@ import { CREDIT_COSTS } from "./plans";
 type RawStep = { type?: string; channel?: string; linkedinAction?: string | null; noteFor?: string | null };
 
 function stepCost(step: RawStep) {
+  if (step.type === "enrich") return CREDIT_COSTS.enrich; // the ceiling — completeEnrichment often charges less, never more
   switch (step.channel) {
     case "email":
       return CREDIT_COSTS.email_send;
@@ -30,6 +31,8 @@ function stepCost(step: RawStep) {
 export function creditsPerLead(sequence: unknown): number {
   const steps: RawStep[] = Array.isArray(sequence)
     ? (sequence as RawStep[])
-    : (((sequence as { nodes?: RawStep[] } | null)?.nodes ?? []) as RawStep[]).filter((n) => n.type === "send");
+    : (((sequence as { nodes?: RawStep[] } | null)?.nodes ?? []) as RawStep[]).filter(
+        (n) => n.type === "send" || n.type === "enrich",
+      );
   return steps.reduce((sum, step) => sum + stepCost(step), 0);
 }

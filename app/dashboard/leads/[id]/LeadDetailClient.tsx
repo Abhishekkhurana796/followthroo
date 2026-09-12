@@ -313,6 +313,8 @@ function ProfileColumn({
   lead, onChanged, onError,
 }: { lead: Lead; onChanged: () => Promise<void>; onError: (m: string | null) => void }) {
   const [busy, setBusy] = useState(false);
+  const [enriching, setEnriching] = useState(false);
+  const [enrichMsg, setEnrichMsg] = useState<string | null>(null);
   const prompt = usePrompt();
 
   async function patch(data: Record<string, unknown>) {
@@ -321,6 +323,24 @@ function ProfileColumn({
       await api(`/api/leads/${lead.id}`, { method: "PATCH", body: data });
       await onChanged();
     } catch (e) { onError((e as Error).message); } finally { setBusy(false); }
+  }
+
+  /** Find email and phone from LinkedIn's Contact info, via the desktop app. */
+  async function enrich() {
+    setEnriching(true);
+    setEnrichMsg(null);
+    try {
+      const res = await api<{ queued: number; skipped: number }>("/api/linkedin/enrich", { body: { leadIds: [lead.id] } });
+      setEnrichMsg(
+        res.queued
+          ? "Queued — the desktop app will look this up next."
+          : "Not queued. This needs a LinkedIn URL and can't already be opted out.",
+      );
+    } catch (e) {
+      setEnrichMsg((e as Error).message);
+    } finally {
+      setEnriching(false);
+    }
   }
 
   /**
@@ -406,6 +426,22 @@ function ProfileColumn({
                 );
               })}
             </ul>
+          </div>
+        )}
+
+        {lead.linkedinUrl && (
+          <div className="mt-3 border-t border-line pt-3">
+            <button
+              disabled={enriching}
+              onClick={enrich}
+              className="flex items-center gap-1.5 text-xs font-semibold text-accent-strong hover:underline disabled:opacity-50"
+            >
+              <Sparkles className="h-3.5 w-3.5" /> Find email and phone on LinkedIn
+            </button>
+            <p className="mt-1 text-[11px] text-ink-faint">
+              Up to 3 credits · free if not yet a 1st-degree connection
+            </p>
+            {enrichMsg && <p className="mt-1 text-xs text-ink-soft">{enrichMsg}</p>}
           </div>
         )}
 

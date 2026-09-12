@@ -33,6 +33,21 @@ export interface ChangelogEntry {
 export const CHANGELOG: ChangelogEntry[] = [
   {
     product: "webapp",
+    version: "0.24.0",
+    date: "Sep 2026",
+    items: [
+      "Find email and phone from a LinkedIn connection's Contact info: a bulk action on the Leads screen, a button on the lead record, a new \"Find email and phone\" campaign step (with a Has email / Has phone condition to branch on), and an optional \"look up contact info when an invitation is accepted\" setting under LinkedIn → Limits",
+      "Up to 3 credits per lookup, refunded for whatever LinkedIn doesn't show, and free if the person isn't a 1st-degree connection yet",
+      "An existing email or phone on a lead is never overwritten — a different one found on LinkedIn is added beside it, marked \"from LinkedIn\"",
+      // No desktop-lane entry yet: the app-side lookup code (desktop/enrich-flow.js,
+      // page-actions.js's readContactInfo) is written and merged but not yet built
+      // into a released installer — its DOM selectors are unverified against a real
+      // LinkedIn account. Add the desktop 1.14.0 entry in the same commit as that
+      // release, per changelog-with-every-ship.
+    ],
+  },
+  {
+    product: "webapp",
     version: "0.23.0",
     date: "Sep 2026",
     items: [

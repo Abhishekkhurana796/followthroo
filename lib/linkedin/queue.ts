@@ -662,8 +662,13 @@ export async function settleStrandedCharges(opts: { organizationId?: string; old
  * Matched on the profile's handle. An invitation sent to a different form of the
  * URL (a Sales Navigator id, a vanity URL renamed since) cannot be matched and
  * stays "awaiting" — this undercounts rather than inventing an acceptance.
+ *
+ * `autoEnrich`: the workspace's "look up contact info when an invitation is
+ * accepted" setting (LinkedInAccount.autoEnrichOnAccept). Off by default —
+ * queuing a lookup for every acceptance would spend the daily cap on people
+ * nobody asked to look up.
  */
-export async function recordConnectionsSeen(organizationId: string, profileUrls: string[]) {
+export async function recordConnectionsSeen(organizationId: string, profileUrls: string[], autoEnrich = false) {
   const { normalize } = await import("../identity");
   const seen = new Set(profileUrls.map((u) => normalize("linkedin", u)).filter((v): v is string => !!v));
   if (seen.size === 0) return { matched: 0 };
@@ -706,6 +711,16 @@ export async function recordConnectionsSeen(organizationId: string, profileUrls:
       channel: "linkedin",
       meta: { actionId: a.id },
     });
+    if (autoEnrich) {
+      const { enqueueEnrichment } = await import("./enrich");
+      await enqueueEnrichment({
+        organizationId,
+        leadId: a.leadId,
+        linkedinUrl: a.linkedinUrl,
+        source: "auto_accept",
+        campaignId: a.campaignId,
+      }).catch(() => {});
+    }
     await recordConversationEvent({
       organizationId,
       leadId: a.leadId,

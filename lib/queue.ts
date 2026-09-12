@@ -10,6 +10,8 @@
  *  - "domain-verify-dns" — re-check a sending domain's records against public DNS
  *                (lib/domains/provision.ts). Safe to retry: it only reads DNS and
  *                records what it saw.
+ *  - "post-publish" — publish one scheduled Post (lib/posts/schedule.ts). Idempotent:
+ *                a post already published or no longer scheduled is left alone.
  *
  * Transport: Upstash QStash in production, inline setTimeout in local dev.
  *
@@ -60,7 +62,13 @@ export interface DomainVerifyDnsJob {
   domainId: string;
 }
 
-export type QueueJob = SendJob | AdvanceJob | AckJob | DomainVerifyDnsJob;
+/** Publish one already-written Post at its scheduled moment. See lib/posts/schedule.ts. */
+export interface PostPublishJob {
+  kind: "post-publish";
+  postId: string;
+}
+
+export type QueueJob = SendJob | AdvanceJob | AckJob | DomainVerifyDnsJob | PostPublishJob;
 
 /** Enqueue any job with an optional delay (ms) for sequencing + jitter. */
 export async function enqueueJob(job: QueueJob, delayMs = 0): Promise<boolean> {
