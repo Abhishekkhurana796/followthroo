@@ -45,7 +45,7 @@ const STEP_TYPES: { value: StepType; label: string; hint?: string }[] = [
   {
     value: "linkedin_invite",
     label: "LinkedIn connection request",
-    hint: "Drafted in your own LinkedIn tab. You read it and press send.",
+    hint: "Sent from the desktop app on your computer, at a human pace.",
   },
   {
     value: "linkedin_message",
@@ -82,6 +82,8 @@ type SendNode = {
   templateVersionId?: string | null;
   /** The stored kind, kept verbatim so an untouched legacy "auto" stays "auto". */
   storedAction?: string | null;
+  /** Invite steps only: who gets the template as a note. Absent on steps saved before it existed. */
+  noteFor?: "everyone" | "picked" | "none";
   waitDays: number;
 };
 type CondNode = { type: "condition"; on: "replied" | "opened" | "clicked"; yes: "stop" | "continue"; no: "stop" | "continue" };
@@ -135,6 +137,9 @@ function toGraph(nodes: BuilderNode[]) {
         // An untouched legacy step keeps the "auto" it was saved with; anything
         // the person actually chose is written explicitly.
         ...(channel === "linkedin" ? { linkedinAction: linkedinAction ?? n.storedAction ?? undefined } : {}),
+        // Only an invitation has a note to choose; left off entirely otherwise,
+        // so a step that never set it keeps the old "a note when there is one".
+        ...(n.stepType === "linkedin_invite" && n.noteFor ? { noteFor: n.noteFor } : {}),
         templateId: n.templateId || undefined,
         templateVersionId: n.templateVersionId ?? undefined,
         waitDays: Number(n.waitDays) || 0,
@@ -154,6 +159,7 @@ function fromGraph(seq: unknown): BuilderNode[] {
     templateId: (s.templateId as string) ?? "",
     templateVersionId: (s.templateVersionId as string | null) ?? null,
     storedAction: (s.linkedinAction as string | null) ?? null,
+    noteFor: (s.noteFor as SendNode["noteFor"]) ?? undefined,
     waitDays: (s.waitDays as number) ?? 0,
   });
 
@@ -511,7 +517,7 @@ export default function CampaignsPage() {
                                   measured against the longest the variables could render
                                   to, since a note that fits only when {{company}} is
                                   empty is one that fails on a real lead. */}
-                              {n.stepType === "linkedin_invite" && (() => {
+                              {n.stepType === "linkedin_invite" && n.noteFor !== "none" && (() => {
                                 const body = templates.find((t) => t.id === n.templateId)?.body ?? "";
                                 if (!body) return null;
                                 const len = worstCaseNoteLength(body);
@@ -521,6 +527,42 @@ export default function CampaignsPage() {
                                     About {len} of {INVITE_NOTE_MAX} characters once personalised
                                     {over ? " — LinkedIn will refuse this. Shorten the template." : ""}
                                   </p>
+                                );
+                              })()}
+
+                              {/* Who gets the template as a note. A free LinkedIn account
+                                  gets a handful of notes a day, so this decides which
+                                  invitations spend them. Unset reads as Everyone, which
+                                  is what every step did before the choice existed. */}
+                              {n.stepType === "linkedin_invite" && (() => {
+                                const options = [
+                                  { value: "everyone", label: "Everyone", hint: "The template above is the note. Free LinkedIn accounts send 3 notes a day — invitations beyond that wait for the next day's notes." },
+                                  { value: "picked", label: "Leads I pick", hint: "Invitations wait in LinkedIn → Queued invitations until you choose Add note or No note for each person." },
+                                  { value: "none", label: "No one", hint: "Plain connection requests. No daily note limit, and the template isn't used." },
+                                ] as const;
+                                const current = n.noteFor ?? "everyone";
+                                return (
+                                  <div>
+                                    <Label>Add a note for</Label>
+                                    <div role="radiogroup" aria-label="Add a note for" className="inline-flex flex-wrap gap-0.5 rounded-full bg-tint p-1">
+                                      {options.map((o) => {
+                                        const on = current === o.value;
+                                        return (
+                                          <button
+                                            key={o.value}
+                                            type="button"
+                                            role="radio"
+                                            aria-checked={on}
+                                            onClick={() => patchNode(i, { noteFor: o.value })}
+                                            className={`min-h-11 rounded-full px-4 text-xs font-semibold transition-colors ${on ? "bg-surface text-ink shadow-sm" : "text-ink-soft hover:text-ink"}`}
+                                          >
+                                            {o.label}
+                                          </button>
+                                        );
+                                      })}
+                                    </div>
+                                    <p className="mt-1.5 text-xs text-ink-soft">{options.find((o) => o.value === current)!.hint}</p>
+                                  </div>
                                 );
                               })()}
 

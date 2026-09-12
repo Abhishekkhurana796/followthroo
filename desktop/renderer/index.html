@@ -5,26 +5,77 @@
     <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'self';" />
     <title>Followthroo for LinkedIn</title>
     <style>
-      /* Konnect tokens (design_constraints.md §1). Fonts are the system stack
-         rather than the web app's Bricolage/Inter: the panel has to render the
-         same with no internet, and a run that has lost connectivity is exactly
-         when its status text matters most. */
+      /* Tokens from the web app's blue system (app/globals.css, light theme;
+         design_constraints.md §1), so the panel reads as the same product as the
+         app beside it. Fonts stay the system stack rather than the web app's
+         Bricolage/Inter: the panel has to render the same with no internet, and
+         a run that has lost connectivity is exactly when its status text matters
+         most. */
       :root {
-        --canvas: #fbfaf7;
+        --canvas: #fbfbfb;
         --surface: #ffffff;
-        --ink: #141414;
-        --ink-soft: #55524d;
-        --line: #e7e4dd;
-        --brand: #2b4dff;
-        --brand-ink: #1a2fb8;
-        --tint: #eef1ff;
-        --ok: #0f7b52;
-        --warn: #b91c1c;
-        --warn-tint: #fdf0ef;
+        --ink: #213856;
+        --ink-soft: #566f8f;
+        --line: #e2e8f0;
+        --line-strong: #cbd5e1;
+        --brand: #316bff;
+        --brand-ink: #1e50d6;
+        --brand-gradient: linear-gradient(135deg, #7091e5, #316bff);
+        --tint: #eaf0ff;
+        --ok: #047857;
+        --warn: #dc2626;
+        --warn-tint: #fef2f2;
         --sans: -apple-system, "Segoe UI", Roboto, sans-serif;
         --mono: "JetBrains Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
       }
       * { box-sizing: border-box; }
+      [hidden] { display: none !important; }
+
+      /* The primary button is the gradient pill, as in the web app — more
+         specific than the plain .primary rule further down. White on the
+         gradient only at button size; the small in-row Save sits on the darker
+         brand-ink so 12px white text still clears 4.5:1. */
+      button.primary { background: var(--brand-gradient); box-shadow: 0 8px 18px -12px rgba(49, 107, 255, 0.6); }
+      button.primary.small { background: var(--brand-ink); box-shadow: none; }
+
+      /* ---- Notes on the Next up list ---- */
+      .panel-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 0 0 10px; }
+      .panel-head .eyebrow { margin: 0; }
+      .notes-chip {
+        display: inline-flex; align-items: center; gap: 5px; padding: 3px 8px; border-radius: 999px;
+        background: var(--tint); color: var(--brand-ink); font-size: 11px; font-weight: 600; white-space: nowrap;
+      }
+      .notes-chip b { font: 600 9.5px/1 var(--mono); letter-spacing: 0.1em; text-transform: uppercase; }
+      ul.who > li { flex-wrap: wrap; align-items: flex-start; }
+      .who .body { flex: 1; min-width: 0; }
+      .who .right { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; flex: 0 0 auto; }
+      .who .right .kind { margin-left: 0; }
+      .note-line { display: flex; align-items: baseline; gap: 6px; font-size: 11px; color: var(--ink-soft); min-width: 0; }
+      .note-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      button.link { flex: none; font-weight: 600; text-decoration: none; }
+      button.link:hover { text-decoration: underline; }
+      .note-switch { display: flex; align-items: center; gap: 6px; font-size: 10.5px; font-weight: 600; color: var(--ink-soft); }
+      button.switch {
+        flex: none; position: relative; width: 30px; height: 17px; padding: 0; border-radius: 999px;
+        background: var(--line-strong); transition: background 0.15s ease;
+      }
+      button.switch::after {
+        content: ""; position: absolute; top: 2px; left: 2px; width: 13px; height: 13px; border-radius: 999px;
+        background: #fff; box-shadow: 0 1px 2px rgba(33, 56, 86, 0.25); transition: transform 0.15s ease;
+      }
+      button.switch[aria-checked="true"] { background: var(--brand); }
+      button.switch[aria-checked="true"]::after { transform: translateX(13px); }
+      .note-editor { flex-basis: 100%; padding-left: 32px; margin-top: 8px; }
+      .note-editor textarea {
+        width: 100%; resize: vertical; padding: 8px 10px; border: 2px solid var(--brand); border-radius: 10px;
+        font: 12.5px/1.5 var(--sans); color: var(--ink); background: var(--surface); user-select: text;
+      }
+      .note-editor textarea:focus { outline: none; border-color: var(--brand-ink); }
+      .note-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 6px; }
+      .note-actions { display: flex; gap: 6px; }
+      .counter { font: 10.5px var(--mono); color: var(--ink-soft); }
+      .counter.over { color: var(--warn); font-weight: 600; }
+      button.small { flex: none; padding: 6px 12px; font-size: 12px; }
       /* The panel occupies a fixed left strip; the hosted web app is a
          WebContentsView laid over everything to the right of it, so anything
          wider than this would simply be hidden behind the app. */
@@ -157,7 +208,7 @@
       /* Who is queued. The panel's most important content when nothing is
          running: pressing Start is irreversible, so the names have to be on
          screen before the button is. */
-      .who { max-height: 210px; overflow-y: auto; margin: 0; padding: 0; list-style: none; user-select: text; }
+      .who { max-height: 320px; overflow-y: auto; margin: 0; padding: 0; list-style: none; user-select: text; }
       .who li { padding: 8px 0; border-bottom: 1px solid var(--line); display: flex; gap: 10px; align-items: baseline; }
       .who li:last-child { border-bottom: 0; }
       .who .n { font: 600 10px/1.6 var(--mono); color: var(--ink-soft); opacity: 0.6; flex: 0 0 22px; }
@@ -177,7 +228,7 @@
     <div class="head">
       <span class="mark">F</span>
       <h1>Followthroo for LinkedIn</h1>
-      <span id="version" style="font: 600 10.5px var(--mono); color: var(--brand-ink); background: var(--tint); padding: 2px 6px; border-radius: 6px; margin-left: 2px;">v1.12.0</span>
+      <span id="version" style="font: 600 10.5px var(--mono); color: var(--brand-ink); background: var(--tint); padding: 2px 6px; border-radius: 6px; margin-left: 2px;">v1.13.0</span>
       <button class="reload" id="reload" title="Check for new leads">&#8635;</button>
       <span class="dot" id="dot" title="Status"></span>
     </div>
@@ -214,7 +265,11 @@
     </div>
 
     <div class="panel">
-      <p class="eyebrow">Next up <span id="whoCount"></span></p>
+      <div class="panel-head">
+        <p class="eyebrow">Next up <span id="whoCount"></span></p>
+        <!-- Today's personalised notes. Hidden until the server says how many. -->
+        <span class="notes-chip" id="notesChip" hidden><b>Notes</b> <span id="notesLeft"></span></span>
+      </div>
       <ul class="who" id="who"><li class="empty">Checking…</li></ul>
       <p class="hint" id="whoNote"></p>
     </div>

@@ -93,6 +93,8 @@ export interface SendContext {
   nodeId?: string;
   /** LinkedIn only: which gesture the extension should draft. */
   linkedinAction?: "invite" | "message" | "auto";
+  /** LinkedIn invitations only: the step's "Add a note for" — who gets the template as a note. */
+  noteFor?: "everyone" | "picked" | "none";
 }
 
 /**

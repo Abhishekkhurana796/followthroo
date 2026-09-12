@@ -6,7 +6,7 @@
  * one thing that works — finishing in the browser — instead of buttons that
  * open Chrome and never come back.
  *
- * Builds from 1.12.1 say so outright. Builds already installed only carry
+ * Builds from 1.13.0 say so outright. Builds already installed only carry
  * Electron's default user agent, which names both the app and Electron;
  * recognising that fixes them with a web deploy, without waiting on an update.
  */

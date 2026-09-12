@@ -68,7 +68,7 @@ function createWindow() {
     minWidth: 900,
     minHeight: 600,
     title: "Followthroo for LinkedIn",
-    backgroundColor: "#fbfaf7",
+    backgroundColor: "#fbfbfb",
     autoHideMenuBar: true,
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
@@ -403,6 +403,37 @@ ipcMain.handle("queue:peek", async () => {
     if (res.status === 401) return { ok: false, error: "Your pairing token was rejected." };
     if (!res.ok || json.ok === false) return { ok: false, error: json.error || `Server returned ${res.status}` };
     return { ok: true, ...json.data, remaining };
+  } catch (e) {
+    return { ok: false, error: `Can't reach ${check.value} (${String((e && e.message) || e)})` };
+  }
+});
+
+/**
+ * Switch a queued invitation's note on or off, or change what it says, from the
+ * Up next list.
+ *
+ * The server only allows it while the invitation is still pending, so this
+ * cannot race a run that has already picked it up — it gets told no instead.
+ */
+ipcMain.handle("queue:setNote", async (_e, { id, noteChoice, note } = {}) => {
+  const settings = store.read(app.getPath("userData"));
+  if (!settings.token) return { ok: false, error: "No pairing token yet." };
+  const check = store.normaliseApiBase(settings.apiBase);
+  if (!check.ok) return { ok: false, error: check.error };
+  if (typeof id !== "string" || !id) return { ok: false, error: "Which invitation?" };
+
+  const body = {};
+  if (noteChoice === "yes" || noteChoice === "no") body.noteChoice = noteChoice;
+  if (typeof note === "string") body.note = note;
+  try {
+    const res = await fetch(`${check.value}/api/linkedin/invitations/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      headers: { Authorization: `Bearer ${settings.token}`, "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok || json.ok === false) return { ok: false, error: json.error || `Server returned ${res.status}` };
+    return { ok: true, ...json.data };
   } catch (e) {
     return { ok: false, error: `Can't reach ${check.value} (${String((e && e.message) || e)})` };
   }

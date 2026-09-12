@@ -38,6 +38,11 @@ export const SendNode = z.object({
   /// to "auto", which is exactly what they already did — invite, falling back to
   /// a message if the person is already a connection.
   linkedinAction: z.enum(LINKEDIN_ACTIONS).optional(),
+  /// Invitations only: who gets the template as a note. "picked" holds each
+  /// invitation in LinkedIn → Queued invitations until somebody chooses; "none"
+  /// sends plain requests. Absent on steps saved before this existed, which keep
+  /// doing what they did — a note whenever there is one.
+  noteFor: z.enum(["everyone", "picked", "none"]).optional(),
   templateId: z.string().nullable().optional(),
   /// Pins this step to one snapshot of the template's wording. Without it the
   /// body is resolved live at send time, so editing the template rewrites every
@@ -141,10 +146,18 @@ export async function validateSequence(
         message: `Step ${numberOf.get(node.id)} is not a LinkedIn step, so it cannot have a LinkedIn action.`,
       };
     }
+    if (node.noteFor && (node.channel !== "linkedin" || linkedinActionFor(node) === "message")) {
+      return {
+        ok: false,
+        message: `Step ${numberOf.get(node.id)} is not a connection request, so it has no note to choose.`,
+      };
+    }
   }
 
+  // A step sending plain requests never uses its template as a note, so there is
+  // no note length to hold it to.
   const inviteSteps = nodes.filter(
-    (n) => n.type === "send" && n.channel === "linkedin" && linkedinActionFor(n) === "invite" && n.templateId,
+    (n) => n.type === "send" && n.channel === "linkedin" && linkedinActionFor(n) === "invite" && n.noteFor !== "none" && n.templateId,
   );
   if (!inviteSteps.length) return { ok: true };
 
@@ -351,6 +364,7 @@ export async function advanceEnrollment(enrollmentId: string): Promise<void> {
       organizationId: orgId,
       channel: node.channel,
       linkedinAction: node.channel === "linkedin" ? linkedinActionFor(node) : undefined,
+      noteFor: node.channel === "linkedin" && linkedinActionFor(node) !== "message" ? node.noteFor : undefined,
       nodeId: node.id,
       leadId: enr.leadId,
       campaignId: enr.campaignId,

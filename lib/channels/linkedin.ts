@@ -35,7 +35,10 @@ export const linkedinChannel: Channel = {
     if (!dbLead?.organizationId) return { ok: false, skipped: true, reason: "lead has no organization" };
 
     const kind = ctx?.linkedinAction ?? "auto";
-    const note = rendered.body || rendered.subject || null;
+    // A step set to "No one" sends plain connection requests: the template is
+    // not a note there, so it is neither stored nor held to the 300 limit.
+    const noteFor = kind === "message" ? undefined : ctx?.noteFor;
+    const note = noteFor === "none" ? null : rendered.body || rendered.subject || null;
 
     // The 300-character ceiling is LinkedIn's, and it only applies to an invite
     // note — a DM has room for thousands. Refusing here rather than letting the
@@ -58,6 +61,9 @@ export const linkedinChannel: Channel = {
       // nothing at all.
       campaignId: ctx?.campaignId ?? null,
       type: kind,
+      // Absent on steps saved before "Add a note for" existed: null keeps the old
+      // meaning, a note whenever there is one.
+      noteChoice: noteFor === undefined ? null : !note ? "no" : noteFor === "picked" ? "undecided" : "yes",
     });
     return { ok: true, providerId: action.id, reason: "queued for the LinkedIn extension" };
   },

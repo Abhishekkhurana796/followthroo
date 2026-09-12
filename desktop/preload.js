@@ -12,6 +12,8 @@ const { contextBridge, ipcRenderer } = require("electron");
 contextBridge.exposeInMainWorld("ft", {
   getSettings: () => ipcRenderer.invoke("settings:get"),
   peekQueue: () => ipcRenderer.invoke("queue:peek"),
+  /** { id, noteChoice?: "yes" | "no", note?: string } — only while the invitation is still pending. */
+  setNote: (patch) => ipcRenderer.invoke("queue:setNote", patch),
   signIn: () => ipcRenderer.invoke("auth:signin"),
   authStatus: () => ipcRenderer.invoke("auth:status"),
   togglePanel: (collapsed) => ipcRenderer.invoke("panel:toggle", collapsed),

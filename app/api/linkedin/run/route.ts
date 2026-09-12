@@ -56,6 +56,7 @@ export async function POST(req: NextRequest) {
       leadId: lead.id,
       linkedinUrl: lead.linkedinUrl!,
       note: parsed.data.note ?? null,
+      noteChoice: parsed.data.note ? "yes" : "no",
       type: parsed.data.type,
     });
     queued++;

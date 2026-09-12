@@ -348,6 +348,15 @@ async function fillLinkedInAction(action) {
       await sleep(1200);
       const ta = dlg.querySelector('textarea#custom-message, textarea[name="message"], textarea');
       if (ta) { ta.focus(); ta.value = inviteNote; ta.dispatchEvent(new Event("input", { bubbles: true })); }
+      // A Premium upsell where the note box should be: today's notes are gone.
+      // Sending without the note would ignore the choice made for this person,
+      // so close it and leave the invitation for tomorrow (see NOTE_LIMIT_REACHED).
+      const shown = ((openModal() || dlg).textContent || "").toLowerCase();
+      if (!ta && (/personali[sz]ed invitations?|free personali[sz]ed/.test(shown) || (/premium/.test(shown) && /invit/.test(shown)))) {
+        const dismiss = document.querySelector('button[aria-label="Dismiss"], button[aria-label*="close" i]');
+        if (dismiss) dismiss.click();
+        return { status: "skipped", code: "NOTE_LIMIT_REACHED", result: "LinkedIn says today's personalised notes are used up — this invitation waits for tomorrow", kind: "invite" };
+      }
     }
     if (!autoSend) {
       return { status: "drafted", result: "invitation drafted — review it and click Send yourself", kind: "invite" };

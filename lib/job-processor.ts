@@ -14,7 +14,7 @@ import type { SendJob } from "./queue";
  * Performs the actual send, updates message status in Postgres, and logs the CRM activity.
  */
 export async function processSendJob(jobData: SendJob) {
-  const { organizationId, channel, leadId, campaignId, templateId, templateVersionId, account, nodeId, linkedinAction } =
+  const { organizationId, channel, leadId, campaignId, templateId, templateVersionId, account, nodeId, linkedinAction, noteFor } =
     jobData;
 
   // Scope the lead to the job's organization — never send to another tenant's lead.
@@ -80,7 +80,7 @@ export async function processSendJob(jobData: SendJob) {
     rfcMessageId,
     // Which campaign and which LinkedIn gesture. Without this the queue could
     // not tell an invite from a message, or apply a campaign's own caps.
-    { campaignId, nodeId, linkedinAction }
+    { campaignId, nodeId, linkedinAction, noteFor }
   );
 
   // Whether delivery happens on our servers or in a person's browser. LinkedIn

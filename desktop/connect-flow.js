@@ -292,8 +292,27 @@ async function sendConnectionRequest({ page, action, onStep = () => {}, useNote 
       if (clicked.ok) {
         history.push(clicked.did);
         await sleep(700);
-        seen = await observeUntil(page, (s) => s.elements.some((e) => e.inDialog && (e.tag === "textarea" || e.tag === "input")), 6, 300);
+        seen = await observeUntil(
+          page,
+          (s) => s.noteUpsell || s.elements.some((e) => e.inDialog && (e.tag === "textarea" || e.tag === "input")),
+          6,
+          300,
+        );
         const field = seen.elements.find((e) => e.inDialog && (e.tag === "textarea" || e.tag === "input"));
+        if (!field && seen.noteUpsell) {
+          // LinkedIn puts a Premium upsell where the note box should be once a
+          // free account's personalised notes are used up. That is the day's
+          // notes gone, not this person failing — and sending without the note
+          // would ignore the choice made for them. Close it, send nothing, and
+          // let the server hold this invitation for tomorrow.
+          await page.keyboard.press("Escape").catch(() => {});
+          return {
+            status: "skipped",
+            code: CODES.NOTE_LIMIT_REACHED,
+            result: "LinkedIn says today's personalised notes are used up — this invitation waits for tomorrow",
+            kind: "invite",
+          };
+        }
         if (!field) return fail(CODES.MESSAGE_FIELD_NOT_FOUND, "the invitation dialog opened but no note field appeared");
         const typed = await runAct(page, { action: "type", index: field.i, text: note, reason: "type the note" }, seen, { goal, autoSend });
         logStep({ decision: { action: "type", index: field.i, reason: "note" }, saw: seen.elements, personName: seen.personName });

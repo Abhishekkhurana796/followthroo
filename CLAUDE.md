@@ -96,6 +96,13 @@ sequence. A premium Next.js UI sits on top.
   in a campaign, beside Email and WhatsApp, because a channel is a property of a
   step and not a place you visit. If you are about to add a "send" affordance to
   the LinkedIn screen, add it to the campaign builder instead.
+  **Deciding notes is there (2026-09-12).** The Queued invitations list on that
+  screen switches a queued invitation's note on or off and edits it; it sends
+  nothing and queues nothing. A free LinkedIn account gets 3 notes a day, so
+  which invitations carry one is a choice about people, and the people are on
+  that list. The allowance lives on the server (`noteAllowance` in
+  `lib/linkedin/queue.ts`), not in the desktop app, and an invitation somebody
+  chose a note for waits for tomorrow rather than going out without it.
 - **LinkedIn invitations are sent by the desktop app, not the extension.**
   Decided 2026-09-07. LinkedIn's API cannot send an invitation or a DM to a
   non-connection — `w_member_social` only posts to your own feed — so it takes a

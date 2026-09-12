@@ -648,6 +648,15 @@ model LinkedInAccount {
   /// session, which is the shape that gets accounts restricted fastest — but it
   /// is still their call to make rather than a default we make for them.
   autoSend            Boolean   @default(false)
+  /// free | premium | sales_navigator — how many invitations a day may carry a
+  /// note. Free LinkedIn accounts get a handful of personalised notes; paid ones
+  /// can add one to any invite up to dailyInviteCap. A starting point rather
+  /// than the authority: see notesExhaustedOn.
+  accountType         String    @default("free")
+  /// When the desktop app last saw LinkedIn's "you've used your free
+  /// personalized invitations" upsell. For the rest of that day nothing is
+  /// handed out with a note, whatever accountType says.
+  notesExhaustedOn    DateTime?
   selectedCampaignIds String[]  @default([]) // empty = drain all campaigns' LinkedIn actions
   campaignSettings    Json      @default("{}") // per-campaign override: { [campaignId]: { cap, minDelaySec, maxDelaySec, mode, enabled } }
   lastSeenAt          DateTime?
@@ -683,6 +692,10 @@ model LinkedInAction {
   type           String    @default("auto") // auto | invite | message
   linkedinUrl    String
   note           String? // rendered invite note / message body
+  /// Invitations only: yes | no | undecided (a campaign step set to "Leads I
+  /// pick" — held until someone chooses). Null on rows queued before the choice
+  /// existed, which still mean what they meant: a note when there is one.
+  noteChoice     String?
   // pending | in_progress (extension opening the tab) | drafted (filled, awaiting a human's
   // own Send click) | sent | failed | skipped
   status         String    @default("pending")

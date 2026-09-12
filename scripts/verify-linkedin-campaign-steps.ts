@@ -277,8 +277,11 @@ async function main() {
         const { GET } = await import("../app/api/linkedin/queue/route");
         const { NextRequest } = await import("next/server");
         const res = await GET(
+          // As the desktop app: the route has refused to hand work to any other
+          // client since the extension stopped claiming, so without this header
+          // the check below would be looking at an empty list.
           new NextRequest(`https://example.invalid/api/linkedin/queue?limit=5`, {
-            headers: { Authorization: `Bearer ${account.extToken}` },
+            headers: { Authorization: `Bearer ${account.extToken}`, "x-followthroo-client": "desktop" },
           }),
         );
         const body = (await res.json()) as { data?: { actions?: { autoSend?: boolean }[] } };

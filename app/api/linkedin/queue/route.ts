@@ -3,7 +3,7 @@ import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { ok, fail } from "@/lib/http";
 import { requireExtAuth } from "@/lib/linkedin/auth";
-import { claimActions, completeAction, peekActions } from "@/lib/linkedin/queue";
+import { claimActions, completeAction, noteLimitReached, peekActions } from "@/lib/linkedin/queue";
 import { corsPreflight, withCors } from "@/lib/linkedin/cors";
 
 export const runtime = "nodejs";
@@ -28,12 +28,18 @@ export async function GET(req: NextRequest) {
   // you were shown would be the list you could no longer choose not to send.
   if (req.nextUrl.searchParams.get("peek")) {
     const upto = Math.min(Math.max(Number(req.nextUrl.searchParams.get("limit") ?? 20), 1), 50);
+    const peek = await peekActions(account, upto);
     return withCors(
       ok({
         pacing: { minDelaySec: account.minDelaySec, maxDelaySec: account.maxDelaySec },
         autoSend: account.autoSend,
         dailyInviteCap: account.dailyInviteCap,
-        people: await peekActions(account, upto),
+        people: peek.people,
+        // Invitations that would go out but are waiting — on somebody's pick, or
+        // on tomorrow's notes. Kept apart from `people` so a desktop app too old
+        // to know about them still shows exactly who is next.
+        held: peek.held,
+        notes: peek.notes,
       })
     );
   }
@@ -78,6 +84,7 @@ export async function GET(req: NextRequest) {
         type: a.type,
         linkedinUrl: a.linkedinUrl,
         note: a.note,
+        noteChoice: a.noteChoice,
         leadName: a.leadName,
         autoSend: a.autoSend,
       })),
@@ -92,8 +99,8 @@ const Report = z.object({
   status: z.enum(["sent", "failed", "skipped", "drafted"]),
   result: z.string().optional(),
   // A machine-readable reason from the desktop app (outcome-codes.js). Optional
-  // and additive — stored in activity metadata, nothing branches on it yet, so a
-  // client that omits it or sends an unknown one is handled the same as today.
+  // and additive — stored in activity metadata. NOTE_LIMIT_REACHED is the one
+  // the server acts on.
   code: z.string().max(64).optional(),
   /** What was actually done. Optional: the server derives it from the action's type otherwise. */
   kind: z.enum(["invite", "message"]).optional(),
@@ -110,6 +117,13 @@ export async function POST(req: NextRequest) {
 
   if (parsed.data.liMemberName && parsed.data.liMemberName !== account.liMemberName) {
     await prisma.linkedInAccount.update({ where: { id: account.id }, data: { liMemberName: parsed.data.liMemberName } }).catch(() => {});
+  }
+
+  // LinkedIn said the day's notes are gone. Not an outcome for this person — the
+  // invitation goes back in the queue to wait for tomorrow with its note.
+  if (parsed.data.code === "NOTE_LIMIT_REACHED") {
+    const requeued = await noteLimitReached(account.id, account.organizationId, parsed.data.actionId, parsed.data.result);
+    return withCors(ok({ ok: true, requeued }));
   }
 
   const updated = await completeAction(account.organizationId, parsed.data);

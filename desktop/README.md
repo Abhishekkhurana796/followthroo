@@ -37,7 +37,10 @@ Chrome extension already used:
 |---|---|
 | Auth | `Bearer <extToken>` — the pairing token on `LinkedInAccount`, shown under LinkedIn → Browser helper |
 | Claim work | `GET /api/linkedin/queue?limit=1` |
-| Report outcome | `POST /api/linkedin/queue` with `{ actionId, status, result, code }` |
+| Report outcome | `POST /api/linkedin/queue` with `{ actionId, status, result, code }`. `code: NOTE_LIMIT_REACHED` is the one the server acts on: LinkedIn showed its Premium upsell where the note box should be, so the invitation goes back to the queue with its note and no more notes are handed out that day. |
+| Who is next | `GET /api/linkedin/queue?peek=1` — `people` (goes out, in order), `held` (waiting on a pick or on tomorrow's notes) and `notes` (today's allowance). Claims nothing. |
+| Note on or off, or reworded | `PATCH /api/linkedin/invitations/:id` with `{ noteChoice?, note? }` from the Up next list. Refused once the invitation is in a browser. |
+| Whether an invitation carries its note | Decided on the server: the choice made for the person and today's allowance (`noteAllowance` in `lib/linkedin/queue.ts`). An invitation marked "no" is handed out with `note: null`. |
 | Accepted invitations | `POST /api/linkedin/connections/seen` with `{ profileUrls }` — your connections list, read at the start of a run at most every six hours (`readRecentConnections` in `page-actions.js`, rationed by `connectionsCheckDue` in `store.js`). Never in a test run. LinkedIn announces acceptances nowhere else. |
 | Daily cap, campaign selection, pacing | `claimActions` in `lib/linkedin/queue.ts` |
 | CRM side effects | `completeAction` in `lib/linkedin/queue.ts` |
@@ -88,7 +91,7 @@ refuses embedded browsers. The panel's **Sign in** button opens
 that browser's session into a one-time code and hands it back over
 `followthroo://`, and `completeSignIn` in `main.js` adopts it.
 
-The web view's own Google and Zoho buttons take the same route. Before 1.12.1
+The web view's own Google and Zoho buttons take the same route. Before 1.13.0
 they did not: the view sent the provider's URL itself to the browser, which
 signed the *browser* in — its state cookie lived in the app, and it returned to
 `/dashboard`, not `/desktop-auth` — and left the app signed out. `navigation.js`
