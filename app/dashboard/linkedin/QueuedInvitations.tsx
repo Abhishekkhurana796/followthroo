@@ -5,6 +5,7 @@ import useSWR from "swr";
 import { ChevronDown, ChevronUp, Info } from "lucide-react";
 import { api } from "@/lib/client";
 import { Badge, Button, Textarea } from "@/components/ui";
+import { CREDIT_COSTS } from "@/lib/billing/plans";
 
 type Hold = "needs_pick" | "no_notes_left" | "no_credits" | null;
 type Invitation = {
@@ -206,6 +207,9 @@ function Row({
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
             <span className="text-sm font-semibold text-ink">{name}</span>
+            <span className="font-mono text-[10px] text-ink-faint" title="What this invitation costs when it sends">
+              {on ? CREDIT_COSTS.li_invite_note : CREDIT_COSTS.li_invite} credits
+            </span>
             {inv.hold === "no_notes_left" && <Badge>Waits for tomorrow</Badge>}
             {inv.hold === "no_credits" && <Badge>Waits for credits</Badge>}
           </div>

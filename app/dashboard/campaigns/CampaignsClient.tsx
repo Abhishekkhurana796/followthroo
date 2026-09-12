@@ -12,6 +12,7 @@ import { tourTarget } from "@/components/dashboard/tour/target";
 import Link from "next/link";
 import { INVITE_NOTE_MAX, INVITE_NOTE_WARN, worstCaseNoteLength } from "@/lib/linkedin/note";
 import { creditsPerLead } from "@/lib/billing/estimate";
+import { CREDIT_COSTS } from "@/lib/billing/plans";
 import { SUMMARY_KEY, type Summary } from "@/components/dashboard/billing/types";
 
 type Template = { id: string; channel: string; name: string; body?: string };
@@ -42,19 +43,21 @@ type Campaign = {
  */
 type StepType = "email" | "linkedin_invite" | "linkedin_message" | "whatsapp" | "social";
 
-const STEP_TYPES: { value: StepType; label: string; hint?: string }[] = [
-  { value: "email", label: "Email", hint: "Goes out from your connected mailbox." },
+const STEP_TYPES: { value: StepType; label: string; hint?: string; credits: string }[] = [
+  { value: "email", label: "Email", hint: "Goes out from your connected mailbox.", credits: `${CREDIT_COSTS.email_send} credit` },
   {
     value: "linkedin_invite",
     label: "LinkedIn connection request",
     hint: "Sent from the desktop app on your computer, at a human pace.",
+    credits: `${CREDIT_COSTS.li_invite} credits · ${CREDIT_COSTS.li_invite_note} with a note`,
   },
   {
     value: "linkedin_message",
     label: "LinkedIn message",
     hint: "Only reaches people you are already connected to — put this after a connection request.",
+    credits: `${CREDIT_COSTS.li_message} credits`,
   },
-  { value: "whatsapp", label: "WhatsApp", hint: "Needs a template WhatsApp has approved." },
+  { value: "whatsapp", label: "WhatsApp", hint: "Needs a template WhatsApp has approved.", credits: `${CREDIT_COSTS.whatsapp_send} credit` },
 ];
 
 /** The channel a step type sends on, and the LinkedIn gesture if it is one. */
@@ -517,7 +520,7 @@ export default function CampaignsPage() {
                                     }
                                   >
                                     {STEP_TYPES.map((s) => (
-                                      <option key={s.value} value={s.value}>{s.label}</option>
+                                      <option key={s.value} value={s.value}>{s.label} — {s.credits}</option>
                                     ))}
                                   </Select>
                                 </div>
@@ -532,9 +535,10 @@ export default function CampaignsPage() {
                                 </div>
                               </div>
 
-                              {STEP_TYPES.find((s) => s.value === n.stepType)?.hint && (
-                                <p className="text-xs text-ink-soft">{STEP_TYPES.find((s) => s.value === n.stepType)!.hint}</p>
-                              )}
+                              <p className="flex flex-wrap items-baseline gap-x-1.5 text-xs text-ink-soft">
+                                <span className="font-mono font-semibold text-accent-strong">{STEP_TYPES.find((s) => s.value === n.stepType)?.credits}</span>
+                                {STEP_TYPES.find((s) => s.value === n.stepType)?.hint}
+                              </p>
 
                               {/* The 300-character ceiling only exists on a connection
                                   note, so the meter only appears on that step. It is
@@ -560,9 +564,21 @@ export default function CampaignsPage() {
                                   is what every step did before the choice existed. */}
                               {n.stepType === "linkedin_invite" && (() => {
                                 const options = [
-                                  { value: "everyone", label: "Everyone", hint: "The template above is the note. Free LinkedIn accounts send 3 notes a day — invitations beyond that wait for the next day's notes." },
-                                  { value: "picked", label: "Leads I pick", hint: "Invitations wait in LinkedIn → Queued invitations until you choose Add note or No note for each person." },
-                                  { value: "none", label: "No one", hint: "Plain connection requests. No daily note limit, and the template isn't used." },
+                                  {
+                                    value: "everyone",
+                                    label: "Everyone",
+                                    hint: `${CREDIT_COSTS.li_invite_note} credits each. The template above is the note. Free LinkedIn accounts send 3 notes a day — invitations beyond that wait for the next day's notes.`,
+                                  },
+                                  {
+                                    value: "picked",
+                                    label: "Leads I pick",
+                                    hint: `${CREDIT_COSTS.li_invite_note} credits for a note, ${CREDIT_COSTS.li_invite} without. Invitations wait in LinkedIn → Queued invitations until you choose Add note or No note for each person.`,
+                                  },
+                                  {
+                                    value: "none",
+                                    label: "No one",
+                                    hint: `${CREDIT_COSTS.li_invite} credits each. Plain connection requests. No daily note limit, and the template isn't used.`,
+                                  },
                                 ] as const;
                                 const current = n.noteFor ?? "everyone";
                                 return (

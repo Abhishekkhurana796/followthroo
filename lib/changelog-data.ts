@@ -33,6 +33,14 @@ export interface ChangelogEntry {
 export const CHANGELOG: ChangelogEntry[] = [
   {
     product: "webapp",
+    version: "0.26.0",
+    date: "Sep 2026",
+    items: [
+      "Every action that spends credits now shows its cost up front, not just after: the campaign builder's step types and note choices, the LinkedIn invite dialog and bulk actions, Queued invitations' per-row cost, the AI post editor's model picker and Write buttons, autopilot's model picker and a per-run total, and Test emails' Send test button",
+    ],
+  },
+  {
+    product: "webapp",
     version: "0.25.0",
     date: "Sep 2026",
     items: [

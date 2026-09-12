@@ -8,6 +8,7 @@ import { ImagePlus, Sparkles, Search, X, Loader2, ExternalLink } from "lucide-re
 import { api } from "@/lib/client";
 import { Banner, DashHeader, Input, Label, Panel, Select, Textarea, useConfirm } from "@/components/ui";
 import { POST_MODELS } from "@/lib/posts/models";
+import { CREDIT_COSTS } from "@/lib/billing/plans";
 
 type Source = { title: string; url: string };
 type Topic = { topic: string; why: string; sources: Source[] };
@@ -48,6 +49,7 @@ export default function PostEditor({ postId }: { postId?: string }) {
   }, [existing]);
 
   const over = body.length > MAX_CHARS;
+  const modelCost = CREDIT_COSTS[POST_MODELS.find((m) => m.id === model)?.creditAction ?? "ai_post_standard"];
 
   async function research() {
     if (!query.trim()) return;
@@ -213,7 +215,7 @@ export default function PostEditor({ postId }: { postId?: string }) {
               <Select value={model} onChange={(e) => setModel(e.target.value)}>
                 {POST_MODELS.map((m) => (
                   <option key={m.id} value={m.id}>
-                    {m.label} ({m.tier === "premium" ? "premium" : "standard"})
+                    {m.label} — {CREDIT_COSTS[m.creditAction]} credits ({m.tier})
                   </option>
                 ))}
               </Select>
@@ -249,7 +251,7 @@ export default function PostEditor({ postId }: { postId?: string }) {
                       </div>
                     )}
                     <button onClick={() => writeFrom(t)} disabled={writing} className="btn btn-primary mt-2 !py-1.5 !text-xs disabled:opacity-50">
-                      {writing ? "Writing…" : "Write this"}
+                      {writing ? "Writing…" : `Write this · ${modelCost} credits`}
                     </button>
                   </li>
                 ))}
@@ -257,8 +259,9 @@ export default function PostEditor({ postId }: { postId?: string }) {
             )}
 
             <button onClick={() => writeFrom(null)} disabled={writing} className="w-full text-center text-xs font-semibold text-ink-soft hover:text-ink disabled:opacity-50">
-              Or write without a specific topic
+              {writing ? "Writing…" : `Or write without a specific topic · ${modelCost} credits`}
             </button>
+            <p className="text-center text-[11px] text-ink-faint">Charged only once it's actually written — a failed attempt costs nothing.</p>
           </Panel>
         )}
       </div>

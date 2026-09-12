@@ -7,6 +7,7 @@ import useSWR from "swr";
 import { api } from "@/lib/client";
 import { Banner, DashHeader, Input, Label, Panel, Select, Textarea, useConfirm, useToast } from "@/components/ui";
 import { POST_MODELS } from "@/lib/posts/models";
+import { CREDIT_COSTS } from "@/lib/billing/plans";
 
 type ScheduleType = "every_n_days" | "weekdays";
 type Autopilot = {
@@ -98,6 +99,8 @@ export default function AutopilotEditor({ autopilotId }: { autopilotId?: string 
 
   const offsetMin = -new Date().getTimezoneOffset(); // the browser's own offset, used as the default
   const runs = previewRuns(scheduleType, n, days, time, existing?.timezoneOffsetMinutes ?? offsetMin, reviewLeadHours, mode);
+  const perPostCost = CREDIT_COSTS[POST_MODELS.find((m) => m.id === model)?.creditAction ?? "ai_post_standard"];
+  const perRunCost = perPostCost * (mode === "auto" ? 1 : variants);
 
   async function save() {
     if (!name.trim() || !query.trim()) return setError("Name and a search query are both required.");
@@ -199,7 +202,7 @@ export default function AutopilotEditor({ autopilotId }: { autopilotId?: string 
             <Select value={model} onChange={(e) => setModel(e.target.value)} disabled={!!autopilotId}>
               {POST_MODELS.map((m) => (
                 <option key={m.id} value={m.id}>
-                  {m.label} ({m.tier})
+                  {m.label} — {CREDIT_COSTS[m.creditAction]} credits ({m.tier})
                 </option>
               ))}
             </Select>
@@ -237,6 +240,13 @@ export default function AutopilotEditor({ autopilotId }: { autopilotId?: string 
               </Select>
             </div>
           )}
+          <div className="rounded-xl bg-accent-soft/60 px-3.5 py-2.5 text-sm">
+            <span className="font-mono font-semibold text-accent-strong">{perRunCost} credit{perRunCost === 1 ? "" : "s"}</span>{" "}
+            <span className="text-ink-soft">
+              per run — {perPostCost} × {mode === "auto" ? "1 variant (auto-publish)" : `${variants} variant${variants === 1 ? "" : "s"}`}. Only charged for
+              drafts actually written; a skipped slot costs nothing.
+            </span>
+          </div>
         </Panel>
 
         <Panel className="space-y-4">
