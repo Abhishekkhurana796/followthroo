@@ -468,4 +468,115 @@ function readRecentConnections() {
     .map((slug) => `https://www.linkedin.com/in/${slug}`);
 }
 
-module.exports = { fillLinkedInAction, readRecentConnections };
+/**
+ * Read a 1st-degree connection's Contact info: email, phone, websites, and
+ * when they connected. Only ever called on a profile already confirmed
+ * 1st-degree — LinkedIn shows nothing on Contact info for anyone else, and
+ * this function does not itself decide who is eligible (see isFirstDegree
+ * inside fillLinkedInAction, and connect-flow.js's observe()-based check,
+ * which enrich-flow.js uses the same way before calling this).
+ *
+ * UNVERIFIED AGAINST A LIVE ACCOUNT. Written from LinkedIn's documented
+ * Contact info overlay markup (the `.pv-contact-info` modal, `.ci-email` /
+ * `.ci-phone` / `.ci-websites` / `.ci-connected` rows) the same way every
+ * other selector in this file started — as a best guess to be corrected here,
+ * in one place, the first time it's run against a real profile. If the
+ * overlay never opens, the likely cause is the trigger link's selector below
+ * having changed; check that first.
+ *
+ * Runs INSIDE the page: no imports, no closure over anything in this module.
+ * Never throws — every path returns a stated outcome, and the overlay is
+ * always closed again before returning, so a failed lookup does not leave a
+ * modal open over the next thing this run does.
+ */
+async function readContactInfo() {
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+  if (/\/(login|checkpoint|authwall)/.test(location.pathname) || document.querySelector('input[name="session_key"]')) {
+    return { status: "failed", result: "not logged in to LinkedIn in this browser" };
+  }
+
+  const scope = () => {
+    const h1 = document.querySelector("main h1, h1");
+    const card = h1 && (h1.closest("section") || h1.closest("div.ph5") || h1.parentElement);
+    return card || document.querySelector("main") || document.body;
+  };
+  const label = (el) => ((el && (el.getAttribute("aria-label") || el.textContent)) || "").trim();
+
+  // Positive evidence only — the same rule fillLinkedInAction uses for
+  // isFirstDegree, repeated here rather than shared because this file has no
+  // internal imports to share it through.
+  const firstDegree = () => {
+    const badge = scope().querySelector(".dist-value, .distance-badge, .pv-member-badge");
+    if (badge && /1st/i.test(badge.textContent || "")) return true;
+    return Array.from(scope().querySelectorAll('button, a[role="button"], div[role="button"]')).some((b) =>
+      /remove connection/i.test(label(b)),
+    );
+  };
+
+  if (!firstDegree()) {
+    return { status: "skipped", degree: "not_1st", result: "not a 1st-degree connection — Contact info is not shown" };
+  }
+
+  // LinkedIn's usual trigger is a link reading "Contact info" inside the
+  // profile's top card, pointing at /overlay/contact-info/.
+  //
+  // KNOWN GAP: the plan also calls for falling back to navigating that URL
+  // directly when no such link is found on the page. Not implemented here —
+  // doing that from inside this function would mean returning mid-navigation,
+  // which needs enrich-flow.js to wait for the new page rather than this
+  // function's return value. Left for whoever verifies this against a real
+  // profile first; until then, a profile with no visible "Contact info" link
+  // reports failed rather than trying the direct URL.
+  const trigger = Array.from(scope().querySelectorAll('a[href*="overlay/contact-info"], a')).find(
+    (a) => /contact info/i.test(label(a)) || /overlay\/contact-info/.test(a.getAttribute("href") || ""),
+  );
+  if (!trigger) return { status: "failed", result: "no Contact info link found on this profile" };
+  trigger.click();
+
+  await sleep(900);
+  const modal = () => document.querySelector('.pv-contact-info, [aria-label="Contact info"], .artdeco-modal[role="dialog"]');
+  let dlg = null;
+  for (let i = 0; i < 10 && !dlg; i++) {
+    dlg = modal();
+    if (!dlg) await sleep(300);
+  }
+  if (!dlg) return { status: "failed", result: "Contact info overlay did not open" };
+
+  const closeOverlay = () => {
+    const closeBtn = dlg.querySelector('button[aria-label="Dismiss"], .artdeco-modal__dismiss');
+    if (closeBtn) closeBtn.click();
+    else document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+  };
+
+  try {
+    const emailEl = dlg.querySelector('.ci-email a[href^="mailto:"], a[href^="mailto:"]');
+    const email = emailEl ? emailEl.getAttribute("href").replace(/^mailto:/i, "").split("?")[0] : null;
+
+    const phoneEl = dlg.querySelector(".ci-phone .t-14, .ci-phone span");
+    const phone = phoneEl ? (phoneEl.textContent || "").trim() : null;
+
+    const websites = Array.from(dlg.querySelectorAll('.ci-websites a[href^="http"], a[href^="http"]'))
+      .map((a) => a.getAttribute("href"))
+      .filter(Boolean)
+      .slice(0, 5);
+
+    const connectedEl = dlg.querySelector(".ci-connected .t-14, .ci-connected span");
+    const connectedSince = connectedEl ? (connectedEl.textContent || "").trim() : null;
+
+    const im = Array.from(dlg.querySelectorAll(".ci-im .t-14, .ci-im span")).map((el) => (el.textContent || "").trim());
+
+    return {
+      status: "done",
+      degree: "1st",
+      email,
+      phone,
+      extra: { websites, connectedSince, im },
+      result: email || phone ? "found" : "no email or phone shown",
+    };
+  } finally {
+    closeOverlay();
+  }
+}
+
+module.exports = { fillLinkedInAction, readRecentConnections, readContactInfo };

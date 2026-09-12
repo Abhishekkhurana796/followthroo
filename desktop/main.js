@@ -479,6 +479,13 @@ ipcMain.handle("run:start", async (_e, { dryRun = false } = {}) => {
       connectionsCheckDue: () => store.connectionsCheckDue(userDataPath),
       onConnectionsChecked: () => store.markConnectionsChecked(userDataPath),
       shouldStop: () => stopRequested,
+      // A per-run ceiling, the same relationship MAX_PER_DAY has to the
+      // server's dailyInviteCap: claimEnrichments in lib/linkedin/enrich.ts
+      // is the real enforcement, stopping at the account's own
+      // dailyEnrichCap (150 by default) regardless of what's asked for here.
+      // 0 for a dry run — a test run must leave no trace, and every
+      // enrichment claim is a real credit charge and a real page opened.
+      enrichCap: dryRun ? 0 : 30,
       onEvent: (evt) => {
         if (evt.type === "action-done" && evt.status === "sent" && !dryRun) {
           store.countSend(userDataPath);

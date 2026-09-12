@@ -41,6 +41,8 @@ type Connect = {
   maxDelaySec: number;
   autoSend: boolean;
   accountType: "free" | "premium" | "sales_navigator";
+  dailyEnrichCap: number;
+  autoEnrichOnAccept: boolean;
   account: {
     state: AccountState;
     configured: boolean;
@@ -575,8 +577,15 @@ function Limits({
   const [cap, setCap] = useState<number | "">("");
   const [minD, setMinD] = useState<number | "">("");
   const [maxD, setMaxD] = useState<number | "">("");
+  const [enrichCap, setEnrichCap] = useState<number | "">("");
   const [accountType, setAccountType] = useState<Connect["accountType"] | "">("");
   const currentType = accountType || data?.accountType || "free";
+  const autoEnrich = data?.autoEnrichOnAccept ?? false;
+
+  async function toggleAutoEnrich() {
+    await api("/api/linkedin/connect", { body: { action: "update", autoEnrichOnAccept: !autoEnrich } });
+    onSaved();
+  }
 
   // What each LinkedIn account type means for notes. The server holds the
   // numbers (lib/linkedin/queue.ts); this only has to say them.
@@ -591,11 +600,12 @@ function Limits({
     if (cap !== "") body.dailyInviteCap = Number(cap);
     if (minD !== "") body.minDelaySec = Number(minD);
     if (maxD !== "") body.maxDelaySec = Number(maxD);
+    if (enrichCap !== "") body.dailyEnrichCap = Number(enrichCap);
     if (accountType && accountType !== data?.accountType) body.accountType = accountType;
     if (!Object.keys(body).length) return;
     await api("/api/linkedin/connect", { body: { action: "update", ...body } });
     setMsg({ kind: "success", text: "Limits saved." });
-    setCap(""); setMinD(""); setMaxD(""); setAccountType("");
+    setCap(""); setMinD(""); setMaxD(""); setEnrichCap(""); setAccountType("");
     onSaved();
   }
 
@@ -638,6 +648,38 @@ function Limits({
       <div className="mt-3 flex items-center gap-2 text-xs text-ink-soft">
         <Clock className="h-3.5 w-3.5" /> A random pause inside that range is taken between actions.
       </div>
+
+      <div className="mt-6 border-t border-line pt-4">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <Label>Contact info lookups</Label>
+            <p className="mt-0.5 text-xs text-ink-soft">
+              Find email and phone as soon as someone accepts an invitation. Up to 3 credits each; free if they haven&apos;t.
+            </p>
+          </div>
+          <button
+            role="switch"
+            aria-checked={autoEnrich}
+            onClick={toggleAutoEnrich}
+            className={`relative h-6 w-11 shrink-0 rounded-full transition ${autoEnrich ? "bg-accent" : "bg-line"}`}
+          >
+            <span className={`inline-block h-5 w-5 translate-y-0.5 transform rounded-full bg-surface shadow transition ${autoEnrich ? "translate-x-5" : "translate-x-0.5"}`} />
+          </button>
+        </div>
+        <div className="mt-3 max-w-[200px]">
+          <Label>Lookups per day</Label>
+          <Input
+            type="number"
+            min={1}
+            max={500}
+            placeholder={String(data?.dailyEnrichCap ?? 150)}
+            value={enrichCap}
+            onChange={(e) => setEnrichCap(e.target.value === "" ? "" : Number(e.target.value))}
+          />
+          <p className="mt-1 text-xs text-ink-soft">Kept low on purpose — opening Contact info all day gets an account noticed.</p>
+        </div>
+      </div>
+
       <button onClick={save} className="btn btn-primary mt-4 !py-2 !text-sm">Save limits</button>
       {data && (data.queue.pending > 0 || data.queue.sentToday > 0 || data.queue.failedToday > 0) && (
         <div className="mt-4 flex gap-4 border-t border-line pt-3 text-xs text-ink-soft">

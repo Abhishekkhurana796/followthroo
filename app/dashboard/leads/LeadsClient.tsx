@@ -6,7 +6,7 @@ import useSWR from "swr";
 import { useSearchParams } from "next/navigation";
 import {
   Trash2, Upload, Plus, Tag, FolderPlus, X, Pencil, Check, Users, Linkedin,
-  AlertTriangle, CircleDot, Search, ArrowRight, Building2, Download,
+  AlertTriangle, CircleDot, Search, ArrowRight, Building2, Download, IdCard,
 } from "lucide-react";
 import { api } from "@/lib/client";
 import { cn } from "@/lib/cn";
@@ -330,6 +330,42 @@ export default function LeadsPage() {
     }
   }
 
+  /**
+   * "Find email and phone" for the selection. Estimated first — the dialog
+   * says how many of the selected leads a lookup would actually run for
+   * (a 1st-degree connection with a LinkedIn URL) before anything is queued,
+   * since most of a batch selected from a search often isn't.
+   */
+  async function bulkEnrich() {
+    const est = await api<{ eligible: number; noLinkedIn: number; optedOut: number; alreadyQueued: number }>(
+      "/api/linkedin/enrich?estimate=1",
+      { body: { leadIds: selectedIds() } },
+    );
+    if (est.eligible === 0) {
+      setMsg({ kind: "error", text: "None of the selected leads have a LinkedIn URL to look up." });
+      return;
+    }
+    const ok = await confirm({
+      title: `Find email and phone for ${est.eligible} lead${est.eligible === 1 ? "" : "s"}?`,
+      body: [
+        "Up to 3 credits each, with 1 back for each of email or phone LinkedIn doesn't show — free for anyone who isn't a 1st-degree connection yet.",
+        est.noLinkedIn ? `${est.noLinkedIn} of the selected have no LinkedIn URL and are left out.` : null,
+        est.alreadyQueued ? `${est.alreadyQueued} already have a lookup queued.` : null,
+      ]
+        .filter(Boolean)
+        .join(" "),
+      confirmLabel: `Look up ${est.eligible}`,
+    });
+    if (!ok) return;
+    try {
+      const res = await api<{ queued: number; skipped: number }>("/api/linkedin/enrich", { body: { leadIds: selectedIds() } });
+      setMsg({ kind: "success", text: `Queued ${res.queued} for the desktop app to look up.` });
+      setSelected(new Set());
+    } catch (e) {
+      setMsg({ kind: "error", text: (e as Error).message });
+    }
+  }
+
   async function createGroupFromTag(tag: string) {
     // Collect all lead IDs that have this tag from the current page
     const tagLeads = leads.filter((l) => l.tags?.includes(tag)).map((l) => l.id);
@@ -464,6 +500,9 @@ export default function LeadsPage() {
               className="flex items-center gap-1 rounded-lg bg-ink-invert/15 px-2.5 py-1 hover:bg-ink-invert/25"
             >
               <Linkedin className="h-3.5 w-3.5" /> Connect on LinkedIn
+            </button>
+            <button onClick={bulkEnrich} className="flex items-center gap-1 rounded-lg bg-ink-invert/15 px-2.5 py-1 hover:bg-ink-invert/25">
+              <IdCard className="h-3.5 w-3.5" /> Find email &amp; phone
             </button>
             <button onClick={() => setSelected(new Set())} className="ml-auto text-ink-invert/70 hover:text-ink-invert">Clear</button>
           </div>

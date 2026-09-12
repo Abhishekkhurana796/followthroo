@@ -168,6 +168,8 @@ sequence. A premium Next.js UI sits on top.
 | [docs/phantombuster.md](docs/phantombuster.md) | The 35 PhantomBuster LinkedIn automations: inputs, outputs and limits, as the reference spec for our own scrapers |
 | [docs/rate-limits.md](docs/rate-limits.md) | Consolidated quotas + throttling strategy |
 | [docs/pricing.md](docs/pricing.md) | Plans, credits and top-ups as settled; where credits are charged; the costs they have to cover |
+| [docs/enrichment.md](docs/enrichment.md) | Email/phone from LinkedIn Contact info: the credit engine, the campaign Enrich step, the desktop DOM logic and what's still unverified |
+| [docs/posts.md](docs/posts.md) | AI-written LinkedIn posts and Autopilot: scheduling, trending topics, models, credits |
 | [docs/security.md](docs/security.md) | OAuth2, secrets, encryption, RBAC, GDPR |
 | [docs/domains-and-mailboxes.md](docs/domains-and-mailboxes.md) | Sending domains via the reseller storefront, DNS verification, mailbox connect |
 | [docs/crm-data-model.md](docs/crm-data-model.md) | Lead schema, logs, CSV import/export |
