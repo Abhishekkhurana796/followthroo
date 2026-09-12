@@ -11,6 +11,8 @@ import { Banner, DashHeader, Dialog, Input, Label, Panel, Select, useConfirm } f
 import { tourTarget } from "@/components/dashboard/tour/target";
 import Link from "next/link";
 import { INVITE_NOTE_MAX, INVITE_NOTE_WARN, worstCaseNoteLength } from "@/lib/linkedin/note";
+import { creditsPerLead } from "@/lib/billing/estimate";
+import { SUMMARY_KEY, type Summary } from "@/components/dashboard/billing/types";
 
 type Template = { id: string; channel: string; name: string; body?: string };
 type SendingAccount = { id: string; name: string; email: string };
@@ -746,6 +748,7 @@ export default function CampaignsPage() {
       >
         {launchFor && (
           <div className="space-y-2">
+              <CreditEstimate sequence={launchFor.sequence} />
               {/* Groups first — safer, explicit targeting */}
               {segments.length > 0 ? (
                 <>
@@ -782,6 +785,29 @@ export default function CampaignsPage() {
         )}
       </Dialog>
     </>
+  );
+}
+
+/**
+ * The credit estimate before a launch, once billing is on: the most one lead can
+ * cost across this sequence, and what's left today. Enrolling itself is free —
+ * this is what the steps will take as they go out.
+ */
+function CreditEstimate({ sequence }: { sequence: unknown }) {
+  const { data } = useSWR<Summary>(SUMMARY_KEY);
+  const perLead = creditsPerLead(sequence);
+  if (!data?.enforced || perLead === 0) return null;
+  const left = data.credits.left + data.credits.topup;
+  return (
+    <div className="mb-3 rounded-xl bg-accent-soft/60 px-4 py-3">
+      <div className="text-sm font-semibold text-accent-strong">
+        Up to {perLead} {perLead === 1 ? "credit" : "credits"} per lead, over the whole sequence
+      </div>
+      <p className="mt-0.5 text-xs text-ink-soft">
+        Taken only as each step actually goes out — a skipped or failed step costs nothing. You have {left.toLocaleString("en-US")} left
+        today; steps beyond that wait for tomorrow&apos;s credits.
+      </p>
+    </div>
   );
 }
 

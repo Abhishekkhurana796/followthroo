@@ -13,6 +13,7 @@ import { spendable } from "./credits";
 import { billingEnforced, limitUsage } from "./limits";
 import type { CreditAction } from "./plans";
 import { canSpend, workspacePlan } from "./subscription";
+import { razorpayConfigured } from "./razorpay";
 
 const DAY_MS = 86_400_000;
 
@@ -93,6 +94,8 @@ export async function billingSummary(organizationId: string) {
   const allowance = canSpend(wp) ? (wp.plan?.dailyCredits ?? 0) : 0;
   return {
     enforced: billingEnforced(),
+    /** Whether Razorpay keys are set, so the page can offer to buy. */
+    payments: razorpayConfigured(),
     plan: wp.plan
       ? {
           id: wp.plan.id,
@@ -101,6 +104,7 @@ export async function billingSummary(organizationId: string) {
           billing: wp.plan.billing,
           dailyCredits: wp.plan.dailyCredits,
           topUps: wp.plan.topUps,
+          features: wp.plan.features,
         }
       : null,
     access: wp.access,

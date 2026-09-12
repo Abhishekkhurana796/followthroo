@@ -7,6 +7,10 @@ import { sendSystemEmail } from "./channels/email";
 import { configured } from "./env";
 import { authRateLimitStorage } from "./api-ratelimit";
 import { roleLabel } from "./roles";
+import { APIError } from "better-auth/api";
+import { billingEnforced, checkLimit } from "./billing/limits";
+import { hasFeature } from "./billing/plans";
+import { workspacePlan } from "./billing/subscription";
 
 /**
  * better-auth — email/password + "Sign in with Google" social login.
@@ -30,6 +34,31 @@ const zohoConfigured = !!(process.env.ZOHO_CLIENT_ID && process.env.ZOHO_CLIENT_
 const zohoDc = process.env.ZOHO_DC || "in";
 
 const baseUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
+
+/**
+ * Refuse a seat the workspace's plan has no room for. An invitation holds a
+ * seat until it's accepted or expires, so a two-person plan can't send five.
+ */
+async function assertSeatFree(organizationId: string, { invitation }: { invitation: boolean }) {
+  if (!billingEnforced()) return;
+  const pending = invitation
+    ? await prisma.invitation.count({ where: { organizationId, status: "pending", expiresAt: { gt: new Date() } } })
+    : 0;
+  const check = await checkLimit(organizationId, "users", 1 + pending);
+  if (!check.ok) {
+    throw new APIError("FORBIDDEN", { message: pending ? `${check.message} Pending invitations hold a seat too.` : check.message });
+  }
+}
+
+/** The admin and group lead roles are on Grow and Scale. */
+async function assertRoleIncluded(organizationId: string, role: string) {
+  if (!billingEnforced() || (role !== "admin" && role !== "group_leader")) return;
+  const wp = await workspacePlan(organizationId);
+  if (wp.plan && hasFeature(wp.plan, "roles")) return;
+  throw new APIError("FORBIDDEN", {
+    message: `The admin and group lead roles aren't included in ${wp.plan ? `the ${wp.plan.name} plan` : "your workspace yet"}. Upgrade to use them.`,
+  });
+}
 
 /**
  * Origins better-auth will accept state-changing requests from (CSRF guard).
@@ -262,6 +291,27 @@ The link works for 24 hours. If you didn't create this account, ignore this emai
        */
       ac,
       roles: orgRoles,
+
+      /**
+       * Plan limits on people and roles, checked where better-auth adds them:
+       * the Team screen talks to better-auth directly, so a check in our own
+       * routes would never run. Off until BILLING_ENFORCED=1, like every limit.
+       */
+      organizationHooks: {
+        async beforeCreateInvitation({ invitation, organization }) {
+          await assertSeatFree(organization.id, { invitation: true });
+          await assertRoleIncluded(organization.id, invitation.role);
+        },
+        async beforeAddMember({ member, organization }) {
+          // A new workspace's creator is added as its owner before it has a plan.
+          if (member.role === "owner") return;
+          await assertSeatFree(organization.id, { invitation: false });
+          await assertRoleIncluded(organization.id, member.role);
+        },
+        async beforeUpdateMemberRole({ newRole, organization }) {
+          await assertRoleIncluded(organization.id, newRole);
+        },
+      },
 
       async sendInvitationEmail(data) {
         const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";

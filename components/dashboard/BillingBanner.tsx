@@ -46,10 +46,19 @@ export function BillingBanner() {
       body = "Sending, enrichment and posting are paused. Everything you added is still here — choose a plan to pick up where you left off.";
     }
     action = { label: "Choose a plan", href: "/pricing" };
+  } else if (data.limits.some((l) => (l.key === "users" || l.key === "inboxes") && l.limit !== null && l.used > l.limit)) {
+    // Only people and inboxes: those counts are what's switched on, so choosing
+    // what stays active is what makes this banner go away.
+    tone = "warning";
+    title = `More is switched on than ${plan?.name ?? "your plan"} includes`;
+    body = "Choose which inboxes and people stay active. Nothing is deleted, and upgrading turns everything back on.";
+    action = { label: "Choose what stays active", href: "/dashboard/settings/billing?keep=1" };
   } else if (data.credits.left === 0 && data.credits.topup === 0) {
     tone = "warning";
     title = "Today's credits are used up";
-    body = "Campaign steps are paused and nothing is lost. They carry on at midnight.";
+    body = plan?.topUps
+      ? "Campaign steps are paused and nothing is lost. They carry on at midnight, or straight away if you buy credits."
+      : "Campaign steps are paused and nothing is lost. They carry on at midnight.";
     action = plan?.topUps
       ? { label: "Buy credits", href: "/dashboard/settings/billing#top-up" }
       : { label: "See plans", href: "/pricing" };

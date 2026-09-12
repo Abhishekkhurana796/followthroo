@@ -12,6 +12,7 @@ import { auth, preferredOrganizationId } from "./auth";
 import { prisma } from "./db";
 import { fail } from "./http";
 import { configured } from "./env";
+import { billingEnforced } from "./billing/limits";
 
 export interface TenantContext {
   userId: string;
@@ -19,6 +20,12 @@ export interface TenantContext {
   role: string; // owner | admin | group_leader | member
   /** Null for owner/admin (unrestricted) or a member never assigned to a department. */
   department: string | null;
+  /**
+   * False when this person was made read-only to fit the workspace's plan
+   * ("Choose what stays active"). They can still see everything. Absent reads
+   * as active.
+   */
+  seatActive?: boolean;
 }
 
 /** Resolve tenant from a set of request headers (shared by route + RSC paths). */
@@ -41,7 +48,13 @@ async function resolveTenant(headers: Headers): Promise<TenantContext | null> {
       : null;
   }
   if (!membership) return null;
-  return { userId, orgId: membership.organizationId, role: membership.role, department: membership.department };
+  return {
+    userId,
+    orgId: membership.organizationId,
+    role: membership.role,
+    department: membership.department,
+    seatActive: membership.seatActive !== false,
+  };
 }
 
 /**
@@ -73,6 +86,12 @@ export async function requireOrg(req: NextRequest): Promise<TenantContext | Resp
   if (!configured.db) return fail("DATABASE_URL not configured — see .env.example", 503);
   const ctx = await resolveTenant(req.headers);
   if (!ctx) return fail("unauthorized", 401);
+  // A seat made read-only to fit the plan can look at everything and change
+  // nothing. Checked here, once, rather than in every route that writes — a
+  // write route that forgot would be a seat the plan doesn't pay for.
+  if (ctx.seatActive === false && req.method !== "GET" && req.method !== "HEAD" && billingEnforced()) {
+    return fail("Your seat is read-only on this workspace's plan. An owner or admin can make room for you, or upgrade.", 402);
+  }
   return ctx;
 }
 

@@ -1,13 +1,16 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
-import useSWR from "swr";
-import { Badge, DashHeader, Panel, Skeleton } from "@/components/ui";
+import { useEffect, useState } from "react";
+import useSWR, { mutate as refresh } from "swr";
+import { Badge, DashHeader, Panel, Skeleton, useToast } from "@/components/ui";
 import { api } from "@/lib/client";
 import { SUMMARY_KEY, type HistoryPage, type Summary } from "@/components/dashboard/billing/types";
 import { count, spendingPlan, until } from "@/components/dashboard/billing/format";
+import { KeepActiveDialog } from "@/components/dashboard/billing/KeepActiveDialog";
 import { PLAN_ORDER, PLANS, TOP_UP_PACKS, packCreditRate, packVsPlan, planById, planCreditRate, type Plan } from "@/lib/billing/plans";
+
+const HISTORY_KEY = "/api/billing/history";
 
 const LIMIT_LABELS: Record<string, string> = {
   users: "People",
@@ -17,17 +20,113 @@ const LIMIT_LABELS: Record<string, string> = {
   leads: "Leads stored",
 };
 
+/** Razorpay Checkout's global, once its script has loaded. */
+type RazorpayCheckout = {
+  open: () => void;
+  on: (event: string, cb: (response: { error?: { description?: string } }) => void) => void;
+};
+declare global {
+  interface Window {
+    Razorpay?: new (options: Record<string, unknown>) => RazorpayCheckout;
+  }
+}
+
+/** Load Checkout only when somebody pays — every other visit to Billing goes without it. */
+function loadCheckout(): Promise<void> {
+  if (window.Razorpay) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const script = document.createElement("script");
+    script.src = "https://checkout.razorpay.com/v1/checkout.js";
+    script.onload = () => resolve();
+    script.onerror = () => reject(new Error("Couldn't load Razorpay Checkout. Check your connection and try again."));
+    document.body.appendChild(script);
+  });
+}
+
+type Order = {
+  keyId: string;
+  orderId: string;
+  amount: number;
+  currency: string;
+  description: string;
+  prefill: { name: string; email: string };
+};
+type Purchase = { kind: "test_drive" } | { kind: "pack"; packId: string };
+
 /**
- * Plans & billing: the plan and how much of it is used, today's credits, top-ups
- * and every charge and refund.
+ * Pay through Razorpay Checkout. The server creates the order, Checkout takes the
+ * payment in its own window, and the server checks Razorpay's signature before
+ * granting anything. Closing Checkout without paying changes nothing.
+ */
+function usePayment(onPaid: (message: string) => void) {
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  async function pay(key: string, purchase: Purchase) {
+    setBusy(key);
+    setError(null);
+    try {
+      const [order] = await Promise.all([api<Order>("/api/billing/checkout", { body: purchase }), loadCheckout()]);
+      const Checkout = window.Razorpay;
+      if (!Checkout) throw new Error("Razorpay Checkout didn't load.");
+      await new Promise<void>((resolve, reject) => {
+        const checkout = new Checkout({
+          key: order.keyId,
+          order_id: order.orderId,
+          amount: order.amount,
+          currency: order.currency,
+          name: "Followthroo",
+          description: order.description,
+          prefill: order.prefill,
+          handler: (r: { razorpay_payment_id: string; razorpay_order_id: string; razorpay_signature: string }) => {
+            api("/api/billing/verify", {
+              body: { orderId: r.razorpay_order_id, paymentId: r.razorpay_payment_id, signature: r.razorpay_signature },
+            })
+              .then(() => {
+                onPaid(purchase.kind === "pack" ? "Credits added — they're ready to use." : "Your Test Drive has started.");
+                resolve();
+              })
+              .catch(reject);
+          },
+          modal: { ondismiss: () => resolve() },
+        });
+        checkout.on("payment.failed", (r) => reject(new Error(r.error?.description ?? "The payment didn't go through.")));
+        checkout.open();
+      });
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  return { pay, busy, error };
+}
+type Payment = ReturnType<typeof usePayment>;
+
+/**
+ * Plans & billing: the plan and how much of it is used, today's credits, the
+ * Test Drive and top-ups, and every charge and refund.
  *
  * Every number comes from lib/billing — plans.ts for prices and limits, the
- * ledger for credits — so this page cannot disagree with what is charged.
- * Payments aren't switched on yet, so buying is shown and not offered; a button
- * that takes no money must not look like one that does.
+ * ledger for credits — so this page can't disagree with what's charged.
+ * One-time payments (the Test Drive, packs) go through Razorpay Checkout; monthly
+ * plans are set up by hand until Razorpay Subscriptions is switched on.
  */
 export default function Page() {
   const { data } = useSWR<Summary>(SUMMARY_KEY, { refreshInterval: 60_000 });
+  const toast = useToast();
+  const [keepOpen, setKeepOpen] = useState(false);
+  const payment = usePayment((message) => {
+    toast(message, "success");
+    void refresh(SUMMARY_KEY);
+    void refresh(HISTORY_KEY);
+  });
+
+  // The banner's "Choose what stays active" lands here with ?keep=1.
+  useEffect(() => {
+    if (new URLSearchParams(window.location.search).get("keep") === "1") setKeepOpen(true);
+  }, []);
 
   return (
     <>
@@ -51,16 +150,26 @@ export default function Page() {
           </div>
         ) : (
           <>
+            <TestDrive data={data} payment={payment} />
             <div className="grid gap-5 lg:grid-cols-2">
-              <YourPlan data={data} />
+              <YourPlan data={data} onKeepActive={() => setKeepOpen(true)} />
               <TodaysCredits data={data} />
             </div>
-            <TopUps data={data} />
+            <TopUps data={data} payment={payment} />
             <AutoRecharge />
             <History />
           </>
         )}
       </div>
+      <KeepActiveDialog
+        open={keepOpen}
+        onClose={() => setKeepOpen(false)}
+        onDone={() => {
+          setKeepOpen(false);
+          toast("Saved. Anything left out is paused, not deleted.", "success");
+          void refresh(SUMMARY_KEY);
+        }}
+      />
     </>
   );
 }
@@ -95,7 +204,41 @@ function Bar({ share, tone = "accent" }: { share: number; tone?: "accent" | "war
   );
 }
 
-function YourPlan({ data }: { data: Summary }) {
+function TestDrive({ data, payment }: { data: Summary; payment: Payment }) {
+  const plan = PLANS.test_drive;
+  if (!data.enforced || !(data.access === "none" || data.access === "expired")) return null;
+  return (
+    <Panel className="flex flex-wrap items-center justify-between gap-4 !border-accent/40">
+      <div className="min-w-0 flex-1 basis-72">
+        <div className="flex flex-wrap items-center gap-2">
+          <h2 className="font-display text-base font-bold">Test Drive</h2>
+          <Badge tone="accent">${plan.price} once</Badge>
+        </div>
+        <p className="mt-1 text-sm text-ink-soft">
+          {plan.days} days on your own leads with {plan.dailyCredits} credits a day — about 10 LinkedIn invitations or 30 emails, every
+          day. It isn&apos;t a subscription: it simply ends.
+        </p>
+        {payment.error && payment.busy === null && <p className="mt-2 text-sm text-danger">{payment.error}</p>}
+      </div>
+      {data.payments ? (
+        <button
+          type="button"
+          onClick={() => payment.pay("test_drive", { kind: "test_drive" })}
+          disabled={payment.busy !== null}
+          className="btn btn-primary shrink-0 !px-4 !py-2 text-sm disabled:opacity-60"
+        >
+          {payment.busy === "test_drive" ? "Opening…" : `Start for $${plan.price}`}
+        </button>
+      ) : (
+        <Link href="/contact" className="btn btn-ghost shrink-0 !px-4 !py-2 text-sm">
+          Message us to start
+        </Link>
+      )}
+    </Panel>
+  );
+}
+
+function YourPlan({ data, onKeepActive }: { data: Summary; onKeepActive: () => void }) {
   const plan = data.plan;
   const priceLine = !plan
     ? "Pick a plan to start sending. Your leads and conversations are safe either way."
@@ -104,6 +247,7 @@ function YourPlan({ data }: { data: Summary }) {
       : plan.billing === "one_time"
         ? `$${plan.price} once · ${data.access === "expired" ? "ended" : `${data.daysLeft ?? 0} days left`}`
         : `$${plan.price} a month`;
+  const over = data.enforced && data.limits.some((l) => l.limit !== null && l.used > l.limit);
 
   return (
     <Panel>
@@ -117,7 +261,7 @@ function YourPlan({ data }: { data: Summary }) {
         <ul className="mt-5 space-y-4">
           {data.limits.map((l) => {
             const full = l.limit !== null && l.used >= l.limit;
-            const over = l.limit !== null && l.used > l.limit;
+            const overBy = l.limit !== null && l.used > l.limit ? l.used - l.limit : 0;
             const next = full ? roomierPlan(plan.id, l.key, l.used) : null;
             const nextRoom = next ? next.limits[l.key as keyof Plan["limits"]] : null;
             return (
@@ -131,7 +275,7 @@ function YourPlan({ data }: { data: Summary }) {
                 <Bar share={l.limit === null ? 0.1 : l.limit ? l.used / l.limit : 1} tone={full ? "warning" : "accent"} />
                 {full && (
                   <p className="mt-1 text-xs text-warning-strong">
-                    {over ? `Over by ${count(l.used - (l.limit ?? 0))}. Nothing is deleted, and nothing new can be added.` : "Full."}{" "}
+                    {overBy ? `Over by ${count(overBy)}. Nothing is deleted, and nothing new can be added.` : "Full."}{" "}
                     {next && `${next.name} has room for ${nextRoom === null ? "unlimited" : count(nextRoom)}.`}
                   </p>
                 )}
@@ -145,7 +289,21 @@ function YourPlan({ data }: { data: Summary }) {
         <Link href="/pricing" className="btn btn-ghost !px-4 !py-2 text-sm">
           {plan ? "Change plan" : "Choose a plan"}
         </Link>
+        {over && (
+          <button type="button" onClick={onKeepActive} className="btn btn-primary !px-4 !py-2 text-sm">
+            Choose what stays active
+          </button>
+        )}
       </div>
+      {data.payments && (
+        <p className="mt-3 text-xs text-ink-soft">
+          Monthly plans are switched on by hand for now —{" "}
+          <Link href="/contact" className="font-semibold text-accent-strong hover:underline">
+            message us
+          </Link>{" "}
+          and we&apos;ll move you across. The Test Drive and top-ups can be bought here.
+        </p>
+      )}
     </Panel>
   );
 }
@@ -173,7 +331,7 @@ function TodaysCredits({ data }: { data: Summary }) {
       ) : (
         <p className="mt-3 text-sm text-ink-soft">
           {data.enforced
-            ? "No credits today — there's no plan that's running. Choose one and they start straight away."
+            ? "No credits today — there's no plan running. Choose one and they start straight away."
             : "Credits start when plans do. Until then, nothing you send is counted."}
         </p>
       )}
@@ -186,7 +344,7 @@ function TodaysCredits({ data }: { data: Summary }) {
       <p className="mt-1 text-xs text-ink-soft">Used only after today&apos;s credits run out. Never expires while you&apos;re subscribed.</p>
 
       <div className="mt-5 flex flex-wrap items-center gap-1">
-        {data.plan?.topUps && (
+        {data.plan?.topUps && data.access === "active" && (
           <a href="#top-up" className="btn btn-primary !px-4 !py-2 text-sm">
             Buy credits
           </a>
@@ -202,10 +360,11 @@ function TodaysCredits({ data }: { data: Summary }) {
   );
 }
 
-function TopUps({ data }: { data: Summary }) {
+function TopUps({ data, payment }: { data: Summary; payment: Payment }) {
   const plan = planById(data.plan?.id);
   const monthly = plan?.billing === "monthly" ? plan : null;
   const next = monthly ? PLANS[PLAN_ORDER[PLAN_ORDER.indexOf(monthly.id) + 1]] : undefined;
+  const canBuy = data.payments && !!monthly && data.access === "active" && spendingPlan(data);
 
   return (
     <section id="top-up" className="scroll-mt-6">
@@ -246,22 +405,32 @@ function TopUps({ data }: { data: Summary }) {
               )}
               <button
                 type="button"
-                disabled
-                title="Card payments are being switched on"
+                disabled={!canBuy || payment.busy !== null}
+                title={!data.payments ? "Card payments are being switched on" : !canBuy ? "Top-ups are for Start, Grow and Scale subscribers" : undefined}
+                onClick={() => payment.pay(pack.id, { kind: "pack", packId: pack.id })}
                 className={`mt-4 w-full justify-center disabled:cursor-not-allowed disabled:opacity-60 ${best ? "btn btn-primary" : "btn btn-ghost"}`}
               >
-                Buy for ${pack.price}
+                {payment.busy === pack.id ? "Opening…" : `Buy for $${pack.price}`}
               </button>
             </div>
           );
         })}
       </div>
+      {payment.error && payment.busy === null && <p className="mt-3 text-sm text-danger">{payment.error}</p>}
       <p className="mt-3 text-xs text-ink-soft">
-        Card payments are being switched on. Until then,{" "}
-        <Link href="/contact" className="font-semibold text-accent-strong hover:underline">
-          message us
-        </Link>{" "}
-        and we&apos;ll add credits or change your plan by hand.
+        {!data.payments ? (
+          <>
+            Card payments are being switched on. Until then,{" "}
+            <Link href="/contact" className="font-semibold text-accent-strong hover:underline">
+              message us
+            </Link>{" "}
+            and we&apos;ll add credits or change your plan by hand.
+          </>
+        ) : canBuy ? (
+          "Paid through Razorpay. Credits land the moment the payment clears, and any campaign steps waiting for credits carry on straight away."
+        ) : (
+          "Top-ups are for Start, Grow and Scale subscribers."
+        )}
       </p>
     </section>
   );
@@ -276,7 +445,7 @@ function AutoRecharge() {
       </div>
       <p className="mt-1 text-sm text-ink-soft">
         Buy a pack on its own when credits run low, so campaigns don&apos;t pause — against a card you approve once, with a monthly
-        ceiling you set. It arrives with card payments.
+        ceiling you set.
       </p>
     </Panel>
   );
@@ -286,14 +455,15 @@ function when(iso: string) {
   const d = new Date(iso);
   const time = d.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
   const day = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
-  const today = new Date(new Date().getFullYear(), new Date().getMonth(), new Date().getDate()).getTime();
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
   if (day === today) return `Today ${time}`;
   if (day === today - 86_400_000) return `Yesterday ${time}`;
   return `${d.toLocaleDateString("en-GB", { day: "numeric", month: "short" })} ${time}`;
 }
 
 function History() {
-  const { data, isLoading } = useSWR<HistoryPage>("/api/billing/history", { refreshInterval: 60_000 });
+  const { data, isLoading } = useSWR<HistoryPage>(HISTORY_KEY, { refreshInterval: 60_000 });
   const [older, setOlder] = useState<HistoryPage["entries"]>([]);
   const [cursor, setCursor] = useState<string | null | undefined>(undefined);
   const [loading, setLoading] = useState(false);
@@ -307,7 +477,7 @@ function History() {
     setLoading(true);
     setError(null);
     try {
-      const page = await api<HistoryPage>(`/api/billing/history?before=${encodeURIComponent(next)}`);
+      const page = await api<HistoryPage>(`${HISTORY_KEY}?before=${encodeURIComponent(next)}`);
       setOlder((rows) => [...rows, ...page.entries]);
       setCursor(page.next);
     } catch (e) {
@@ -328,9 +498,15 @@ function History() {
         <table className="w-full min-w-[560px] text-sm">
           <thead>
             <tr className="border-b border-line bg-tint text-left font-mono text-[10px] uppercase tracking-[0.12em] text-ink-soft">
-              <th scope="col" className="px-4 py-3 font-medium">When</th>
-              <th scope="col" className="px-4 py-3 font-medium">What</th>
-              <th scope="col" className="px-4 py-3 text-right font-medium">Credits</th>
+              <th scope="col" className="px-4 py-3 font-medium">
+                When
+              </th>
+              <th scope="col" className="px-4 py-3 font-medium">
+                What
+              </th>
+              <th scope="col" className="px-4 py-3 text-right font-medium">
+                Credits
+              </th>
             </tr>
           </thead>
           <tbody>
@@ -370,12 +546,7 @@ function History() {
       </div>
       {error && <p className="mt-2 text-sm text-danger">{error}</p>}
       {next && (
-        <button
-          type="button"
-          onClick={loadMore}
-          disabled={loading}
-          className="btn btn-ghost mt-4 !px-4 !py-2 text-sm disabled:opacity-60"
-        >
+        <button type="button" onClick={loadMore} disabled={loading} className="btn btn-ghost mt-4 !px-4 !py-2 text-sm disabled:opacity-60">
           {loading ? "Loading…" : "Show older"}
         </button>
       )}

@@ -108,6 +108,11 @@ stays active.
 | Create-time limits (402 when enforced) | `lib/billing/limits.ts`, called from the campaign, template, lead, import and mailbox routes |
 | Billing screens | `lib/billing/summary.ts` → `/api/billing/summary`, `/api/billing/history` |
 | Stranded reservations, trial reminders | `lib/billing/sweep.ts` → `/api/cron/billing-sweep` (QStash, every 15 min) |
+| Payments (Test Drive, packs) | `lib/billing/razorpay.ts` (REST + signatures), `/api/billing/checkout` → Razorpay Checkout → `/api/billing/verify` → `lib/billing/payments.ts` |
+| Plan features on screens | `upgradeFor` → `PlanUpsell` on Deliverability, Ageing, Escalations, Control tower; `requireFeature` on lead assignment |
+| People and roles | `organizationHooks` in `lib/auth.ts`: a seat check on invite and join (pending invitations hold a seat), and the roles feature |
+| Choose what stays active | `/api/billing/keep-active` + `KeepActiveDialog`; a read-only seat is refused writes in `requireOrg` |
+| Launch trials | `scripts/billing-launch.ts` (dry run by default, `--apply` to write) |
 
 **Where credits are charged.**
 
@@ -152,7 +157,7 @@ workspaces.
 | LinkedIn | Desktop app (`desktop/`) sends; extension sources | Runs on the customer's machine and IP |
 | AI | OpenRouter (`OPENROUTER_MODEL`), Anthropic direct as a fallback | `docs/ai-agent.md` |
 | Auth | `better-auth`, self-hosted | Email/password + Google + org plugin |
-| Billing | **Plans, credits and limits built; payments not wired** | `lib/billing/`. Razorpay checkout, subscriptions and webhooks wait on test keys. |
+| Billing | **Plans, credits, limits and one-time payments built** | `lib/billing/`. Razorpay test keys are set (`RAZORPAY_API_KEY`, `RAZORPAY_SECRET`); monthly subscriptions, the webhook and auto-recharge are not built yet. |
 
 ---
 
@@ -218,19 +223,30 @@ offered, not by sends.
 
 ## Gaps to close before this is chargeable
 
-1. **Razorpay:** Start/Grow/Scale subscriptions, the $2 Test Drive order, pack
-   orders, the auto-recharge mandate, and the signed, idempotent webhook
-   (`BillingEvent`). Waiting on test keys in `.env`.
-2. **The launch script** that gives every workspace its waiting Grow trial, run
-   with a dry-run first. Then `BILLING_ENFORCED=1`.
-3. **Carry on straight away after a top-up:** campaign steps waiting for
-   credits currently wait for midnight even after a purchase.
-4. **Choose what stays active:** the over-limit dialog, and the seat limit on
-   member invitations.
-5. **Feature gates:** team reports, roles and escalations, per plan.
-6. **Estimates before spending:** the credit estimate in the enroll, invite
-   and import confirmations.
-7. **Inbound leads when storage is full:** webhook leads are still accepted
-   over the cap, so a customer's enquiry is never lost. Confirm that's the
-   intended behaviour.
-8. **Charge points for P2 (enrichment) and P3 (AI posts)** as those ship.
+Done (2026-09-12):
+
+- The $2 Test Drive and top-up packs through Razorpay Checkout, verified by
+  signature and granted once. The account accepts USD orders.
+- A top-up brings campaign steps waiting for credits forward, instead of
+  leaving them until midnight.
+- The launch script, plan gates on reports, lead assignment, seats and roles,
+  "Choose what stays active", and the credit estimate before a campaign launch.
+
+Still open:
+
+1. **Monthly plans (Start, Grow, Scale):** these are Razorpay subscriptions.
+   The test account answered 401 to the Plans API, so Subscriptions has to be
+   switched on in the Razorpay dashboard. After that, create the three monthly
+   USD plans and add their IDs to the environment. Until then, monthly plans
+   are set up by hand.
+2. **The webhook** (`payment.captured`, `subscription.*`): register
+   `https://app.followthroo.com/api/billing/razorpay/webhook` in Razorpay and
+   set `RAZORPAY_WEBHOOK_SECRET`. One-time payments don't depend on it, because
+   Checkout's signature is verified directly.
+3. **Auto-recharge:** a card/UPI mandate needs Recurring Payments on the
+   Razorpay account.
+4. **Going live:** run `scripts/billing-launch.ts --apply`, then set
+   `BILLING_ENFORCED=1`.
+5. **Inbound leads when storage is full:** webhook leads are still accepted
+   over the cap, so a customer's enquiry is never lost. Confirm that's intended.
+6. **Charge points for P2 (enrichment) and P3 (AI posts)** as those ship.

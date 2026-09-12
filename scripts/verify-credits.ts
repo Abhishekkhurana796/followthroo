@@ -19,8 +19,10 @@
  */
 import { prisma } from "../lib/db";
 import { addTopup, balance, dailyAllowance, release, reserve, settle } from "../lib/billing/credits";
-import { checkLimit, requireLimit } from "../lib/billing/limits";
+import { checkLimit, requireLimit, upgradeFor } from "../lib/billing/limits";
 import { charge, once } from "../lib/billing/meter";
+import { grantOrder } from "../lib/billing/payments";
+import { resumeWaitingForCredits } from "../lib/campaign-engine";
 import { enrichmentCharge, packVsPlan, planCreditRate, PLANS, TOP_UP_PACKS } from "../lib/billing/plans";
 import { startTrialIfWaiting, workspacePlan } from "../lib/billing/subscription";
 import { claimActions, completeAction, peekActions, settleStrandedCharges } from "../lib/linkedin/queue";
@@ -232,6 +234,55 @@ async function main() {
     ok((await prisma.billingEvent.count({ where: { id: noticeId } })) === 1, "…and its admins' email is recorded for the day");
     await charge(li, "email_send", { ref: { type: "test", id: `broke-2-${stamp}` } });
     ok((await prisma.billingEvent.count({ where: { id: noticeId } })) === 1, "…once, however many sends are refused");
+
+    console.log("\n— plan gates —");
+    ok((await upgradeFor(li, "team_reports"))?.needed.id === "grow", "on Start, team reports point to Grow");
+    const growOrg = await newOrg("gates");
+    await prisma.subscription.create({ data: { organizationId: growOrg, planId: "grow", status: "active" } });
+    ok((await upgradeFor(growOrg, "team_reports")) === null && (await upgradeFor(growOrg, "escalations"))?.needed.id === "scale", "Grow has team reports; escalations point to Scale");
+
+    console.log("\n— paying —");
+    const purchase = await prisma.creditPurchase.create({ data: { organizationId: growOrg, packId: "pack_500", credits: 500, amountCents: 500 } });
+    await balance(growOrg);
+    const packOrder = { id: `order_pack_${stamp}`, amount: 500, currency: "USD", status: "paid", notes: { organizationId: growOrg, kind: "pack", purchaseId: purchase.id } };
+    const first = await grantOrder(packOrder, `pay_pack_${stamp}`);
+    const again2 = await grantOrder(packOrder, `pay_pack_${stamp}`);
+    ok(first.fresh && !again2.fresh && (await bal(growOrg)).topupRemaining === 500, "a paid pack credits 500 once, however often the payment is reported");
+    ok((await prisma.creditPurchase.findUniqueOrThrow({ where: { id: purchase.id } })).status === "paid", "…and its purchase is marked paid");
+
+    const drive = await newOrg("drive");
+    const driveOrder = { id: `order_drive_${stamp}`, amount: 200, currency: "USD", status: "paid", notes: { organizationId: drive, kind: "test_drive" } };
+    const d1 = await grantOrder(driveOrder, `pay_drive_${stamp}`);
+    const d2 = await grantOrder(driveOrder, `pay_drive_${stamp}`);
+    const driveWp = await workspacePlan(drive);
+    ok(d1.fresh && !d2.fresh && driveWp.plan?.id === "test_drive" && driveWp.access === "active" && driveWp.daysLeft === 14, "a paid Test Drive starts 14 days, once");
+    await prisma.billingEvent.deleteMany({ where: { id: `payment:pay_drive_${stamp}` } });
+
+    console.log("\n— waiting for credits, then a top-up —");
+    const w = await newOrg("waiting");
+    const campaign = await prisma.campaign.create({ data: { organizationId: w, name: `waiting-${stamp}`, status: "active" } });
+    const later = new Date(Date.now() + 10 * 3_600_000);
+    const enroll = async (n: number, nodeId: string) => {
+      const lead = await prisma.lead.create({ data: { organizationId: w, firstName: `Wait ${n}`, email: `wait-${n}-${stamp}@example.com` } });
+      return prisma.enrollment.create({ data: { organizationId: w, campaignId: campaign.id, leadId: lead.id, status: "active", currentNodeId: nodeId, nextRunAt: later } });
+    };
+    const stillWaiting = await enroll(1, "n1");
+    const movedOn = await enroll(2, "n2");
+    await prisma.billingEvent.createMany({
+      data: [
+        { id: `wait:${w}:${stillWaiting.id}`, type: "wait.credits:n1" },
+        { id: `wait:${w}:${movedOn.id}`, type: "wait.credits:n1" },
+      ],
+    });
+    const resumed = await resumeWaitingForCredits(w);
+    const [e1, e2] = await Promise.all([
+      prisma.enrollment.findUniqueOrThrow({ where: { id: stillWaiting.id } }),
+      prisma.enrollment.findUniqueOrThrow({ where: { id: movedOn.id } }),
+    ]);
+    ok(resumed === 1 && (e1.nextRunAt?.getTime() ?? Infinity) < Date.now() + 6 * 60_000, "a top-up brings a waiting step forward from midnight to within minutes");
+    ok(e2.nextRunAt?.getTime() === later.getTime(), "…but not one that has moved on since it waited");
+    ok((await prisma.billingEvent.count({ where: { id: { startsWith: `wait:${w}:` } } })) === 0, "…and forgets them all afterwards");
+
     process.env.BILLING_ENFORCED = "";
   } finally {
     for (const organizationId of orgIds) {

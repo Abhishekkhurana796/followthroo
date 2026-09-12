@@ -7,6 +7,7 @@ import { invalidate } from "@/lib/cache";
 import { canAssignTo } from "@/lib/tasks";
 import { leadScope } from "@/lib/scope";
 import { notifyLeadAssigned } from "@/lib/notifications";
+import { requireFeature } from "@/lib/billing/limits";
 import { LIMITS, tooMany } from "@/lib/api-ratelimit";
 
 export const runtime = "nodejs";
@@ -44,6 +45,11 @@ export async function POST(req: NextRequest) {
     // Handing work to somebody follows the same rule as assigning them a task.
     if (ownerId !== null && !(await canAssignTo(ctx, ownerId))) {
       return fail("You cannot assign contacts to that member.", 403);
+    }
+    // Handing contacts to somebody else is Grow and up; on Start you own your own.
+    if (ownerId && ownerId !== ctx.userId) {
+      const locked = await requireFeature(ctx.orgId, "lead_assignment", "Assigning contacts to teammates");
+      if (locked) return locked;
     }
     await prisma.lead.updateMany({
       where: { id: { in: leads.map((l) => l.id) }, organizationId: ctx.orgId },
