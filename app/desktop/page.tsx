@@ -4,6 +4,7 @@ import { Download, Laptop, ShieldCheck, MousePointerClick, AlertTriangle } from 
 import SiteShell from "@/components/site/SiteShell";
 import PageHero from "@/components/site/PageHero";
 import { DESKTOP_APP_URL, DESKTOP_APP_VERSION } from "@/lib/constants";
+import { PLANS } from "@/lib/billing/plans";
 
 export const metadata: Metadata = {
   title: "Desktop app — Followthroo",
@@ -104,8 +105,8 @@ export default function DesktopPage() {
                 file.
               </p>
             )}
-            <Link href="/sign-up" className="btn btn-ghost mt-2 w-full justify-center text-sm">
-              Get Followthroo free
+            <Link href="/sign-up?plan=test_drive" className="btn btn-ghost mt-2 w-full justify-center text-sm">
+              Try Followthroo for ${PLANS.test_drive.price}
             </Link>
           </div>
         </div>

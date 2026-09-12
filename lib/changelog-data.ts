@@ -40,6 +40,7 @@ export const CHANGELOG: ChangelogEntry[] = [
       "Plans & billing is rebuilt around it: your plan and how much of each limit you use, today's credits, top-up packs with what each credit costs next to your plan's own rate, and a history of every charge and refund. It used to show three plans nobody could be on",
       "Nothing is charged yet, and nothing you send is counted, until card payments are switched on",
       "The sidebar no longer labels every workspace \"Free\"",
+      "The homepage, site navigation, footer and the desktop app and Chrome extension pages no longer say \"Start free\", \"Sign up for free\" or \"No card required\" — they offer the $2 Test Drive instead. The homepage's \"Book a demo\" button now opens the contact page rather than the dashboard",
     ],
   },
   {

@@ -3,6 +3,7 @@ import Link from "next/link";
 import SiteShell from "@/components/site/SiteShell";
 import PageHero from "@/components/site/PageHero";
 import { EXTENSION_STORE_URL } from "@/lib/constants";
+import { PLANS } from "@/lib/billing/plans";
 
 export const metadata: Metadata = {
   title: "Chrome extension — Followthroo",
@@ -125,8 +126,8 @@ export default function ExtensionPage() {
             >
               Add to Chrome
             </a>
-            <Link href="/sign-up" className="btn btn-ghost mt-2 w-full justify-center text-sm">
-              Get Followthroo free
+            <Link href="/sign-up?plan=test_drive" className="btn btn-ghost mt-2 w-full justify-center text-sm">
+              Try Followthroo for ${PLANS.test_drive.price}
             </Link>
           </div>
         </div>

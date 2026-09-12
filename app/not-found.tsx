@@ -3,6 +3,7 @@
 import React, { useEffect, useState } from "react";
 import Link from "next/link";
 import { ArrowRight, Menu, X, Twitter, Linkedin, Github, Mail } from "lucide-react";
+import { PLANS } from "@/lib/billing/plans";
 
 const NAV_LINKS = ["Channels", "How it works", "Safety", "Pricing", "Docs"];
 
@@ -62,8 +63,8 @@ export default function NotFound() {
           </div>
 
           <div className="hidden lg:block">
-            <Link href="/dashboard" className="btn btn-primary !py-2 !text-sm">
-              Start free <ArrowRight className="h-4 w-4" />
+            <Link href="/sign-up?plan=test_drive" className="btn btn-primary !py-2 !text-sm">
+              Try it for ${PLANS.test_drive.price} <ArrowRight className="h-4 w-4" />
             </Link>
           </div>
 
@@ -98,8 +99,8 @@ export default function NotFound() {
                     {l}
                   </a>
                 ))}
-                <Link href="/dashboard" className="btn btn-primary mt-2 justify-center">
-                  Start free
+                <Link href="/sign-up?plan=test_drive" className="btn btn-primary mt-2 justify-center">
+                  Try it for ${PLANS.test_drive.price}
                 </Link>
               </div>
             </div>
