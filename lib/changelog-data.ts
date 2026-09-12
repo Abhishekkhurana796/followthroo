@@ -32,6 +32,18 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    product: "webapp",
+    version: "0.23.0",
+    date: "Sep 2026",
+    items: [
+      "Plans & billing takes payment through Razorpay for the $2 Test Drive and for credit top-ups. Credits land as soon as the payment clears, and campaign steps waiting for credits carry on straight away instead of at midnight",
+      "Launching a campaign shows the most one lead can cost in credits across the sequence, and how many credits are left today",
+      "When more is switched on than your plan includes, \"Choose what stays active\" lets you pick which campaigns, sending inboxes and people stay on. Nothing is deleted: the rest pause or go read-only, and upgrading turns them back on",
+      "A report your plan doesn't include shows which plan has it, instead of failing. Inviting past your plan's seats, or giving someone the admin or group lead role on a plan without roles, says why",
+      "None of this charges or limits anything until billing is switched on",
+    ],
+  },
+  {
     product: "extension",
     version: "3.1.6",
     date: "Sep 2026",

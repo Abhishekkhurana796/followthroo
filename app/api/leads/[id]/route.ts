@@ -10,6 +10,7 @@ import { leadScope, unassignedScope } from "@/lib/scope";
 import { suppress } from "@/lib/crm";
 import { canAssignTo } from "@/lib/tasks";
 import { notifyLeadAssigned } from "@/lib/notifications";
+import { requireFeature } from "@/lib/billing/limits";
 
 export const runtime = "nodejs";
 
@@ -76,6 +77,11 @@ export async function PATCH(req: NextRequest, { params }: Ctx) {
     const ownerId = (body.ownerId as string | null) || null;
     if (ownerId && !(await canAssignTo(ctx, ownerId))) {
       return fail("You cannot assign a contact to that member.", 403);
+    }
+    // Handing a contact to somebody else is Grow and up; on Start you own your own.
+    if (ownerId && ownerId !== ctx.userId) {
+      const locked = await requireFeature(ctx.orgId, "lead_assignment", "Assigning contacts to teammates");
+      if (locked) return locked;
     }
     before = await prisma.lead.findFirst({
       where: { AND: [visible, { id }] },

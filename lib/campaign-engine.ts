@@ -274,13 +274,50 @@ async function finish(id: string, status: "completed" | "stopped" | "replied") {
  * nextRunAt is written before the publish, so if the publish fails the recovery
  * sweep still finds it once it's due.
  */
-async function waitForCredits(enrollmentId: string, organizationId: string, reason: Refusal) {
+async function waitForCredits(enrollmentId: string, organizationId: string, reason: Refusal, nodeId: string) {
   const delay =
     reason === "no_plan"
       ? 86_400_000
       : (await startOfOrgDay(organizationId)).getTime() + 86_400_000 - Date.now() + 60_000 + Math.floor(Math.random() * 30 * 60_000);
   await prisma.enrollment.update({ where: { id: enrollmentId }, data: { nextRunAt: new Date(Date.now() + delay) } });
   await enqueueJob({ kind: "advance", enrollmentId }, delay);
+  // Remembered, with the step it waited on, so a top-up can bring it forward
+  // rather than leave it until midnight. See resumeWaitingForCredits.
+  const id = `wait:${organizationId}:${enrollmentId}`;
+  await prisma.billingEvent
+    .upsert({ where: { id }, create: { id, type: `wait.credits:${nodeId}` }, update: { type: `wait.credits:${nodeId}` } })
+    .catch((e) => console.error("[campaign-engine] could not remember a step waiting for credits:", e));
+}
+
+/**
+ * Credits just arrived (a top-up): bring forward every campaign step in the
+ * workspace that was waiting for them. A step only moves if its enrollment is
+ * still active and still on the step that waited — one that has since moved on
+ * is left exactly where it is. Returns how many were brought forward.
+ */
+export async function resumeWaitingForCredits(organizationId: string) {
+  const prefix = `wait:${organizationId}:`;
+  const waiting = await prisma.billingEvent.findMany({ where: { id: { startsWith: prefix } }, select: { id: true, type: true } });
+  if (!waiting.length) return 0;
+
+  let resumed = 0;
+  for (const marker of waiting) {
+    const enrollmentId = marker.id.slice(prefix.length);
+    const nodeId = marker.type.replace(/^wait\.credits:/, "");
+    // A few minutes of spread, so a thousand waiting leads don't all go at once.
+    const delay = Math.floor(Math.random() * 5 * 60_000);
+    const runAt = new Date(Date.now() + delay);
+    const { count } = await prisma.enrollment.updateMany({
+      where: { id: enrollmentId, status: "active", currentNodeId: nodeId, nextRunAt: { gt: runAt } },
+      data: { nextRunAt: runAt },
+    });
+    if (count) {
+      resumed++;
+      await enqueueJob({ kind: "advance", enrollmentId }, delay);
+    }
+  }
+  await prisma.billingEvent.deleteMany({ where: { id: { in: waiting.map((m) => m.id) } } });
+  return resumed;
 }
 
 /** Has the lead replied since this enrollment began (optionally within N days)? */
@@ -397,7 +434,7 @@ export async function advanceEnrollment(enrollmentId: string): Promise<void> {
       // record rather than going out under the platform's address.
       account: enr.campaign.sendingAccountId ?? undefined,
     });
-    if (!sent.ok && isOutOfCredits(sent.reason)) return waitForCredits(enr.id, orgId, sent.reason);
+    if (!sent.ok && isOutOfCredits(sent.reason)) return waitForCredits(enr.id, orgId, sent.reason, node.id);
     nextId = node.next ?? null;
   } else if (node.type === "wait") {
     nextId = node.next ?? null;

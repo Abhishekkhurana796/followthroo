@@ -13,7 +13,7 @@
  */
 import { prisma } from "../db";
 import { fail } from "../http";
-import { hasFeature, type Feature, type Plan } from "./plans";
+import { PLAN_ORDER, PLANS, hasFeature, type Feature, type Plan } from "./plans";
 import { workspacePlan } from "./subscription";
 
 export type LimitKey = "users" | "inboxes" | "campaigns" | "templates" | "leads" | "autopilots";
@@ -108,4 +108,17 @@ export async function requireFeature(organizationId: string, feature: Feature, l
   const wp = await workspacePlan(organizationId);
   if (wp.plan && hasFeature(wp.plan, feature)) return null;
   return fail(`${label} isn't included in ${wp.plan ? `the ${wp.plan.name} plan` : "your workspace yet"}. Upgrade to use it.`, 402);
+}
+
+/**
+ * For pages: which plan would unlock a feature this workspace lacks — or null
+ * when it already has it, or billing isn't enforced. A page shows PlanUpsell
+ * in its place rather than a screen of errors from its own API.
+ */
+export async function upgradeFor(organizationId: string, feature: Feature): Promise<{ current: Plan | null; needed: Plan } | null> {
+  if (!billingEnforced()) return null;
+  const wp = await workspacePlan(organizationId);
+  if (wp.plan && hasFeature(wp.plan, feature)) return null;
+  const needed = PLAN_ORDER.map((id) => PLANS[id]).find((p) => hasFeature(p, feature));
+  return needed ? { current: wp.plan, needed } : null;
 }
