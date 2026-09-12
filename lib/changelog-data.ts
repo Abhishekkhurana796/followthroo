@@ -32,6 +32,14 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    product: "extension",
+    version: "3.1.6",
+    date: "Sep 2026",
+    items: [
+      "When your workspace runs out of credits partway through adding people, the bar says how many weren't added, instead of quietly adding fewer. Running out before anyone goes in shows why, and when credits come back",
+    ],
+  },
+  {
     product: "webapp",
     version: "0.22.0",
     date: "Sep 2026",

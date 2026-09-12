@@ -917,11 +917,7 @@
       const json = await res.json().catch(() => ({}));
       if (!res.ok || !json.ok) throw new Error(json.error || `server said ${res.status}`);
 
-      const { created = 0, duplicates = 0 } = json.data || {};
-      message(
-        duplicates ? `Added ${created}, ${duplicates} already yours` : `Added ${created}`,
-        "ok",
-      );
+      message(addedSummary(json.data), "ok");
       // Their chips should now say "In Followthroo" — ask again rather than assume.
       relookup(rows.map((r) => r.profileUrl));
       state.selected.clear();
@@ -1006,6 +1002,19 @@
     };
   }
 
+  /**
+   * "Added 8, 2 already yours" — and, when the workspace's credits ran out partway
+   * through, how many didn't go in. The server imports only what the day's credits
+   * cover, and saying nothing would look like it quietly lost people.
+   */
+  function addedSummary(data) {
+    const { created = 0, duplicates = 0, waitingForCredits = 0 } = data || {};
+    let text = `Added ${created}`;
+    if (duplicates) text += `, ${duplicates} already yours`;
+    if (waitingForCredits) text += ` · ${waitingForCredits} not added — out of credits for today`;
+    return text;
+  }
+
   /** Send rows to Followthroo. Shared by the bar and the panel. */
   async function postRows(rows, onDone) {
     const cfg = await chrome.storage.local.get(["apiBase", "token"]);
@@ -1018,8 +1027,7 @@
       });
       const json = await res.json().catch(() => ({}));
       if (!res.ok || !json.ok) throw new Error(json.error || `server said ${res.status}`);
-      const { created = 0, duplicates = 0 } = json.data || {};
-      onDone(duplicates ? `Added ${created}, ${duplicates} already yours` : `Added ${created}`, false);
+      onDone(addedSummary(json.data), false);
       // Their chips should now say "In Followthroo" — ask again rather than assume.
       relookup(rows.map((r) => r.profileUrl));
     } catch (e) {
