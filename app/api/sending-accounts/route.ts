@@ -3,6 +3,7 @@ import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { ok, fail } from "@/lib/http";
 import { requireOrg, requireRole } from "@/lib/tenant";
+import { requireLimit } from "@/lib/billing/limits";
 import nodemailer from "nodemailer";
 
 export const runtime = "nodejs";
@@ -103,6 +104,11 @@ export async function POST(req: NextRequest) {
     if (existing) {
       return fail(`A sending account with email ${data.email} already exists`, 400);
     }
+
+    // After the connection test on purpose: checking a mailbox's settings is not
+    // adding it, and is never refused.
+    const full = await requireLimit(ctx.orgId, "inboxes");
+    if (full) return full;
 
     // Only accept a domain this org actually owns — otherwise the id is just
     // untrusted input that would attach the mailbox to someone else's domain.

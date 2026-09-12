@@ -38,6 +38,7 @@ const SCHEDULES = [
   { path: "/api/cron/enrollment-sweep", cron: "*/10 * * * *", label: "enrollment sweep (every 10 min)" },
   { path: "/api/cron/domain-sweep", cron: "*/5 * * * *", label: "domain + DNS sweep (every 5 min)" },
   { path: "/api/cron/task-sweep", cron: "*/15 * * * *", label: "task reminders + escalation (every 15 min)" },
+  { path: "/api/cron/billing-sweep", cron: "*/15 * * * *", label: "billing: stranded credits + trial reminders (every 15 min)" },
   // Hourly, not daily: the handler picks the orgs whose LOCAL clock just hit 8am.
   { path: "/api/cron/daily-digest", cron: "0 * * * *", label: "morning task digest (hourly, sends at local 8am)" },
 ];

@@ -8,8 +8,9 @@ import {
   ExternalLink, ShieldCheck, Square, Chrome, Download, Monitor,
 } from "lucide-react";
 import { api } from "@/lib/client";
-import { Banner, DashHeader, Input, Label, useConfirm } from "@/components/ui";
+import { Banner, DashHeader, Input, Label, Select, useConfirm } from "@/components/ui";
 import { SourcingView } from "@/components/dashboard/SourcingView";
+import { QueuedInvitations } from "./QueuedInvitations";
 import { EXTENSION_STORE_URL, DESKTOP_APP_URL } from "@/lib/constants";
 
 /**
@@ -39,6 +40,7 @@ type Connect = {
   minDelaySec: number;
   maxDelaySec: number;
   autoSend: boolean;
+  accountType: "free" | "premium" | "sales_navigator";
   account: {
     state: AccountState;
     configured: boolean;
@@ -145,6 +147,10 @@ export default function LinkedInClient() {
         {/* Whether anything is going out at all, and what is waiting. Above the
             account deliberately: it is the state people come here to check. */}
         <SendingPanel data={data} onChanged={mutate} setMsg={setMsg} />
+
+        {/* Who is next and which of them carry a note. Hidden when nothing is
+            queued — the counts above already say so. */}
+        <QueuedInvitations />
 
         {/* Where to actually get the thing the panel above keeps referring to.
             "Press Start in the desktop app" is a useless sentence to somebody
@@ -569,28 +575,52 @@ function Limits({
   const [cap, setCap] = useState<number | "">("");
   const [minD, setMinD] = useState<number | "">("");
   const [maxD, setMaxD] = useState<number | "">("");
+  const [accountType, setAccountType] = useState<Connect["accountType"] | "">("");
+  const currentType = accountType || data?.accountType || "free";
+
+  // What each LinkedIn account type means for notes. The server holds the
+  // numbers (lib/linkedin/queue.ts); this only has to say them.
+  const TYPES = {
+    free: { label: "Free account: 3 notes a day", about: "3 notes a day. Invites beyond that go without one — or wait for tomorrow if you chose a note for them." },
+    premium: { label: "Premium: a note on any invite", about: "A note on any invite, up to your daily limit." },
+    sales_navigator: { label: "Sales Navigator: a note on any invite", about: "A note on any invite, up to your daily limit." },
+  } as const;
 
   async function save() {
-    const body: Record<string, number> = {};
+    const body: Record<string, number | string> = {};
     if (cap !== "") body.dailyInviteCap = Number(cap);
     if (minD !== "") body.minDelaySec = Number(minD);
     if (maxD !== "") body.maxDelaySec = Number(maxD);
+    if (accountType && accountType !== data?.accountType) body.accountType = accountType;
     if (!Object.keys(body).length) return;
     await api("/api/linkedin/connect", { body: { action: "update", ...body } });
     setMsg({ kind: "success", text: "Limits saved." });
-    setCap(""); setMinD(""); setMaxD("");
+    setCap(""); setMinD(""); setMaxD(""); setAccountType("");
     onSaved();
   }
 
   return (
     <Disclosure
       title="Limits"
-      summary={`${data?.dailyInviteCap ?? 20} actions a day, ${data?.minDelaySec ?? 45}–${data?.maxDelaySec ?? 120}s apart`}
+      summary={`${data?.dailyInviteCap ?? 20} actions a day, ${data?.minDelaySec ?? 45}–${data?.maxDelaySec ?? 120}s apart · ${TYPES[data?.accountType ?? "free"].label}`}
     >
       <p className="text-sm text-ink-soft">
         Set once and rarely touched. These exist to keep your account in good standing, not to ration you — LinkedIn
         restricts accounts that behave like software.
       </p>
+      <div className="mt-4">
+        <Label htmlFor="li-account-type">LinkedIn account</Label>
+        <Select id="li-account-type" value={currentType} onChange={(e) => setAccountType(e.target.value as Connect["accountType"])}>
+          <option value="free">Free</option>
+          <option value="premium">Premium</option>
+          <option value="sales_navigator">Sales Navigator</option>
+        </Select>
+        <p className="mt-1.5 text-xs text-ink-soft">{TYPES[currentType].about}</p>
+        <p className="mt-1 text-xs text-ink-soft">
+          If LinkedIn tells the desktop app you&apos;ve used your notes sooner, notes stop for the rest of that day and
+          start again tomorrow — whatever this is set to.
+        </p>
+      </div>
       <div className="mt-4 grid gap-4 sm:grid-cols-3">
         <div>
           <Label>Actions per day</Label>

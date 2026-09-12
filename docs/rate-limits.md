@@ -1,6 +1,6 @@
 # rate-limits.md — Quotas & Throttling Strategy
 
-**Last updated:** 2026-07-03
+**Last updated:** 2026-09-12
 **Status:** draft
 
 > Rate limits are law (see CLAUDE.md guardrails). Every send acquires quota from
@@ -15,6 +15,7 @@
 | **Gmail (free/trial)** | 500 messages/day | — | ≤500 recipients/msg; rolling 24h; freezes ~24h on breach |
 | **Gmail (paid Workspace)** | ~2,000 messages/day | — | ~3,000/day to external recipients |
 | **LinkedIn invites** | ~20/day (new account) | ramp +~5/week with acceptance | hidden caps → "Try again next week" |
+| **LinkedIn invite notes** | 3/day on a free account | any invite on Premium / Sales Navigator, up to the invite cap | a Premium upsell replaces the note box → the day's notes close early (`noteAllowance`, `notesExhaustedOn`) |
 | **LinkedIn API calls** | per approved plan | up to ~100,000/day (approved) | TOS forbids exceeding limits |
 | **WhatsApp (portfolio)** | 250 unique users/24h | 250 → 2,000 → 10,000 → 100,000 after verification/quality | template + opt-in required outside 24h window |
 | **Mailgun API** | 500 calls / 10s | — | chunk bursts |

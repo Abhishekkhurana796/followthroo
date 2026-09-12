@@ -3,6 +3,7 @@
 import React, { useEffect, useRef } from "react";
 import Link from "next/link";
 import { ArrowRight, Mail, Linkedin, MessageCircle } from "lucide-react";
+import { PLANS } from "@/lib/billing/plans";
 import { gsap } from "./gsap";
 
 
@@ -140,8 +141,8 @@ export default function Hero() {
           </p>
 
           <div className="lk-rise mt-8 flex flex-wrap items-center gap-3">
-            <Link href="/dashboard" className="btn btn-primary">
-              Start free <ArrowRight className="h-4 w-4" />
+            <Link href="/sign-up?plan=test_drive" className="btn btn-primary">
+              Try it for ${PLANS.test_drive.price} <ArrowRight className="h-4 w-4" />
             </Link>
             <a href="#how" className="btn btn-ghost">
               See how it works
@@ -151,7 +152,7 @@ export default function Hero() {
           <div className="lk-rise mt-8 flex flex-wrap items-center gap-x-6 gap-y-2 font-mono text-xs text-ink-soft">
             <span>◆ Throttled by default</span>
             <span>◆ GDPR-ready</span>
-            <span>◆ No card required</span>
+            <span>◆ No subscription to try</span>
           </div>
         </div>
 

@@ -2,6 +2,7 @@
 
 import React, { useEffect, useState } from "react";
 import Link from "next/link";
+import { PLANS } from "@/lib/billing/plans";
 import {
   Menu,
   X,
@@ -194,7 +195,7 @@ export default function Nav() {
           </Link>
         </div>
 
-        {/* Desktop CTA Cluster: Log in / Get a demo / Sign up for free */}
+        {/* Desktop CTA Cluster: Log in / Get a demo / Try it for $2 */}
         <div className="hidden items-center gap-2 md:flex">
           <Link href="/sign-in" className="btn btn-ghost !py-2 !px-3.5 !text-xs">
             Log in
@@ -202,8 +203,8 @@ export default function Nav() {
           <Link href="/contact" className="btn btn-ghost !py-2 !px-3.5 !text-xs">
             Get a demo
           </Link>
-          <Link href="/sign-up" className="btn btn-primary !py-2 !px-4 !text-xs">
-            Sign up for free
+          <Link href="/sign-up?plan=test_drive" className="btn btn-primary !py-2 !px-4 !text-xs">
+            Try it for ${PLANS.test_drive.price}
           </Link>
         </div>
 
@@ -288,8 +289,8 @@ export default function Nav() {
               <Link href="/contact" onClick={() => setOpen(false)} className="btn btn-ghost justify-center">
                 Get a demo
               </Link>
-              <Link href="/sign-up" onClick={() => setOpen(false)} className="btn btn-primary justify-center">
-                Sign up for free
+              <Link href="/sign-up?plan=test_drive" onClick={() => setOpen(false)} className="btn btn-primary justify-center">
+                Try it for ${PLANS.test_drive.price}
               </Link>
             </div>
           </div>

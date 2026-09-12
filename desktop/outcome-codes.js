@@ -37,6 +37,10 @@ const CODES = {
   INVITATION_DIALOG_NOT_FOUND: "INVITATION_DIALOG_NOT_FOUND",
   MESSAGE_FIELD_NOT_FOUND: "MESSAGE_FIELD_NOT_FOUND",
   SEND_BUTTON_NOT_FOUND: "SEND_BUTTON_NOT_FOUND",
+  // LinkedIn's Premium upsell where the note box should be: a free account's
+  // personalised notes are used up for the day. Reported as skipped, and the
+  // server puts the invitation back to wait for tomorrow with its note.
+  NOTE_LIMIT_REACHED: "NOTE_LIMIT_REACHED",
 
   // Submission.
   INVITATION_SUBMITTED: "INVITATION_SUBMITTED",

@@ -32,6 +32,57 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    product: "extension",
+    version: "3.1.6",
+    date: "Sep 2026",
+    items: [
+      "When your workspace runs out of credits partway through adding people, the bar says how many weren't added, instead of quietly adding fewer. Running out before anyone goes in shows why, and when credits come back",
+    ],
+  },
+  {
+    product: "webapp",
+    version: "0.22.0",
+    date: "Sep 2026",
+    items: [
+      "New pricing: a $2 Test Drive for 14 days, then Start at $10, Grow at $20 and Scale at $50 a month. Every plan has the CRM, the inbox and every channel; plans differ in daily credits, people, inboxes, campaigns, templates and leads. The pricing page compares them side by side and lists what every action costs",
+      "Plans & billing is rebuilt around it: your plan and how much of each limit you use, today's credits, top-up packs with what each credit costs next to your plan's own rate, and a history of every charge and refund. It used to show three plans nobody could be on",
+      "Nothing is charged yet, and nothing you send is counted, until card payments are switched on",
+      "The sidebar no longer labels every workspace \"Free\"",
+      "The homepage, site navigation, footer and the desktop app and Chrome extension pages no longer say \"Start free\", \"Sign up for free\" or \"No card required\" — they offer the $2 Test Drive instead. The homepage's \"Book a demo\" button now opens the contact page rather than the dashboard",
+    ],
+  },
+  {
+    product: "webapp",
+    version: "0.21.0",
+    date: "Sep 2026",
+    items: [
+      "Choose which LinkedIn invitations carry a note. A new Queued invitations list on the LinkedIn screen shows who goes out next, with a Note switch and an editable note on every invitation, and how many of today's notes are left",
+      "Connection-request steps in a campaign have a new \"Add a note for\" setting: Everyone, Leads I pick (each one waits in Queued invitations until you choose), or No one",
+      "Set your LinkedIn account type under Limits. Free accounts get 3 notes a day; once they're used, invitations you chose a note for wait for tomorrow instead of going out without one, and invitations without a note keep sending",
+      "LinkedIn's daily limits now reset at midnight in your workspace's time zone. They used to reset at 5:30 in the morning India time",
+    ],
+  },
+  {
+    product: "desktop",
+    version: "1.13.0",
+    date: "Sep 2026",
+    items: [
+      "Fixed: signing in with Google or Zoho in the Followthroo side of the window opened Chrome, signed Chrome in, and left the app signed out. It now goes through your browser the same way the panel's own Sign in button does, and brings you back signed in",
+      "The Up next list shows whether each invitation carries a note, with a switch to turn it on or off, an Edit link to change what it says, and how many notes are left today",
+      "When LinkedIn says your free personalised notes are used up, the app leaves that invitation for tomorrow with its note and carries on with the ones that have none. It used to count it as a failure and try the same person again",
+      "Recolored to match the web app: navy text, the same blue, and a gradient Start button",
+    ],
+  },
+  {
+    product: "webapp",
+    version: "0.20.9",
+    date: "Sep 2026",
+    items: [
+      "Inside the Windows app, the sign-in and sign-up pages now offer \"Sign in with Google or Zoho in your browser\" instead of buttons that can't work there. This reaches copies of the app that are already installed, without waiting for an update",
+      "Fixed: \"Try signing in again\" after a failed Windows app sign-in finished in the browser and never went back to the app",
+    ],
+  },
+  {
     product: "webapp",
     version: "0.20.8",
     date: "Sep 2026",

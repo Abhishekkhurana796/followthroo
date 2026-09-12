@@ -529,6 +529,17 @@ function observe() {
       }
       return null;
     })(),
+    // LinkedIn's upsell in place of the note box, once a free account has used
+    // its personalised notes. Only consulted after "Add a note" produced no
+    // field — the ordinary invite dialog can mention Premium too.
+    noteUpsell: (() => {
+      const dlg = querySelectorDeep(
+        '[role="dialog"], [aria-modal="true"], .artdeco-modal, .artdeco-modal-overlay, #artdeco-modal-outlet, .send-invite, [data-view-name*="modal"]',
+      );
+      const t = ((dlg && dlg.textContent) || "").toLowerCase();
+      if (/personali[sz]ed invitations?|personali[sz]e (more|unlimited)|free personali[sz]ed/.test(t)) return true;
+      return /premium/.test(t) && /invit/.test(t);
+    })(),
     elements,
   };
 }

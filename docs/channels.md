@@ -1,12 +1,13 @@
 # channels.md — Per-Channel Features & Official Limits
 
-**Last updated:** 2026-09-07
+**Last updated:** 2026-09-12
 **Status:** draft
 
 > Every channel module implements a uniform `send(lead, rendered)` interface and goes
 > through `lib/ratelimit` — except LinkedIn, whose `send()` only enqueues, so its cap is
 > enforced at claim time instead. Consolidated numbers live in
-> [rate-limits.md](rate-limits.md).
+> [rate-limits.md](rate-limits.md). Sends that cost credits are charged on the same path —
+> see [Credits on every send](#credits-on-every-send-2026-09-12).
 
 ---
 
@@ -135,6 +136,31 @@ export interface Channel {
 
 ---
 
+## Credits on every send (2026-09-12)
+
+Plans meter actions in credits ([pricing.md](pricing.md); the numbers live in
+`lib/billing/plans.ts`). Each channel is charged where it actually sends:
+
+- **Email and WhatsApp** — in `safeSend`, after suppression and quiet hours and *before* the
+  rate limiter, because a credit can be handed back and a rate-limit slot can't. Kept once the
+  adapter reports a real send; handed back if it's skipped, fails or throws.
+- **LinkedIn** — not in `safeSend`, whose LinkedIn `send()` only queues. The desktop app's
+  claim pays for each action (3, 5 with a note, 2 for a message) and `completeAction` settles
+  it. `selectClaimable` holds what the balance doesn't cover as `no_credits`, so the list peek
+  shows is still the list that goes out. An action put back in the queue keeps its credits;
+  one cancelled without a report is settled by the billing sweep.
+- **Free sends** — `SendContext.free`, only for a person sending by hand for themselves: an
+  inbox reply, a template test send. Everything else pays by default, so a new caller that
+  never thought about credits is charged rather than handed free sends.
+- **Out of credits** — `safeSend` returns `{ skipped: true, reason: "no_credits" | "no_plan" }`.
+  The job processor records nothing, and `advanceEnrollment` holds the step until the
+  workspace's next midnight instead of moving past it. Approving an agent draft returns 402
+  and the draft stays a draft.
+
+Nothing is charged until `BILLING_ENFORCED=1`.
+
+---
+
 ## Deliverability & tracking (Phase 2 — 2026-07-05)
 
 - **Open/click tracking** (`lib/tracking.ts`): before each email send, `job-processor`
@@ -237,7 +263,25 @@ against `MAX_PER_DAY`, with the day's tally persisted so pressing Start twice do
 forty. Stale `in_progress` claims are reclaimed after 15 min. A run also stops early on
 LinkedIn's own weekly-limit or verification dialog (first occurrence, marked `fatal`), on
 three consecutive failures, on a sign-in wall, and when automatic sending is switched off in
-the web app. Config + token live on `/dashboard/linkedin`.
+the web app. Config + token live on `/dashboard/linkedin`. "Today" is midnight in the
+workspace's time zone (`startOfOrgDay`, from business hours; IST by default), not the
+server's.
+
+**Notes on invitations (2026-09-12).** Whether an invitation carries its note is a choice
+made per invitation, `LinkedInAction.noteChoice`: `yes`, `no`, or `undecided` for a campaign
+step set to "Leads I pick" (`SendNode.noteFor`: `everyone` | `picked` | `none`). It is null
+on rows queued before the choice existed, which read as "a note when there is one". The
+allowance is server-side in `noteAllowance`: 3 a day on a free account, the invite cap on
+Premium or Sales Navigator (`LinkedInAccount.accountType`, set under Limits). An invitation
+that wants a note once the allowance is spent is **held**, never sent without it, and plain
+invitations keep flowing past it. Undecided ones are held until somebody picks, on the
+LinkedIn screen's Queued invitations list or the desktop app's Up next list
+(`PATCH /api/linkedin/invitations/:id`, pending rows only). When LinkedIn shows its Premium
+upsell where the note box should be, the desktop app reports `NOTE_LIMIT_REACHED` as a skip;
+the server sets `notesExhaustedOn`, puts the invitation back to `pending` with its note, and
+hands out no more notes that day whatever the account type says. A claimed invitation marked
+"no" is handed out with `note: null`, so a desktop app too old to know about choices cannot
+type one. `scripts/verify-linkedin-notes.ts` holds all of this.
 
 **Note:** `safeSend` in `lib/channels/index.ts` deliberately skips the generic
 `lib/ratelimit.ts` day-window for LinkedIn. That limiter is charged before `channel.send()`,
@@ -315,8 +359,8 @@ flag.
 | Post to own feed | ✅ `w_member_social` | `lib/linkedin/post.ts`, server-side, no browser |
 | Read search results | ❌ not sold at any tier | Extension, member's own tab |
 | Company employees, post likers, group members, event guests | ❌ | Extension |
-| Send connection invitations | ❌ | Extension drafts, human sends |
-| Send messages | ❌ | Extension drafts, human sends |
+| Send connection invitations | ❌ | Desktop app, in the member's own browser and IP (notes chosen per invitation, above) |
+| Send messages | ❌ | Desktop app, in the member's own browser and IP |
 
 Sales Navigator and Marketing Developer Platform APIs are partner-gated and closed to
 general applicants; they do not change this table for a self-serve SaaS.

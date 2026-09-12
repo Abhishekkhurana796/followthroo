@@ -17,6 +17,8 @@ import { enqueueJob } from "./queue";
 import { processSendJob } from "./job-processor";
 import type { Enrollment } from "@prisma/client";
 import { INVITE_NOTE_MAX, worstCaseNoteLength } from "./linkedin/note";
+import { startOfOrgDay } from "./org-day";
+import { isOutOfCredits, type Refusal } from "./billing/meter";
 
 const CHANNELS = ["email", "linkedin", "whatsapp", "social"] as const;
 
@@ -38,6 +40,11 @@ export const SendNode = z.object({
   /// to "auto", which is exactly what they already did — invite, falling back to
   /// a message if the person is already a connection.
   linkedinAction: z.enum(LINKEDIN_ACTIONS).optional(),
+  /// Invitations only: who gets the template as a note. "picked" holds each
+  /// invitation in LinkedIn → Queued invitations until somebody chooses; "none"
+  /// sends plain requests. Absent on steps saved before this existed, which keep
+  /// doing what they did — a note whenever there is one.
+  noteFor: z.enum(["everyone", "picked", "none"]).optional(),
   templateId: z.string().nullable().optional(),
   /// Pins this step to one snapshot of the template's wording. Without it the
   /// body is resolved live at send time, so editing the template rewrites every
@@ -141,10 +148,18 @@ export async function validateSequence(
         message: `Step ${numberOf.get(node.id)} is not a LinkedIn step, so it cannot have a LinkedIn action.`,
       };
     }
+    if (node.noteFor && (node.channel !== "linkedin" || linkedinActionFor(node) === "message")) {
+      return {
+        ok: false,
+        message: `Step ${numberOf.get(node.id)} is not a connection request, so it has no note to choose.`,
+      };
+    }
   }
 
+  // A step sending plain requests never uses its template as a note, so there is
+  // no note length to hold it to.
   const inviteSteps = nodes.filter(
-    (n) => n.type === "send" && n.channel === "linkedin" && linkedinActionFor(n) === "invite" && n.templateId,
+    (n) => n.type === "send" && n.channel === "linkedin" && linkedinActionFor(n) === "invite" && n.noteFor !== "none" && n.templateId,
   );
   if (!inviteSteps.length) return { ok: true };
 
@@ -247,6 +262,27 @@ async function finish(id: string, status: "completed" | "stopped" | "replied") {
   await prisma.enrollment.update({ where: { id }, data: { status, nextRunAt: null } });
 }
 
+/**
+ * A send step the workspace can't pay for waits, rather than failing or being
+ * skipped: the enrollment stays on the same step and runs it again later.
+ *
+ * Out of credits, that's just after the workspace's own midnight, when the
+ * allowance comes back — plus up to half an hour of jitter, so a thousand
+ * waiting leads don't all go at once. With no live plan, midnight doesn't help,
+ * so it looks again in a day.
+ *
+ * nextRunAt is written before the publish, so if the publish fails the recovery
+ * sweep still finds it once it's due.
+ */
+async function waitForCredits(enrollmentId: string, organizationId: string, reason: Refusal) {
+  const delay =
+    reason === "no_plan"
+      ? 86_400_000
+      : (await startOfOrgDay(organizationId)).getTime() + 86_400_000 - Date.now() + 60_000 + Math.floor(Math.random() * 30 * 60_000);
+  await prisma.enrollment.update({ where: { id: enrollmentId }, data: { nextRunAt: new Date(Date.now() + delay) } });
+  await enqueueJob({ kind: "advance", enrollmentId }, delay);
+}
+
 /** Has the lead replied since this enrollment began (optionally within N days)? */
 /**
  * Has this contact replied since being enrolled?
@@ -346,11 +382,12 @@ export async function advanceEnrollment(enrollmentId: string): Promise<void> {
   if (node.type === "send") {
     // Default stop-on-reply: never send another message after the lead has replied.
     if (await hasReplied(enr)) return finish(enr.id, "replied");
-    await processSendJob({
+    const sent = await processSendJob({
       kind: "send",
       organizationId: orgId,
       channel: node.channel,
       linkedinAction: node.channel === "linkedin" ? linkedinActionFor(node) : undefined,
+      noteFor: node.channel === "linkedin" && linkedinActionFor(node) !== "message" ? node.noteFor : undefined,
       nodeId: node.id,
       leadId: enr.leadId,
       campaignId: enr.campaignId,
@@ -360,6 +397,7 @@ export async function advanceEnrollment(enrollmentId: string): Promise<void> {
       // record rather than going out under the platform's address.
       account: enr.campaign.sendingAccountId ?? undefined,
     });
+    if (!sent.ok && isOutOfCredits(sent.reason)) return waitForCredits(enr.id, orgId, sent.reason);
     nextId = node.next ?? null;
   } else if (node.type === "wait") {
     nextId = node.next ?? null;

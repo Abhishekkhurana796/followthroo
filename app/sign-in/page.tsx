@@ -4,8 +4,7 @@ import { useState, Suspense } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { authClient, signIn } from "@/lib/auth-client";
-import { GoogleButton } from "@/components/auth/GoogleButton";
-import { ZohoButton } from "@/components/auth/ZohoButton";
+import { SocialSignIn } from "@/components/auth/SocialSignIn";
 
 function Mark() {
   return (
@@ -65,8 +64,7 @@ function SignInForm() {
       <p className="mt-2 text-sm text-ink-soft">Sign in to your outreach command center.</p>
 
       <div className="mt-8">
-        <GoogleButton callbackURL={redirect} label="Sign in with Google" />
-        <ZohoButton callbackURL={redirect} label="Sign in with Zoho" />
+        <SocialSignIn mode="sign-in" callbackURL={redirect} />
       </div>
       <div className="my-5 flex items-center gap-3 text-[11px] font-medium uppercase tracking-wide text-ink-soft">
         <span className="h-px flex-1 bg-line" />

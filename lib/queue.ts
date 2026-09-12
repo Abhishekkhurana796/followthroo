@@ -37,6 +37,8 @@ export interface SendJob {
   /** LinkedIn only: which gesture to draft. Rides the payload so a queued send
    *  keeps its kind across the wire. */
   linkedinAction?: "invite" | "message" | "auto";
+  /** LinkedIn invitations only: the step's "Add a note for" choice. */
+  noteFor?: "everyone" | "picked" | "none";
 }
 
 export interface AdvanceJob {

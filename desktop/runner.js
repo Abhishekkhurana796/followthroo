@@ -536,7 +536,10 @@ async function runBatch({
             action: { ...action, autoSend },
             apiBase,
             token,
-            useNote: noteAllowed(),
+            // The server decides whether this one carries its note — the choice
+            // made for the person, and today's allowance. A server too old to
+            // say leaves the local budget standing in, as before.
+            useNote: action.noteChoice === undefined ? noteAllowed() : action.noteChoice === "yes",
             onStep,
           };
 

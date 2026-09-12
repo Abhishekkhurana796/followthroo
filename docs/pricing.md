@@ -1,50 +1,141 @@
-# pricing.md — Recurring Costs & Pricing Setup
+# pricing.md — Plans, Credits & the Costs Behind Them
 
-**Last updated:** 2026-08-14
+**Last updated:** 2026-09-12
 **Status:** draft
 
-> This doc grounds a proposed pricing structure (Free/Startup/Growth/Enterprise
-> tiers, seat-based subscription + usage-based "Followthroo Credits" for
-> communications) in this codebase's actual infrastructure choices, so pricing
-> decisions are based on real COGS rather than generic SaaS assumptions. It
-> supplements the tier structure — it does not redesign it.
+> **The source of truth is [`lib/billing/plans.ts`](../lib/billing/plans.ts).**
+> Prices, limits, daily credits, what each action costs and the top-up packs
+> live there once; the pricing page, Plans & billing, `llms.txt`, the FAQ and
+> every limit check read it. If this doc and that file disagree, the file is
+> right and this doc is stale.
 >
-> **Interactive model:** [pricing-model.xlsx](pricing-model.xlsx) turns the
-> margin math below into a live workbook — an editable Assumptions tab (FX
-> rate, tier prices, AI $/seat, plan mix, payment %) feeds four scenario
-> sheets (Blended Mix, All Startup, All Growth, All Enterprise), each showing
-> revenue/cost/margin at 10 → 25 → 50 → 100 → 250 → 500 → 1,000 seats.
-> [pricing-model-blended.csv](pricing-model-blended.csv) is a flat export of
-> the primary Blended Mix scenario for quick viewing.
+> The first half is the pricing as settled with the client on 2026-09-12 and
+> how the product enforces it. The second half is the cost model it has to
+> clear. [pricing-model.xlsx](pricing-model.xlsx) and
+> [pricing-model-blended.csv](pricing-model-blended.csv) model the earlier
+> per-seat ₹ tiers and predate credits.
 
 ---
 
-## Why this looks different from a typical outreach SaaS
+## The plans (settled 2026-09-12)
 
-Three architecture decisions already made in this repo change the cost
-picture materially versus what you'd assume from a generic multi-channel
-outreach platform:
+All prices in USD, charged through Razorpay. Dodo Payments was considered and
+declined on fees: 4% + 40¢ against Razorpay's ~2%.
 
-1. **Email costs ~$0 to send.** Every send goes through a tenant-connected
-   `SendingAccount` (Nodemailer + Gmail OAuth2/SMTP) — there is deliberately
-   **no platform fallback mailbox** (`docs/channels.md`), to avoid
-   shared-reputation and cross-tenant rate-limit problems. The customer's own
-   Gmail/Workspace account absorbs the sending cost, not Followthroo.
-2. **LinkedIn automation costs ~$0 server-side.** It is not headless-browser
-   automation. It's a Chrome extension (`extension/`) that runs in the rep's
-   own browser, on their own logged-in session; a human reviews and clicks
-   Send. No headless-browser hosting, no proxy pool, no anti-detection infra
-   to budget for.
-3. **Auth costs $0 in per-MAU fees.** The app uses self-hosted `better-auth`
-   (email/password + Google OAuth + an org plugin), not Clerk or Auth0 as
-   `docs/security.md` and `CLAUDE.md` still state — that's a stale reference,
-   worth fixing separately, but the actual build already avoided the
-   per-monthly-active-user auth SaaS fee.
+| | Test Drive | Start | Grow ⭐ | Scale | Custom |
+|---|---|---|---|---|---|
+| Price | $2 one-time, 14 days | $10/mo | $20/mo | $50/mo | Talk to us |
+| **Credits a day** | 30 | 100 | 250 | 750 | — |
+| People | 1 | 1 | 2 | 5 | 5+ |
+| Sending inboxes | 1 | 1 | 2 | 5 | — |
+| Campaigns | 1 | 3 | 10 | 25 | — |
+| Templates | 3 | 10 | 25 | 50 | — |
+| Leads stored | 50 | 500 | 2,500 | Unlimited | — |
+| Post autopilots | — | 1 | 3 | 10 | — |
+| Deliverability report | — | ✓ | ✓ | ✓ | |
+| Lead assignment | — | just you | ✓ | ✓ | |
+| Roles, control tower, ageing | — | — | ✓ | ✓ | |
+| Escalations / SLA rules | — | — | — | ✓ | |
+| Premium AI models | — | — | ✓ | ✓ | |
 
-The real variable cost driver is **AI token usage**, with **WhatsApp**
-pass-through a distant second. Both are already contemplated by the
-"Followthroo Credits" usage-metering idea — this doc just puts numbers behind
-it.
+Extra seats can't be bought; more than five people is a Custom plan. Credits
+meter actions; storage stays capped. There is no "leads added per month" limit
+and no lead top-up.
+
+**Why a plan beats top-ups.** Plans show credits a day and packs show a total,
+which made a $5 pack look cheaper than a $10 plan. Per credit it's the other way
+round: Start's credits cost $0.0033, Grow's $0.0027, Scale's $0.0022, and packs
+$0.005–$0.010 — about 3× a plan's own rate. The pricing page and Billing print
+both numbers side by side for that reason.
+
+### Credits
+
+| Action | Credits |
+|---|---|
+| Email sent | 1 |
+| LinkedIn invitation | 3 |
+| LinkedIn invitation with a note | 5 |
+| LinkedIn message | 2 |
+| Enrichment (LinkedIn Contact info) | 3, less 1 per missing email/phone; all 3 back if not 1st-degree or on failure *(P2)* |
+| WhatsApp / SMS, on the customer's own number or provider | 1 |
+| AI reply draft / agent step | 2 |
+| AI post, research + write | 10 standard model · 20 premium, per variant *(P3)* |
+| LinkedIn import with the extension | 1 per 10 people added |
+| CSV import, adding leads, CRM, inbox (including replying by hand), reports, test sends to yourself | Free |
+
+- **A daily allowance.** It refills at midnight in the workspace's time zone
+  (the business-hours offset, IST by default) and doesn't roll over. One pool
+  per workspace.
+- **Today's allowance first, then top-ups.** Top-ups never expire while the
+  workspace has a plan, and are lost on cancellation. Paid plans only.
+- **Taken when something goes out.** Credits are reserved when an action
+  starts and settled when it finishes: kept if it happened, handed back if it
+  didn't. A skipped, failed or rate-limited send costs nothing.
+- **Out of credits, nothing is lost.** A campaign step waits for the next
+  midnight; a LinkedIn invitation stays queued as "Waits for credits"; an
+  import brings in what the balance covers. The workspace sees a banner, and
+  its owners and admins get one email a day.
+
+### Top-ups and auto-recharge
+
+500 for $5 · 1,500 for $12 · 5,000 for $30 · 15,000 for $75.
+
+Auto-recharge is a Razorpay card/UPI mandate the customer approves once with a
+monthly ceiling. When the balance drops below their threshold we charge the
+pack they chose. Indian cards need a pre-debit notice, so credits arrive about
+a day after the trigger.
+
+### Launch
+
+Every workspace that existed before billing gets **14 days of Grow**, counted
+from the first time somebody opens it after launch
+(`startTrialIfWaiting`, called from `app/dashboard/layout.tsx`), so a dormant
+workspace's trial can't run out unseen. Reminders go at 7, 3 and 1 days left and
+when it ends. After that, sending, enrichment and posting stop until a plan is
+chosen. Nothing is deleted, and a workspace over its new limits chooses what
+stays active.
+
+---
+
+## How it's enforced
+
+| Piece | Where |
+|---|---|
+| Plans, limits, costs, packs | `lib/billing/plans.ts` |
+| The ledger: allowance, reserve, settle, top-ups | `lib/billing/credits.ts` — `CreditBalance` + append-only `CreditLedger` |
+| What a charge means: billing on or off, refusals, the once-a-day email | `lib/billing/meter.ts` |
+| Plan status, trials, Test Drive expiry | `lib/billing/subscription.ts` |
+| Create-time limits (402 when enforced) | `lib/billing/limits.ts`, called from the campaign, template, lead, import and mailbox routes |
+| Billing screens | `lib/billing/summary.ts` → `/api/billing/summary`, `/api/billing/history` |
+| Stranded reservations, trial reminders | `lib/billing/sweep.ts` → `/api/cron/billing-sweep` (QStash, every 15 min) |
+
+**Where credits are charged.**
+
+- Email and WhatsApp: in `safeSend`, before the rate limiter, so a refused
+  send doesn't use an hour's quota and a rate-limited one gets its credit back.
+  Callers pass `SendContext.free` only for sends a person makes by hand for
+  themselves (inbox replies, template test sends).
+- LinkedIn: when `claimActions` hands an action to the desktop app, settled in
+  `completeAction`. An action put back in the queue (closed browser, the note
+  upsell) keeps its credits. One cancelled without a report (deleted campaign,
+  "Stop everything") is settled by the sweep.
+- Sourcing: `importScrapedRows`. The agent: `paidStep` in `lib/agent.ts`.
+
+**Invariants.** The balance can never go negative: a charge is one conditional
+`UPDATE`, never a read then a write (`claimActions` has that race and credits
+must not inherit it). Every movement is a ledger row unique on
+`(refType, refId, kind, bucket)` under a per-thing advisory lock, so retries and
+redelivered webhooks move credits once. Reserving a ref that was already
+settled charges nothing, so anything that can be retried after it finished
+needs a ref per attempt.
+
+**The switch.** Nothing is charged or refused until `BILLING_ENFORCED=1`.
+Before the launch script gives workspaces a plan, "no plan" would refuse every
+send. With it off, limit checks log what they would have refused, and the
+credits chip and banners stay hidden.
+
+`scripts/verify-credits.ts` holds all of this to account against throwaway
+workspaces.
 
 ---
 
@@ -54,15 +145,14 @@ it.
 |---|---|---|
 | Hosting | Vercel (Fluid Compute) | `.vercel/project.json` confirms the connection; no `vercel.json` yet |
 | Database | Supabase Postgres | Pooled `:6543` (runtime, pgbouncer) / direct `:5432` (migrations) |
-| Queue (prod) | Upstash QStash | `lib/queue.ts`: QStash → BullMQ/Redis fallback → inline (dev only) |
+| Queue (prod) | Upstash QStash | `lib/queue.ts`: QStash → inline (dev only) |
 | Rate-limit counters | Upstash Redis | Required in prod so counters are shared across workers (`lib/ratelimit.ts`) |
-| Email | Nodemailer + Gmail OAuth2/SMTP | BYO mailbox per tenant, no shared fallback |
-| WhatsApp | Twilio | Real integration in `package.json`, needs creds to go live |
-| LinkedIn | Chrome extension (`extension/`) | Human-assisted, runs client-side in the rep's browser |
-| AI — main agent loop | `claude-opus-5` via `@anthropic-ai/sdk` | `docs/ai-agent.md` / `lib/env.ts` default (`ANTHROPIC_MODEL`) |
-| AI — reply classifier | `claude-haiku-4-5` | Fires on **every inbound reply**, across every channel (`ANTHROPIC_CLASSIFIER_MODEL`) |
-| Auth | `better-auth`, self-hosted | Email/password + Google OAuth + org plugin |
-| Billing | **Nothing built yet** | `app/dashboard/settings/billing/page.tsx` and `app/pricing/page.tsx` are static, hardcoded, mutually-inconsistent mockups. No Stripe/Razorpay integration. No `Plan`/`Subscription`/`Credit` model in `prisma/schema.prisma`. |
+| Email | Nodemailer + Gmail OAuth2 / Zoho / SMTP | BYO mailbox per tenant, no shared fallback |
+| WhatsApp | Twilio / Meta, on the customer's own number | Needs creds to go live |
+| LinkedIn | Desktop app (`desktop/`) sends; extension sources | Runs on the customer's machine and IP |
+| AI | OpenRouter (`OPENROUTER_MODEL`), Anthropic direct as a fallback | `docs/ai-agent.md` |
+| Auth | `better-auth`, self-hosted | Email/password + Google + org plugin |
+| Billing | **Plans, credits and limits built; payments not wired** | `lib/billing/`. Razorpay checkout, subscriptions and webhooks wait on test keys. |
 
 ---
 
@@ -73,15 +163,15 @@ numbers, since infra and platform pricing drifts.
 
 | Item | Rate | Source |
 |---|---|---|
-| Claude Opus 5 (`claude-opus-5`) | $5.00 / $25.00 per MTok (input/output) | Anthropic API pricing (cached 2026-06-24, authoritative) |
+| Claude Opus 5 (`claude-opus-5`) | $5.00 / $25.00 per MTok (input/output) | Anthropic API pricing |
 | Claude Haiku 4.5 (`claude-haiku-4-5`) | $1.00 / $5.00 per MTok (input/output) | Anthropic API pricing |
-| Vercel Pro | $20/seat/month, includes a matching $20 usage credit (does **not** multiply with seats); 1TB transfer + 10M edge requests free | Vercel pricing, Aug 2026 |
-| Supabase Pro | $25/month base + $10 compute credit (covers 1 micro instance, 2-core ARM/1GB RAM); real-world small/medium apps land $35–75/mo once usage is counted | Supabase pricing, Aug 2026 |
-| Upstash Redis | $0.20 / 100K commands + $0.25/GB storage, pay-per-request, scale-to-zero | Upstash pricing, Aug 2026 |
+| Vercel Pro | $20/seat/month, includes a matching $20 usage credit; 1TB transfer + 10M edge requests free | Vercel pricing, Aug 2026 |
+| Supabase Pro | $25/month base + $10 compute credit; real-world small/medium apps land $35–75/mo | Supabase pricing, Aug 2026 |
+| Upstash Redis | $0.20 / 100K commands + $0.25/GB storage | Upstash pricing, Aug 2026 |
 | Upstash QStash | $1 / 100K messages + $0.25/GB storage | Upstash pricing, Aug 2026 |
-| Meta WhatsApp (India, per-message since Jul 2025) | Marketing ₹0.863, Utility ₹0.115, Authentication ₹0.115. Service replies free today — **becomes chargeable (₹0.115) from Oct 1, 2026** | Meta WhatsApp Business Platform rate card, Aug 2026 |
-| Twilio WhatsApp markup | $0.005 flat per message, inbound or outbound | Twilio pricing, Aug 2026 |
-| Razorpay | ~2% + 18% GST (≈2.36% effective) domestic card/netbanking, +0.99% subscription fee on recurring/auto-pay billing → **~2.5–4% of revenue** all-in | Razorpay pricing, Aug 2026 |
+| Meta WhatsApp (India, per-message) | Marketing ₹0.863, Utility ₹0.115, Authentication ₹0.115. Service replies free today — **chargeable (₹0.115) from Oct 1, 2026** | Meta rate card, Aug 2026 |
+| Twilio WhatsApp markup | $0.005 flat per message | Twilio pricing, Aug 2026 |
+| Razorpay | ~2% domestic (first three months free for this account), plus the subscription fee on recurring billing | Razorpay, Sep 2026 |
 
 ---
 
@@ -89,92 +179,58 @@ numbers, since infra and platform pricing drifts.
 
 ### A. Fixed platform infra
 
-Scales with total data/traffic across all tenants, not linearly per seat.
-Modeled at two illustrative scale points rather than one guess:
+Scales with total data/traffic across all tenants, not per workspace.
 
-| | Pilot (~10 orgs, ~60 paid seats) | Early growth (~40 orgs, ~300 paid seats) |
+| | Pilot (~10 orgs) | Early growth (~40 orgs) |
 |---|---|---|
 | Vercel | $40–60/mo | $150–350/mo |
-| Supabase | $35–60/mo | $100–250/mo (bigger compute instance + PITR backups recommended for the tamper-evident compliance ledger) |
+| Supabase | $35–60/mo | $100–250/mo (bigger compute + PITR backups) |
 | Upstash (Redis + QStash) | $5–20/mo | $40–120/mo |
 | Monitoring (not yet added — recommend Sentry) | $0 (defer) | $26–80/mo |
 | **Total** | **~$85–225/mo** | **~$290–830/mo** |
 
-The "early growth" scale point matches the consultant's plan minimums (Startup
-3-seat min, Growth 5-seat min) at roughly 40 paying orgs.
+### B. What each credit has to cover
 
-### B. Per-seat variable COGS
+A credit sells for $0.0022–$0.0033 inside a plan and $0.005–$0.010 in a pack.
 
-This is the real driver, and it's small relative to the proposed price
-points:
+- **Email — ~$0.** Every send goes through the customer's own mailbox.
+- **LinkedIn — ~$0 server-side.** The desktop app runs on the customer's machine.
+- **WhatsApp / SMS — ~$0 to us** while it's the customer's own number or
+  provider paying Meta/Twilio. If we ever resell messaging on our own account,
+  1 credit is far below a ₹0.55–1.30 message and the price has to change first.
+- **AI — the one to watch.**
+  - An agent step is roughly 3K tokens in and 300 out. On a standard
+    OpenRouter model (MiniMax M2 class, ~$0.30/$1.20 per MTok) that's about
+    $0.001–0.002, comfortably inside 2 credits.
+  - On an Opus-class model it's about $0.02, roughly 4× what 2 credits
+    bring in.
+  - AI posts add web search and longer output: 10 credits (~$0.027) covers a
+    standard model; premium at 20 is thin.
+  - Keep `OPENROUTER_MODEL` on a standard-tier model, or raise the premium
+    prices before offering Opus-class models.
+- **Payment processing** — ~2–4% of collected revenue.
 
-- **AI** — modeled bottom-up: agent-loop invocations/user/month × blended
-  Claude Opus 5 cost (with prompt caching) + classifier calls/user/month ×
-  Claude Haiku 4.5 cost. Comes out to roughly **$2–4/user/month** at
-  Startup-tier usage, **$4–8/user/month** at Growth/Enterprise "Advanced AI"
-  usage (more agentic automation → more tool-loop invocations). **This is a
-  model, not measured data** — replace with real per-org token usage
-  (Anthropic's `usage` object) within the first 1–2 months live.
-- **WhatsApp** — pure pass-through: ~₹0.55/message (utility, Meta + Twilio) to
-  ~₹1.30/message (marketing). Must be billed through the credits mechanism
-  with a markup, never bundled as "unlimited" — this validates the
-  consultant's structural call on communications billing.
-- **Email** — ~$0 (BYO mailbox architecture, see above).
-- **LinkedIn** — ~$0 server-side (Chrome-extension architecture, see above).
-- **Payment processing** — ~2.5–4% of collected revenue (Razorpay).
-
-### Margin check against the proposed tiers
-
-Per-seat COGS built up from the three components above, at ₹87 ≈ $1 and using
-the "early growth" scale point (300 seats) for infra allocation — that's the
-steady-state operating scale, not the pilot, since per-seat infra cost
-improves with scale as fixed costs amortize:
-
-| Component | Startup (Basic AI) | Growth (Advanced AI) |
-|---|---|---|
-| AI (Opus 5 + Haiku 4.5) | $2–3/user → ₹175–260 | $4–8/user → ₹350–700 |
-| Infra allocation (₹290–830 total ÷ 300 seats) | ₹85–240 | ₹85–240 (a bit higher in practice — heavier automation load — say ₹100–280) |
-| Payment processing (Razorpay, ~3% blended) | ₹30 | ₹75 |
-| **Total COGS/user** | **≈ ₹290–530** | **≈ ₹525–1,055** |
-
-| Tier | Price | COGS/user (range above) | Gross margin (range) |
-|---|---|---|---|
-| Startup | ₹999/user/month | ₹290–530 | **~47–71%**, roughly 55–65% at the middle of the range |
-| Growth | ₹2,499/user/month | ₹525–1,055 | **~58–79%**, roughly 68–75% at the middle of the range |
-| Enterprise | ₹4,999/user/month | Same per-seat drivers, larger denominator | Comfortably **>75%**, room to absorb dedicated support/SSO/custom-AI costs |
-
-The ranges are wide because AI usage is a *model*, not measured data — that's
-the single biggest lever on actual margin, by a wide margin over infra or
-payment fees. What the range does establish reliably: Growth's margin sits
-meaningfully above Startup's under every combination of assumptions, because
-the AI-cost increase from Basic → Advanced usage (roughly 2x) is smaller than
-the price increase from ₹999 → ₹2,499 (roughly 2.5x).
-
-**Conclusion:** the consultant's tier prices and the seat-plus-metered-usage
-structure are cost-sound — Growth at ₹2,499 is correctly the highest-margin,
-recommended hero tier, and even the worst-case Startup margin (~47%) is
-survivable for a seat-based SaaS line as long as WhatsApp/SMS/Voice stay
-metered separately rather than bundled. The number worth tightening once
-live, before trusting these margins for real financial planning, is AI usage
-per seat — replace the $2–8/user assumption with measured token usage from
-the `usage` object on real traffic within the first 1–2 months.
+At early-growth infra (~$290–830/mo), roughly 40–80 paying workspaces on Grow
+cover the platform. After that, margin is decided by which AI models are
+offered, not by sends.
 
 ---
 
 ## Gaps to close before this is chargeable
 
-Not addressed in this pass — real engineering scope, listed here so it isn't
-lost:
-
-1. **Razorpay Subscriptions + a Credits ledger table** — org-scoped, tracks
-   AI/WhatsApp/SMS/Voice usage against each plan's allowance.
-2. **Per-org usage metering** on the two call sites that already exist: the AI
-   agent loop (`lib/agent.ts`) and the WhatsApp send path
-   (`lib/channels/whatsapp.ts`).
-3. **Meta's Oct 1, 2026 WhatsApp pricing change** (service/utility messages
-   inside the session window become chargeable) should be built into the
-   credit rate card now, not scrambled later.
-4. **Stale model references** — `CLAUDE.md`, `ROADMAP.md`, and `SETUP.md`
-   still say `claude-opus-4-8`; `docs/ai-agent.md` and the actual code
-   (`lib/env.ts`) already agree on `claude-opus-5`. Small, unrelated to
-   pricing, but noticed during this audit.
+1. **Razorpay:** Start/Grow/Scale subscriptions, the $2 Test Drive order, pack
+   orders, the auto-recharge mandate, and the signed, idempotent webhook
+   (`BillingEvent`). Waiting on test keys in `.env`.
+2. **The launch script** that gives every workspace its waiting Grow trial, run
+   with a dry-run first. Then `BILLING_ENFORCED=1`.
+3. **Carry on straight away after a top-up:** campaign steps waiting for
+   credits currently wait for midnight even after a purchase.
+4. **Choose what stays active:** the over-limit dialog, and the seat limit on
+   member invitations.
+5. **Feature gates:** team reports, roles and escalations, per plan.
+6. **Estimates before spending:** the credit estimate in the enroll, invite
+   and import confirmations.
+7. **Inbound leads when storage is full:** webhook leads are still accepted
+   over the cap, so a customer's enquiry is never lost. Confirm that's the
+   intended behaviour.
+8. **Charge points for P2 (enrichment) and P3 (AI posts)** as those ship.

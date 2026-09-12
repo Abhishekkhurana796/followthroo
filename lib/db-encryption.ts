@@ -36,6 +36,9 @@ export const ENCRYPTED_COLUMNS: Record<string, readonly string[]> = {
   // A member's own LinkedIn OAuth tokens. Never filtered on — the row is found
   // by (organizationId, userId), so no blind index is needed.
   linkedInAccount: ["liAccessToken", "liRefreshToken"],
+  // The Razorpay token behind an approved auto-recharge mandate: it lets us
+  // charge the customer's card without them present.
+  autoRecharge: ["razorpayTokenId"],
 };
 
 type Row = Record<string, unknown>;
@@ -145,6 +148,12 @@ export function encryptionExtension() {
     query: {
       sendingAccount: { $allOperations: interceptorFor("sendingAccount") },
       account: { $allOperations: interceptorFor("account") },
+      // Listed in ENCRYPTED_COLUMNS since the LinkedIn OAuth work but never
+      // registered here, so members' LinkedIn tokens were written in plain text.
+      // Safe to add over existing rows: decryptField hands back anything that is
+      // not an envelope unchanged, and scripts/encrypt-backfill.ts converts them.
+      linkedInAccount: { $allOperations: interceptorFor("linkedInAccount") },
+      autoRecharge: { $allOperations: interceptorFor("autoRecharge") },
     },
   });
 }

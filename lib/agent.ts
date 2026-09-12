@@ -36,6 +36,10 @@ import { moveToStage, BackwardMoveNeedsReason } from "./pipeline";
 import { recomputeAndSaveLeadScore } from "./scoring";
 import type { Channel } from "./channels/types";
 import { randomUUID } from "node:crypto";
+import { spendable } from "./billing/credits";
+import { billingEnforced } from "./billing/limits";
+import { charge, chargedRef, isOutOfCredits, keepCredits, refusal, returnCredits } from "./billing/meter";
+import { CREDIT_COSTS } from "./billing/plans";
 
 function systemPrompt(confidenceThreshold: number, availableChannels: string): string {
   return `You orchestrate multi-channel outreach and pipeline qualification for Followthroo.
@@ -192,6 +196,30 @@ async function runDraftTool(
   return { ok: true, drafted: true, messageId: message.id, reason: input.reason };
 }
 
+/**
+ * A step that writes a message costs credits whether the model sends it or
+ * drafts it — the writing is the work — and nothing if it doesn't go through.
+ * Keyed on the tool call, so each step is charged once.
+ */
+async function paidStep<T extends { ok: boolean; reason?: string }>(
+  orgId: string,
+  stepId: string,
+  leadId: string | undefined,
+  run: () => Promise<T>,
+) {
+  const paid = await charge(orgId, "ai_draft", { ref: { type: "agent_step", id: stepId }, meta: { leadId: leadId ?? null } });
+  if (!paid.ok) return { ok: false, reason: paid.message, outOfCredits: true };
+  try {
+    const out = await run();
+    if (out.ok) await keepCredits(orgId, chargedRef(paid));
+    else await returnCredits(orgId, chargedRef(paid), out.reason ?? "the step did not go through");
+    return out;
+  } catch (e) {
+    await returnCredits(orgId, chargedRef(paid), "the step failed");
+    throw e;
+  }
+}
+
 async function runMoveStageTool(orgId: string, input: { itemId: string; toStageId: string; reason?: string }) {
   try {
     const updated = await moveToStage({
@@ -297,6 +325,12 @@ export async function runAgent(opts: {
     return { ok: false, summary: "ANTHROPIC_API_KEY not set", steps: 0 };
   }
 
+  // Model calls come before any step, and they cost whether or not a message
+  // comes out of them — so a workspace that can't pay for one step doesn't start.
+  if (billingEnforced() && (await spendable(opts.orgId)).total < CREDIT_COSTS.ai_draft) {
+    return { ok: false, summary: (await refusal(opts.orgId, CREDIT_COSTS.ai_draft)).message, steps: 0 };
+  }
+
   // Same priority as the job processor (lib/job-processor.ts): the sending account's
   // identity, if one was picked for this run, wins over the individual user's — so an
   // agent sending as "Support Desk" doesn't sign its LinkedIn/email copy as someone else.
@@ -367,6 +401,7 @@ export async function runAgent(opts: {
     }
 
     const toolResults: Anthropic.ToolResultBlockParam[] = [];
+    let outOfCredits: string | null = null;
     for (const use of toolUses) {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const input = use.input as any;
@@ -374,10 +409,12 @@ export async function runAgent(opts: {
       try {
         switch (use.name) {
           case "send_message":
-            out = await runSendTool(opts.orgId, input, emailAccountId ?? undefined, senderName);
+            out = await paidStep(opts.orgId, use.id, input.leadId, () =>
+              runSendTool(opts.orgId, input, emailAccountId ?? undefined, senderName),
+            );
             break;
           case "draft_message":
-            out = await runDraftTool(opts.orgId, input, senderName);
+            out = await paidStep(opts.orgId, use.id, input.leadId, () => runDraftTool(opts.orgId, input, senderName));
             break;
           case "move_stage":
             out = await runMoveStageTool(opts.orgId, input);
@@ -391,9 +428,15 @@ export async function runAgent(opts: {
       } catch (e) {
         out = { ok: false, reason: e instanceof Error ? e.message : String(e) };
       }
+      const o = out as { outOfCredits?: boolean; reason?: string; error?: string } | null;
+      if (o?.outOfCredits || isOutOfCredits(o?.reason)) outOfCredits = (o?.outOfCredits ? o.reason : o?.error) ?? "Out of credits.";
       toolResults.push({ type: "tool_result", tool_use_id: use.id, content: JSON.stringify(out) });
     }
     messages.push({ role: "user", content: toolResults });
+
+    // Out of credits partway through: stop, rather than keep asking the model for
+    // steps nobody can pay for.
+    if (outOfCredits) return { ok: false, summary: `Stopped: ${outOfCredits}`, steps: steps + 1 };
 
     if (resp.stop_reason !== "tool_use") {
       const text = resp.content.find((b): b is Anthropic.TextBlock => b.type === "text")?.text ?? "done";

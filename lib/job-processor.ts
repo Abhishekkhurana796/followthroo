@@ -8,13 +8,14 @@ import { senderNameForCampaign, senderNameForAccount } from "./sender";
 import { randomUUID } from "node:crypto";
 import { buildRfcMessageId, domainOfAddress } from "./inbox/threading";
 import type { SendJob } from "./queue";
+import { isOutOfCredits } from "./billing/meter";
 
 /**
  * Shared job processor.
  * Performs the actual send, updates message status in Postgres, and logs the CRM activity.
  */
 export async function processSendJob(jobData: SendJob) {
-  const { organizationId, channel, leadId, campaignId, templateId, templateVersionId, account, nodeId, linkedinAction } =
+  const { organizationId, channel, leadId, campaignId, templateId, templateVersionId, account, nodeId, linkedinAction, noteFor } =
     jobData;
 
   // Scope the lead to the job's organization — never send to another tenant's lead.
@@ -80,8 +81,14 @@ export async function processSendJob(jobData: SendJob) {
     rfcMessageId,
     // Which campaign and which LinkedIn gesture. Without this the queue could
     // not tell an invite from a message, or apply a campaign's own caps.
-    { campaignId, nodeId, linkedinAction }
+    { campaignId, nodeId, linkedinAction, noteFor, messageId }
   );
+
+  // Out of credits, or no plan: nothing was sent and nothing failed. The step
+  // runs again once there are credits (advanceEnrollment holds it), so there is
+  // no Message row — the Outbox would otherwise collect a "queued" copy of it
+  // for every day it waited.
+  if (isOutOfCredits(result.reason)) return result;
 
   // Whether delivery happens on our servers or in a person's browser. LinkedIn
   // says `humanAssisted: true`, which is what stops a queued action being

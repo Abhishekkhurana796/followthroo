@@ -22,6 +22,7 @@ const {
 const path = require("node:path");
 const { autoUpdater } = require("electron-updater");
 const store = require("./store");
+const { isAppUrl, isProviderSignIn } = require("./navigation");
 const { runBatch, MAX_PER_DAY } = require("./runner");
 
 let win = null;
@@ -67,7 +68,7 @@ function createWindow() {
     minWidth: 900,
     minHeight: 600,
     title: "Followthroo for LinkedIn",
-    backgroundColor: "#fbfaf7",
+    backgroundColor: "#fbfbfb",
     autoHideMenuBar: true,
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
@@ -83,26 +84,46 @@ function createWindow() {
   webView = new WebContentsView({
     webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true },
   });
+  // Lets the web app tell it is in here, so its sign-in page can offer the
+  // browser handoff instead of Google and Zoho buttons that cannot work.
+  // Appended, not replaced — and nothing of Google's ever loads in this view, so
+  // it is not the spoofing the sign-in comment further down rules out.
+  webView.webContents.setUserAgent(`${webView.webContents.getUserAgent()} FollowthrooDesktop/${app.getVersion()}`);
   win.contentView.addChildView(webView);
   webView.webContents.loadURL(`${appOrigin()}/dashboard`);
   layout();
   win.on("resize", layout);
 
-  // Keep the embedded view on our own app. Anything else — a Google sign-in, a
-  // help article, the 80MB installer download link — belongs in the real
-  // browser, where the user can see the address bar.
+  // Keep the embedded view on our own app. Anything else — a help article, the
+  // 80MB installer download link — belongs in the real browser, where the user
+  // can see the address bar.
+  //
+  // A Google or Zoho sign-in is the exception. Opening the provider's own URL in
+  // the browser signed the browser in and left this app signed out, because
+  // nothing on that path ever reaches /desktop-auth. It starts the same handoff
+  // as the panel's Sign in button instead.
   const external = ({ url }) => {
-    if (/^https:\/\//i.test(url)) shell.openExternal(url);
+    if (isProviderSignIn(url)) startExternalSignIn();
+    else if (/^https:\/\//i.test(url)) shell.openExternal(url);
     return { action: "deny" };
   };
   win.webContents.setWindowOpenHandler(external);
   webView.webContents.setWindowOpenHandler(external);
 
   webView.webContents.on("will-navigate", (e, url) => {
-    if (!url.startsWith(appOrigin())) {
-      e.preventDefault();
-      shell.openExternal(url);
-    }
+    if (isAppUrl(url, appOrigin())) return;
+    e.preventDefault();
+    if (isProviderSignIn(url)) startExternalSignIn();
+    else shell.openExternal(url);
+  });
+
+  // A server-side redirect does not fire will-navigate. A sign-in link that went
+  // through one on its way to Google would otherwise load Google's page right
+  // here, which Google refuses.
+  webView.webContents.on("will-redirect", (e, url) => {
+    if (!isProviderSignIn(url)) return;
+    e.preventDefault();
+    startExternalSignIn();
   });
 
   // Once the web app has a session, we can pair without anyone pasting a token.
@@ -382,6 +403,37 @@ ipcMain.handle("queue:peek", async () => {
     if (res.status === 401) return { ok: false, error: "Your pairing token was rejected." };
     if (!res.ok || json.ok === false) return { ok: false, error: json.error || `Server returned ${res.status}` };
     return { ok: true, ...json.data, remaining };
+  } catch (e) {
+    return { ok: false, error: `Can't reach ${check.value} (${String((e && e.message) || e)})` };
+  }
+});
+
+/**
+ * Switch a queued invitation's note on or off, or change what it says, from the
+ * Up next list.
+ *
+ * The server only allows it while the invitation is still pending, so this
+ * cannot race a run that has already picked it up — it gets told no instead.
+ */
+ipcMain.handle("queue:setNote", async (_e, { id, noteChoice, note } = {}) => {
+  const settings = store.read(app.getPath("userData"));
+  if (!settings.token) return { ok: false, error: "No pairing token yet." };
+  const check = store.normaliseApiBase(settings.apiBase);
+  if (!check.ok) return { ok: false, error: check.error };
+  if (typeof id !== "string" || !id) return { ok: false, error: "Which invitation?" };
+
+  const body = {};
+  if (noteChoice === "yes" || noteChoice === "no") body.noteChoice = noteChoice;
+  if (typeof note === "string") body.note = note;
+  try {
+    const res = await fetch(`${check.value}/api/linkedin/invitations/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      headers: { Authorization: `Bearer ${settings.token}`, "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok || json.ok === false) return { ok: false, error: json.error || `Server returned ${res.status}` };
+    return { ok: true, ...json.data };
   } catch (e) {
     return { ok: false, error: `Can't reach ${check.value} (${String((e && e.message) || e)})` };
   }

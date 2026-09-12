@@ -38,6 +38,7 @@ export async function GET(req: NextRequest) {
     dailyInviteCap: account.dailyInviteCap,
     minDelaySec: account.minDelaySec,
     maxDelaySec: account.maxDelaySec,
+    accountType: account.accountType,
     queue: stats,
   });
 }
@@ -49,6 +50,8 @@ const Body = z.object({
   dailyInviteCap: z.number().int().min(1).max(50).optional(),
   minDelaySec: z.number().int().min(10).max(600).optional(),
   maxDelaySec: z.number().int().min(15).max(900).optional(),
+  /** Decides the daily note allowance. See LinkedInAccount.accountType. */
+  accountType: z.enum(["free", "premium", "sales_navigator"]).optional(),
 });
 
 // POST — rotate the token or update caps/pacing.
@@ -107,7 +110,15 @@ export async function POST(req: NextRequest) {
   if (parsed.data.dailyInviteCap !== undefined) data.dailyInviteCap = parsed.data.dailyInviteCap;
   if (parsed.data.minDelaySec !== undefined) data.minDelaySec = parsed.data.minDelaySec;
   if (parsed.data.maxDelaySec !== undefined) data.maxDelaySec = parsed.data.maxDelaySec;
+  if (parsed.data.accountType !== undefined) data.accountType = parsed.data.accountType;
 
   const updated = await prisma.linkedInAccount.update({ where: { id: account.id }, data });
-  return ok({ extToken: updated.extToken, status: updated.status, dailyInviteCap: updated.dailyInviteCap, minDelaySec: updated.minDelaySec, maxDelaySec: updated.maxDelaySec });
+  return ok({
+    extToken: updated.extToken,
+    status: updated.status,
+    dailyInviteCap: updated.dailyInviteCap,
+    minDelaySec: updated.minDelaySec,
+    maxDelaySec: updated.maxDelaySec,
+    accountType: updated.accountType,
+  });
 }

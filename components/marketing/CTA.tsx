@@ -4,6 +4,7 @@ import React from "react";
 import Link from "next/link";
 import { ArrowRight } from "lucide-react";
 import Footer from "@/components/site/Footer";
+import { PLANS } from "@/lib/billing/plans";
 
 export default function CTA() {
   return (
@@ -26,10 +27,10 @@ export default function CTA() {
                 Import a list, write one message, let Followthroo run the rest — safely.
               </p>
               <div className="mt-8 flex flex-wrap justify-center gap-3">
-                <Link href="/dashboard" className="btn btn-primary">
-                  Start free <ArrowRight className="h-4 w-4" />
+                <Link href="/sign-up?plan=test_drive" className="btn btn-primary">
+                  Try it for ${PLANS.test_drive.price} <ArrowRight className="h-4 w-4" />
                 </Link>
-                <Link href="/dashboard" className="btn btn-ghost !border-white/25 !text-white hover:!border-white">
+                <Link href="/contact" className="btn btn-ghost !border-white/25 !text-white hover:!border-white">
                   Book a demo
                 </Link>
               </div>

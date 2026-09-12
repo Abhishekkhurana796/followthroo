@@ -11,6 +11,7 @@ import { resolveLeadOwner } from "@/lib/assignment";
 import { resolveSegmentLeadIds } from "@/lib/segments";
 import { enrichLeadRows } from "@/lib/queries";
 import { cached, invalidate } from "@/lib/cache";
+import { requireLimit } from "@/lib/billing/limits";
 
 export const runtime = "nodejs";
 
@@ -165,6 +166,11 @@ export async function POST(req: NextRequest) {
       select: { id: true },
     });
     created = !existing;
+    // Lead storage is a plan limit; updating somebody already here never needs room.
+    if (created) {
+      const full = await requireLimit(orgId, "leads");
+      if (full) return full;
+    }
     lead = await prisma.lead.upsert({
       where: { organizationId_email: { organizationId: orgId, email } },
       create: { email, organizationId: orgId, ...rest, ...provenance, custom: customJson },
@@ -176,6 +182,10 @@ export async function POST(req: NextRequest) {
     // LinkedIn-only contact — dedupe on the profile URL (no composite unique to rely on).
     const existing = await prisma.lead.findFirst({ where: { organizationId: orgId, linkedinUrl: rest.linkedinUrl } });
     created = !existing;
+    if (created) {
+      const full = await requireLimit(orgId, "leads");
+      if (full) return full;
+    }
     lead = existing
       ? await prisma.lead.update({ where: { id: existing.id }, data: { ...rest, ...(custom ? { custom: customJson } : {}) } })
       : await prisma.lead.create({ data: { organizationId: orgId, ...rest, ...provenance, custom: customJson } });

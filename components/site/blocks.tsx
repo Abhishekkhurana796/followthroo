@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { ArrowRight, type LucideIcon } from "lucide-react";
+import { PLANS } from "@/lib/billing/plans";
 
 export function FeatureGrid({
   items,
@@ -27,8 +28,8 @@ export function FeatureGrid({
 
 export function CTABand({
   title = "Start reaching leads where they reply",
-  cta = "Start free",
-  href = "/dashboard",
+  cta = `Try it for $${PLANS.test_drive.price}`,
+  href = "/sign-up?plan=test_drive",
 }: {
   title?: string;
   cta?: string;

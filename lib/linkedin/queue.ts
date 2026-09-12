@@ -1,21 +1,60 @@
 /**
  * LinkedIn action queue. Campaigns enqueue actions (the official API can't send
- * invites/DMs); the companion Chrome extension claims and performs them in the user's own
- * logged-in LinkedIn tab, then reports results. Daily caps + stale-claim recovery live here.
+ * invites/DMs); the desktop app claims and performs them in the user's own
+ * logged-in LinkedIn browser, then reports results. Daily caps, the note
+ * allowance, credits and stale-claim recovery live here.
+ *
+ * Credits: an action is paid for when it's handed out and keeps what it paid
+ * until the desktop app reports back — kept if it went, handed back if it
+ * didn't. One put back in the queue (a browser closed mid-run, LinkedIn's note
+ * upsell) keeps its credits, and isn't charged again when it's handed out next.
  */
+import { Prisma } from "@prisma/client";
 import { prisma } from "../db";
 import { logActivity } from "../crm";
 import { recordConversationEvent } from "../conversation";
 import { randomUUID } from "node:crypto";
+import { INVITE_NOTE_MAX } from "./note";
+import { startOfOrgDay } from "../org-day";
+import { spendable, unsettled } from "../billing/credits";
+import { billingEnforced } from "../billing/limits";
+import { charge, keepCredits, returnCredits } from "../billing/meter";
+import { CREDIT_COSTS, linkedinCreditAction, type CreditAction } from "../billing/plans";
 
 const STALE_MS = 15 * 60 * 1000; // reclaim actions stuck "in_progress" (browser closed mid-run)
 const DRAFT_STALE_MS = 40 * 60 * 1000; // longer grace for "drafted" — a human has to actually read and act
 
-function startOfDay() {
-  const d = new Date();
-  d.setHours(0, 0, 0, 0);
-  return d;
+/** Credits for an action are held under its own id. */
+const CREDIT_REF = "linkedin_action";
+const creditRef = (id: string) => ({ type: CREDIT_REF, id });
+
+/**
+ * How many invitations a day may carry a note on a free LinkedIn account.
+ *
+ * LinkedIn gives free accounts a handful of personalised notes and moves the
+ * number now and then; three is what the desktop app has budgeted since notes
+ * existed. It is where the day starts, not the authority — the day LinkedIn
+ * shows its upsell sooner, `notesExhaustedOn` closes it early.
+ */
+export const FREE_NOTES_PER_DAY = 3;
+
+export type NoteChoice = "yes" | "no" | "undecided";
+
+/**
+ * Whether this invitation goes out with its note.
+ *
+ * Rows queued before the choice existed carry no `noteChoice`, and they keep
+ * doing what they always did: a note whenever there is one to send.
+ */
+export function resolveNoteChoice(a: { noteChoice: string | null; note: string | null }): NoteChoice {
+  if (a.noteChoice === "yes" || a.noteChoice === "no" || a.noteChoice === "undecided") return a.noteChoice;
+  return a.note ? "yes" : "no";
 }
+
+// The daily invite cap and the note allowance reset at the workspace's own
+// midnight, the same moment plan credits do (lib/org-day.ts). Re-exported for
+// the callers that already import it from here.
+export { startOfOrgDay };
 
 export async function enqueueLinkedInAction(input: {
   organizationId: string;
@@ -24,6 +63,8 @@ export async function enqueueLinkedInAction(input: {
   note?: string | null;
   campaignId?: string | null;
   type?: string;
+  /** Invitations only. Null keeps the old meaning: a note when there is one. */
+  noteChoice?: NoteChoice | null;
 }) {
   return prisma.linkedInAction.create({
     data: {
@@ -31,6 +72,7 @@ export async function enqueueLinkedInAction(input: {
       leadId: input.leadId,
       linkedinUrl: input.linkedinUrl,
       note: input.note ?? null,
+      noteChoice: input.noteChoice ?? null,
       campaignId: input.campaignId ?? null,
       type: input.type ?? "auto",
       // Provisional: claimActions settles it from the account's settings when an
@@ -43,10 +85,11 @@ export async function enqueueLinkedInAction(input: {
 
 /** Counts pending + today's throughput for the connect UI. */
 export async function queueStats(organizationId: string) {
+  const startOfToday = await startOfOrgDay(organizationId);
   const [pending, sentToday, failedToday] = await Promise.all([
     prisma.linkedInAction.count({ where: { organizationId, status: "pending" } }),
-    prisma.linkedInAction.count({ where: { organizationId, status: "sent", sentAt: { gte: startOfDay() } } }),
-    prisma.linkedInAction.count({ where: { organizationId, status: "failed", updatedAt: { gte: startOfDay() } } }),
+    prisma.linkedInAction.count({ where: { organizationId, status: "sent", sentAt: { gte: startOfToday } } }),
+    prisma.linkedInAction.count({ where: { organizationId, status: "failed", updatedAt: { gte: startOfToday } } }),
   ]);
   return { pending, sentToday, failedToday };
 }
@@ -61,6 +104,10 @@ export interface ClaimAccount {
   campaignSettings: unknown;
   /** Optional so existing callers and tests compile; absent reads as off. */
   autoSend?: boolean;
+  /** free | premium | sales_navigator. Absent reads as free. */
+  accountType?: string;
+  /** When LinkedIn last said the notes were used up. */
+  notesExhaustedOn?: Date | null;
 }
 
 /**
@@ -82,7 +129,66 @@ const LEAD_FOR_ACTION = {
 } as const;
 
 /**
- * The actions that are eligible right now, in the order they would be worked.
+ * Why an invitation that could otherwise go out is waiting.
+ *
+ * no_credits: the workspace has spent today's credits. It goes out once there
+ * are credits again — at the workspace's midnight, or after a top-up.
+ */
+export type HoldReason = "needs_pick" | "no_notes_left" | "no_credits";
+
+/**
+ * Today's note allowance: what the account type allows, less what has gone out.
+ *
+ * "Gone out" counts invitations handed out with a note today, sent or still in
+ * a browser, so a run in progress cannot be handed a fourth note on a free
+ * account while the third is being typed. Once LinkedIn itself has said the
+ * notes are used up, the allowance is zero for the rest of the day whatever
+ * the setting says.
+ */
+export async function noteAllowance(account: ClaimAccount, startOfToday: Date) {
+  const cap = (account.accountType ?? "free") === "free" ? FREE_NOTES_PER_DAY : account.dailyInviteCap;
+  if (account.notesExhaustedOn && account.notesExhaustedOn >= startOfToday) {
+    return { cap, left: 0, exhaustedByLinkedIn: true };
+  }
+  const used = await prisma.linkedInAction.count({
+    where: {
+      organizationId: account.organizationId,
+      kind: "invite",
+      status: { in: ["sent", "in_progress"] },
+      updatedAt: { gte: startOfToday },
+      OR: [{ noteChoice: "yes" }, { noteChoice: null, note: { not: null } }],
+    },
+  });
+  return { cap, left: Math.max(0, cap - used), exhaustedByLinkedIn: false };
+}
+
+/**
+ * What an action is when it's handed out.
+ *
+ * An explicit kind on the action is an instruction from the campaign step that
+ * created it; the account/campaign mode is only a preference for actions that
+ * never said. This used to read `settings[...]?.mode || account.mode || a.type`,
+ * and since LinkedInAccount.mode defaults to the non-empty string "auto",
+ * account.mode always won and `a.type` was unreachable — which would have made
+ * every step-level invite/message choice a silent no-op.
+ */
+function effectiveType(account: ClaimAccount, a: { type: string; campaignId: string | null }) {
+  const settings = (account.campaignSettings ?? {}) as Record<string, PerCampaign>;
+  return a.type && a.type !== "auto" ? a.type : settings[a.campaignId ?? ""]?.mode || account.mode || "auto";
+}
+
+/** What handing an action out costs: an invitation 3, with a note 5, a message 2. */
+function creditActionFor(
+  account: ClaimAccount,
+  a: { type: string; campaignId: string | null; noteChoice: string | null; note: string | null },
+): CreditAction {
+  const kind = linkedinKind(effectiveType(account, a));
+  return linkedinCreditAction(kind, kind === "invite" && resolveNoteChoice(a) === "yes");
+}
+
+/**
+ * The actions that are eligible right now, in the order they would be worked,
+ * and the ones held back from them.
  *
  * Shared by `claimActions` (which then marks them in_progress) and `peekActions`
  * (which does not). That sharing is the whole point: the list shown to somebody
@@ -90,22 +196,40 @@ const LEAD_FOR_ACTION = {
  * separate implementations of "which ones are eligible" would drift, and the
  * drift would only ever be discovered as invitations sent to the wrong people.
  */
-async function selectClaimable(account: ClaimAccount, limit: number) {
+async function selectClaimable(account: ClaimAccount, limit: number, opts: { wholeQueue?: boolean } = {}) {
   const organizationId = account.organizationId;
-  const startOfToday = startOfDay();
+  const startOfToday = await startOfOrgDay(organizationId);
   const settings = (account.campaignSettings ?? {}) as Record<string, PerCampaign>;
   const selected = account.selectedCampaignIds ?? [];
+  const metered = billingEnforced();
 
-  const usedGlobal = await prisma.linkedInAction.count({
-    where: { organizationId, status: { in: ["sent", "in_progress", "drafted"] }, updatedAt: { gte: startOfToday } },
-  });
-  const take = Math.min(Math.max(0, account.dailyInviteCap - usedGlobal), limit);
-  if (take <= 0) return [];
+  const [usedGlobal, notes, credits] = await Promise.all([
+    prisma.linkedInAction.count({
+      where: { organizationId, status: { in: ["sent", "in_progress", "drafted"] }, updatedAt: { gte: startOfToday } },
+    }),
+    noteAllowance(account, startOfToday),
+    // A read, not a charge: peekActions comes through here too, and looking at
+    // the queue must never spend anything.
+    metered ? spendable(organizationId) : null,
+  ]);
+  // The whole queue is for showing somebody what is waiting beyond today — the
+  // LinkedIn screen, where notes are decided ahead of time. Claiming never asks
+  // for it: today's cap is what keeps the account in good standing.
+  const take = opts.wholeQueue ? limit : Math.min(Math.max(0, account.dailyInviteCap - usedGlobal), limit);
+  if (take <= 0) return { picked: [], held: [], notes, credits };
 
   // Pull a small candidate window and filter in JS (handles campaign selection, per-campaign
   // caps, disabled campaigns, and run-a-book actions that have no campaignId).
+  //
+  // Invitations waiting for somebody's pick are left out of the window itself.
+  // A "Leads I pick" campaign can queue a hundred of them, and counted here they
+  // would fill the window and starve everything behind them.
   const candidates = await prisma.linkedInAction.findMany({
-    where: { organizationId, status: "pending" },
+    where: {
+      organizationId,
+      status: "pending",
+      OR: [{ noteChoice: null }, { noteChoice: { not: "undecided" } }],
+    },
     orderBy: { createdAt: "asc" },
     take: take * 5 + 20,
     include: { lead: { select: LEAD_FOR_ACTION } },
@@ -127,6 +251,9 @@ async function selectClaimable(account: ClaimAccount, limit: number) {
       : [],
   );
 
+  // Handed out before and put back: these already hold their credits.
+  const paidFor = metered ? await unsettled(organizationId, CREDIT_REF, candidates.map((a) => a.id)) : new Set<string>();
+
   const usedCache = new Map<string, number>();
   const usedFor = async (cid: string) => {
     if (!usedCache.has(cid)) {
@@ -137,7 +264,10 @@ async function selectClaimable(account: ClaimAccount, limit: number) {
     return usedCache.get(cid)!;
   };
 
+  let notesLeft = notes.left;
+  let creditsLeft = credits ? credits.total : Number.POSITIVE_INFINITY;
   const picked: typeof candidates = [];
+  const held: { action: (typeof candidates)[number]; reason: HoldReason }[] = [];
   for (const a of candidates) {
     if (picked.length >= take) break;
     // Consent outranks every other rule here. A lead who opted out must never be
@@ -151,12 +281,33 @@ async function selectClaimable(account: ClaimAccount, limit: number) {
       if (s?.enabled === false) continue;
       if (typeof s?.cap === "number" && (await usedFor(cid)) + picked.filter((p) => p.campaignId === cid).length >= s.cap) continue;
     }
+    // Somebody chose a note for this person, so it waits for tomorrow's notes
+    // rather than going out without one. Invitations without a note keep
+    // flowing past it.
+    const wantsNote = a.type !== "message" && resolveNoteChoice(a) === "yes";
+    if (wantsNote && notesLeft <= 0) {
+      held.push({ action: a, reason: "no_notes_left" });
+      continue;
+    }
+    // Credits after notes, so an invitation already waiting for tomorrow's notes
+    // isn't also counted as waiting for credits. A cheaper action behind one that
+    // doesn't fit can still go — a message costs less than an invitation.
+    const cost = paidFor.has(a.id) ? 0 : CREDIT_COSTS[creditActionFor(account, a)];
+    if (cost > creditsLeft) {
+      held.push({ action: a, reason: "no_credits" });
+      continue;
+    }
+    creditsLeft -= cost;
+    if (wantsNote) notesLeft--;
     picked.push(a);
   }
-  return picked;
+  return { picked, held, notes, credits };
 }
 
-/** Release actions stranded by a browser that closed mid-run. */
+/**
+ * Release actions stranded by a browser that closed mid-run. Their credits stay
+ * with them, so handing them out again charges nothing more.
+ */
 async function reclaimStale(organizationId: string) {
   await prisma.linkedInAction.updateMany({
     where: {
@@ -172,38 +323,81 @@ async function reclaimStale(organizationId: string) {
   });
 }
 
+type Candidate = Awaited<ReturnType<typeof selectClaimable>>["picked"][number];
+
 /**
- * Who is next, without touching anything.
+ * Who is next, who is waiting and why, and how many notes are left today —
+ * without touching anything.
  *
  * The desktop app shows this before a run so the person can see exactly who is
- * about to be contacted. Deliberately read-only — no reclaim, no status change —
- * because looking at the queue must never consume it or change what happens.
+ * about to be contacted, and the LinkedIn screen shows it so they can decide
+ * who gets a note. Deliberately read-only — no reclaim, no status change, no
+ * charge — because looking at the queue must never consume it or change what
+ * happens.
  */
-export async function peekActions(account: ClaimAccount, limit: number) {
-  const picked = await selectClaimable(account, limit);
-  return picked.map((a) => ({
+export async function peekActions(account: ClaimAccount, limit: number, opts: { wholeQueue?: boolean } = {}) {
+  const [{ picked, held, notes, credits }, waitingForPick] = await Promise.all([
+    selectClaimable(account, limit, opts),
+    prisma.linkedInAction.findMany({
+      where: { organizationId: account.organizationId, status: "pending", noteChoice: "undecided" },
+      orderBy: { createdAt: "asc" },
+      take: 50,
+      include: { lead: { select: LEAD_FOR_ACTION } },
+    }),
+  ]);
+  const shape = (a: Candidate, hold: HoldReason | null) => ({
     id: a.id,
     type: a.type && a.type !== "auto" ? a.type : account.mode || "auto",
     linkedinUrl: a.linkedinUrl,
     note: a.note,
+    noteChoice: resolveNoteChoice(a),
+    hold,
+    campaignId: a.campaignId,
     leadId: a.lead?.id ?? null,
     leadName: [a.lead?.firstName, a.lead?.lastName].filter(Boolean).join(" ") || null,
     company: a.lead?.company ?? null,
     title: a.lead?.title ?? null,
     stage: a.lead?.stage ?? null,
-  }));
+  });
+  return {
+    people: picked.map((a) => shape(a, null)),
+    held: [
+      ...waitingForPick.filter((a) => !a.lead?.optedOut).map((a) => shape(a, "needs_pick")),
+      ...held.map((h) => shape(h.action, h.reason)),
+    ],
+    notes: { cap: notes.cap, left: notes.left, exhaustedByLinkedIn: notes.exhaustedByLinkedIn },
+    /** Null while billing isn't enforced. */
+    credits: credits ? { available: credits.total } : null,
+  };
 }
 
 /**
  * Hand the desktop app its next batch of actions, honoring the account's config:
- * selected campaigns, the global daily cap, per-campaign caps, and enabled flags.
- * Each returned action carries its effective `type` (auto/invite/message). Stale
- * in-progress actions are reclaimed first so a closed browser doesn't strand the queue.
+ * selected campaigns, the global daily cap, per-campaign caps, enabled flags,
+ * the note allowance and credits. Each returned action carries its effective
+ * `type` (auto/invite/message) and whether it goes with its note. Stale
+ * in-progress actions are reclaimed first so a closed browser doesn't strand the
+ * queue.
  */
 export async function claimActions(account: ClaimAccount, limit: number) {
   await reclaimStale(account.organizationId);
 
-  const picked = await selectClaimable(account, limit);
+  const { picked: eligible } = await selectClaimable(account, limit);
+  if (eligible.length === 0) return [];
+
+  // Paid for before it's handed out. selectClaimable already stopped where the
+  // balance ran out; this is the charge itself, and where a race with another
+  // spend is decided — an action that loses it simply isn't handed out this
+  // time. One still holding credits from an earlier hand-out costs nothing more.
+  const picked: typeof eligible = [];
+  for (const a of eligible) {
+    const paid = await charge(account.organizationId, creditActionFor(account, a), {
+      ref: creditRef(a.id),
+      meta: { leadId: a.leadId, campaignId: a.campaignId },
+    });
+    if (paid.ok) picked.push(a);
+    else if (paid.reason === "no_plan") break;
+  }
   if (picked.length === 0) return [];
 
   await prisma.linkedInAction.updateMany({
@@ -211,35 +405,86 @@ export async function claimActions(account: ClaimAccount, limit: number) {
     data: { status: "in_progress" },
   });
 
-  const settings = (account.campaignSettings ?? {}) as Record<string, PerCampaign>;
-
-  // An explicit kind on the action is an instruction from the campaign step
-  // that created it; the account/campaign mode is only a preference for
-  // actions that never said. This used to read
-  // `settings[...]?.mode || account.mode || a.type`, and since
-  // LinkedInAccount.mode defaults to the non-empty string "auto", account.mode
-  // always won and `a.type` was unreachable — which would have made every
-  // step-level invite/message choice a silent no-op.
-  const effectiveType = (a: (typeof picked)[number]) =>
-    a.type && a.type !== "auto" ? a.type : settings[a.campaignId ?? ""]?.mode || account.mode || "auto";
-
   // Settle what each one is now that the settings have decided it: an "auto"
   // action queued as an invitation can go out as a message under a campaign's
   // own mode, and the Outbox and Reports have to count what was actually done.
   for (const kind of ["invite", "message"] as const) {
-    const ids = picked.filter((a) => linkedinKind(effectiveType(a)) === kind).map((a) => a.id);
+    const ids = picked.filter((a) => linkedinKind(effectiveType(account, a)) === kind).map((a) => a.id);
     if (ids.length) await prisma.linkedInAction.updateMany({ where: { id: { in: ids } }, data: { kind } });
   }
 
-  return picked.map((a) => ({
-    ...a,
-    // Told per action rather than read from the extension's own settings, so the
-    // switch lives in one place. Turning it off in the app stops the very next
-    // action, with no need for the extension to notice a config change.
-    autoSend: account.autoSend === true,
-    type: effectiveType(a),
-    leadName: [a.lead?.firstName, a.lead?.lastName].filter(Boolean).join(" ") || null,
-  }));
+  return picked.map((a) => {
+    const type = effectiveType(account, a);
+    const invite = linkedinKind(type) === "invite";
+    const withNote = invite && resolveNoteChoice(a) === "yes";
+    return {
+      ...a,
+      // Told per action rather than read from the extension's own settings, so the
+      // switch lives in one place. Turning it off in the app stops the very next
+      // action, with no need for the extension to notice a config change.
+      autoSend: account.autoSend === true,
+      type,
+      noteChoice: (withNote ? "yes" : "no") as NoteChoice,
+      // An invitation marked "no" is not given its note at all, so a desktop app
+      // too old to know the choice exists cannot type it anyway.
+      note: invite && !withNote ? null : a.note,
+      leadName: [a.lead?.firstName, a.lead?.lastName].filter(Boolean).join(" ") || null,
+    };
+  });
+}
+
+/**
+ * LinkedIn showed its "you've used your free personalized invitations" upsell.
+ *
+ * That is a statement about the account for the rest of the day, not a failure
+ * of this invitation: the action goes back to the queue with its note intact
+ * (and its credits, so tomorrow's hand-out isn't charged again), and nothing
+ * more is handed out with a note until tomorrow. Not recorded as an activity —
+ * nothing happened to the lead.
+ */
+export async function noteLimitReached(accountId: string, organizationId: string, actionId: string, result?: string) {
+  await prisma.linkedInAccount.update({ where: { id: accountId }, data: { notesExhaustedOn: new Date() } });
+  const { count } = await prisma.linkedInAction.updateMany({
+    where: { id: actionId, organizationId, status: "in_progress" },
+    data: { status: "pending", result: (result ?? "waiting for tomorrow's notes").slice(0, 300) },
+  });
+  return count > 0;
+}
+
+/**
+ * Change whether a queued invitation carries a note, or what the note says.
+ *
+ * Only while it is still pending. Once the desktop app has picked it up the
+ * browser may already be typing, and an edit that lands after the note went out
+ * would show a note nobody sent.
+ */
+export async function updateQueuedInvitation(
+  organizationId: string,
+  actionId: string,
+  patch: { noteChoice?: "yes" | "no"; note?: string | null },
+): Promise<{ ok: true; noteChoice: NoteChoice; note: string | null } | { ok: false; status: number; error: string }> {
+  const action = await prisma.linkedInAction.findFirst({ where: { id: actionId, organizationId } });
+  if (!action) return { ok: false, status: 404, error: "That invitation is no longer in the queue." };
+  if (action.status !== "pending") {
+    return { ok: false, status: 409, error: "The desktop app has already picked this one up." };
+  }
+  if (action.type === "message") return { ok: false, status: 400, error: "Only a connection request carries a note." };
+
+  const note = patch.note === undefined ? action.note : patch.note?.trim() || null;
+  if (note && note.length > INVITE_NOTE_MAX) {
+    return { ok: false, status: 400, error: `LinkedIn allows ${INVITE_NOTE_MAX} characters in a note; this is ${note.length}.` };
+  }
+  const noteChoice = patch.noteChoice ?? action.noteChoice;
+  if (resolveNoteChoice({ noteChoice, note }) === "yes" && !note) {
+    return { ok: false, status: 400, error: "Write the note first — there's nothing to send." };
+  }
+
+  const { count } = await prisma.linkedInAction.updateMany({
+    where: { id: actionId, organizationId, status: "pending" },
+    data: { noteChoice, note },
+  });
+  if (!count) return { ok: false, status: 409, error: "The desktop app has already picked this one up." };
+  return { ok: true, noteChoice: resolveNoteChoice({ noteChoice, note }), note };
 }
 
 /**
@@ -252,6 +497,11 @@ export async function claimActions(account: ClaimAccount, limit: number) {
  */
 export function linkedinKind(type: string | null | undefined): "invite" | "message" {
   return type === "message" ? "message" : "invite";
+}
+
+/** What a sent action keeps: priced on what actually went out. */
+function sentCost(kind: "invite" | "message", a: { noteChoice: string | null; note: string | null }) {
+  return CREDIT_COSTS[linkedinCreditAction(kind, kind === "invite" && resolveNoteChoice(a) === "yes")];
 }
 
 /**
@@ -291,7 +541,19 @@ export async function completeAction(
 
   if (input.status === "drafted") return updated; // awaiting human review — nothing else to record yet
 
+  // Credits. Sent keeps what was paid at hand-out, priced on what actually went —
+  // an "auto" invitation that went as a message keeps 2 of its 3 — and never
+  // more than was paid. Failed and skipped hand it all back. Nothing puts a
+  // finished action back in the queue, so this settles its ref for good; anything
+  // that ever retries one will need a ref per attempt.
+  if (billingEnforced()) {
+    if (input.status === "sent") await keepCredits(organizationId, creditRef(action.id), sentCost(kind, action));
+    else await returnCredits(organizationId, creditRef(action.id), `LinkedIn ${input.status}`);
+  }
+
   if (input.status === "sent") {
+    // What was actually sent: an invitation marked "no" went without its note.
+    const body = kind === "invite" && resolveNoteChoice(action) !== "yes" ? null : action.note;
     await prisma.message
       .create({
         data: {
@@ -299,7 +561,7 @@ export async function completeAction(
           leadId: action.leadId,
           campaignId: action.campaignId ?? undefined,
           channel: "linkedin",
-          renderedBody: action.note,
+          renderedBody: body,
           status: "sent",
           kind,
           idempotencyKey: randomUUID(),
@@ -314,7 +576,7 @@ export async function completeAction(
       leadId: action.leadId,
       channel: "linkedin",
       direction: "outbound",
-      body: action.note,
+      body,
       status: "sent",
       externalId: action.id,
     });
@@ -330,6 +592,58 @@ export async function completeAction(
   });
 
   return updated;
+}
+
+/**
+ * Settle credits nothing came back to settle.
+ *
+ * An action holds its credits from hand-out until the desktop app reports what
+ * happened, and some never get that report: a campaign deleted, "Stop
+ * everything" pressed, a lead deleted along with its queue. This finds
+ * reservations still open on actions that have finished or gone, and settles
+ * them the way completeAction would have. Actions still on their way are left
+ * alone. Run by the billing sweep; safe to run any time.
+ */
+export async function settleStrandedCharges(opts: { organizationId?: string; olderThanMs?: number; limit?: number } = {}) {
+  const { olderThanMs = 30 * 60_000, limit = 500 } = opts;
+  const open = await prisma.$queryRaw<{ organizationId: string; refId: string }[]>(Prisma.sql`
+    SELECT DISTINCT r."organizationId", r."refId"
+    FROM "CreditLedger" r
+    WHERE r."refType" = ${CREDIT_REF} AND r."kind" = 'reserve'
+      AND r."createdAt" < ${new Date(Date.now() - olderThanMs)}
+      AND r."createdAt" > ${new Date(Date.now() - 60 * 86_400_000)}
+      ${opts.organizationId ? Prisma.sql`AND r."organizationId" = ${opts.organizationId}` : Prisma.empty}
+      AND NOT EXISTS (
+        SELECT 1 FROM "CreditLedger" s
+        WHERE s."refType" = r."refType" AND s."refId" = r."refId" AND s."kind" <> 'reserve'
+      )
+    LIMIT ${limit}`);
+  if (!open.length) return { checked: 0, kept: 0, returned: 0 };
+
+  const actions = new Map(
+    (
+      await prisma.linkedInAction.findMany({
+        where: { id: { in: open.map((o) => o.refId) } },
+        select: { id: true, status: true, kind: true, type: true, note: true, noteChoice: true },
+      })
+    ).map((a) => [a.id, a]),
+  );
+
+  let kept = 0;
+  let returned = 0;
+  for (const { organizationId, refId } of open) {
+    const a = actions.get(refId);
+    if (a && (a.status === "pending" || a.status === "in_progress" || a.status === "drafted")) continue;
+    if (a?.status === "sent") {
+      const kind = a.kind === "message" || a.kind === "invite" ? a.kind : linkedinKind(a.type);
+      await keepCredits(organizationId, creditRef(refId), sentCost(kind, a));
+      kept++;
+    } else {
+      await returnCredits(organizationId, creditRef(refId), a ? `LinkedIn ${a.status}` : "the invitation was removed");
+      returned++;
+    }
+  }
+  return { checked: open.length, kept, returned };
 }
 
 /**

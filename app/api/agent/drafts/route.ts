@@ -6,6 +6,7 @@ import { requireOrg } from "@/lib/tenant";
 import { safeSend } from "@/lib/channels";
 import { defaultSendingAccountId } from "@/lib/channels/email";
 import { logActivity } from "@/lib/crm";
+import { isOutOfCredits } from "@/lib/billing/meter";
 
 export const runtime = "nodejs";
 
@@ -53,6 +54,10 @@ export async function PATCH(req: NextRequest) {
     accountId ?? undefined,
     ctx.orgId,
   );
+
+  // Out of credits: nothing was sent, so it stays a draft to approve later.
+  // Recording it as "queued" would take it off this list for good.
+  if (!result.ok && isOutOfCredits(result.reason)) return fail(result.error ?? "Out of credits.", 402);
 
   const updated = await prisma.message.update({
     where: { id: draft.id },

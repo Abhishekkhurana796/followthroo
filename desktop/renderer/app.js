@@ -55,16 +55,191 @@ function setRunning(on) {
   el.dot.className = `dot${on ? " on" : ""}`;
 }
 
+/** LinkedIn's ceiling on a connection note. */
+const NOTE_MAX = 300;
+
+/** A small text button in the panel's link style. */
+function linkButton(label, onClick) {
+  const b = document.createElement("button");
+  b.type = "button";
+  b.className = "link";
+  b.textContent = label;
+  b.addEventListener("click", onClick);
+  return b;
+}
+
 /**
- * Show exactly who is queued.
+ * Save a note decision, then show the queue as the server now has it.
+ *
+ * Re-read rather than patched in place: whether an invitation goes today depends
+ * on every other row's note, and only the server knows that.
+ */
+async function saveNote(patch, errorEl) {
+  const res = await window.ft.setNote(patch);
+  if (!res.ok) {
+    (errorEl || el.whoNote).textContent = res.error;
+    return false;
+  }
+  await loadQueue();
+  return true;
+}
+
+/** The inline note editor, full width under its row. */
+function noteEditor(p, onClose) {
+  const box = document.createElement("div");
+  box.className = "note-editor";
+
+  const ta = document.createElement("textarea");
+  ta.rows = 3;
+  ta.value = p.note || "";
+  ta.setAttribute("aria-label", `Note for ${p.leadName || "this invitation"}`);
+
+  const foot = document.createElement("div");
+  foot.className = "note-foot";
+  const counter = document.createElement("span");
+  counter.className = "counter";
+  const actions = document.createElement("div");
+  actions.className = "note-actions";
+  const cancel = document.createElement("button");
+  cancel.type = "button";
+  cancel.className = "ghost small";
+  cancel.textContent = "Cancel";
+  const save = document.createElement("button");
+  save.type = "button";
+  save.className = "primary small";
+  save.textContent = "Save";
+  const err = document.createElement("p");
+  err.className = "err";
+
+  const count = () => {
+    const len = ta.value.trim().length;
+    counter.textContent = `${len} / ${NOTE_MAX}`;
+    counter.classList.toggle("over", len > NOTE_MAX);
+    save.disabled = len === 0 || len > NOTE_MAX;
+  };
+  ta.addEventListener("input", count);
+  cancel.addEventListener("click", () => {
+    box.remove();
+    onClose();
+  });
+  save.addEventListener("click", async () => {
+    save.disabled = true;
+    err.textContent = "";
+    if (!(await saveNote({ id: p.id, noteChoice: "yes", note: ta.value.trim() }, err))) save.disabled = false;
+  });
+
+  actions.append(cancel, save);
+  foot.append(counter, actions);
+  box.append(ta, foot, err);
+  count();
+  setTimeout(() => ta.focus(), 0);
+  return box;
+}
+
+/**
+ * One queued person, with their note.
+ *
+ * A free LinkedIn account gets a handful of notes a day, so "which three" is a
+ * choice about people rather than a setting — made here, on the list you are
+ * about to send, as well as on the LinkedIn screen.
+ */
+function queueRow(p, n) {
+  const li = document.createElement("li");
+  const invite = p.type !== "message";
+
+  const num = document.createElement("span");
+  num.className = "n";
+  num.textContent = String(n);
+
+  const body = document.createElement("div");
+  body.className = "body";
+  const name = document.createElement("div");
+  name.className = "name";
+  name.textContent = p.leadName || p.linkedinUrl;
+  const meta = document.createElement("div");
+  meta.className = "meta";
+  meta.textContent = [p.title, p.company].filter(Boolean).join(" · ") || p.linkedinUrl;
+  body.append(name, meta);
+
+  const right = document.createElement("div");
+  right.className = "right";
+  const kind = document.createElement("span");
+  kind.className = "kind";
+  kind.textContent = invite ? "Invite" : "Message";
+  right.appendChild(kind);
+
+  // Out of credits, why it's waiting is the only thing worth saying about it.
+  if (p.hold === "no_credits") {
+    const wait = document.createElement("div");
+    wait.className = "note-line";
+    wait.textContent = "Waits for credits — goes out at midnight, or once you add credits";
+    body.appendChild(wait);
+  }
+
+  // A server too old to know about notes sends no choice; show the row as before.
+  if (invite && p.noteChoice && p.hold !== "no_credits") {
+    const line = document.createElement("div");
+    line.className = "note-line";
+    const text = document.createElement("span");
+    text.className = "note-text";
+    line.appendChild(text);
+    const openEditor = () => {
+      if (li.querySelector(".note-editor")) return;
+      line.hidden = true;
+      li.appendChild(noteEditor(p, () => (line.hidden = false)));
+    };
+
+    if (p.hold === "needs_pick") {
+      text.textContent = "Your pick:";
+      line.append(
+        linkButton("Add note", () => (p.note ? saveNote({ id: p.id, noteChoice: "yes" }) : openEditor())),
+        linkButton("No note", () => saveNote({ id: p.id, noteChoice: "no" })),
+      );
+    } else {
+      const on = p.noteChoice === "yes";
+      if (p.hold === "no_notes_left") text.textContent = "Waits for tomorrow — out of notes today";
+      else text.textContent = on ? `“${p.note}”` : "Sends without a note";
+      line.appendChild(linkButton(on ? "Edit" : "Add one", openEditor));
+
+      const sw = document.createElement("div");
+      sw.className = "note-switch";
+      const label = document.createElement("span");
+      label.textContent = "Note";
+      const toggle = document.createElement("button");
+      toggle.type = "button";
+      toggle.className = "switch";
+      toggle.setAttribute("role", "switch");
+      toggle.setAttribute("aria-checked", String(on));
+      toggle.setAttribute("aria-label", `Note for ${p.leadName || "this invitation"}`);
+      toggle.addEventListener("click", async () => {
+        // Nothing to send yet — write it first.
+        if (!on && !p.note) return openEditor();
+        toggle.disabled = true;
+        await saveNote({ id: p.id, noteChoice: on ? "no" : "yes" });
+        toggle.disabled = false;
+      });
+      sw.append(label, toggle);
+      right.appendChild(sw);
+    }
+    body.appendChild(line);
+  }
+
+  li.append(num, body, right);
+  return li;
+}
+
+/**
+ * Show exactly who is queued — and whether each invitation carries its note.
  *
  * Start is irreversible — an invitation cannot be recalled — so the names belong
  * on screen before the button is pressed, not in a log afterwards. The Start
  * label counts them too, so "Send 14 invitations" is what you agree to rather
- * than a generic "Start sending".
+ * than a generic "Start sending". Invitations waiting on somebody's pick, or on
+ * tomorrow's notes, are listed after the ones that go, with why.
  */
 async function loadQueue() {
   const res = await window.ft.peekQueue();
+  const notesChip = $("notesChip");
 
   if (!res.ok) {
     el.who.innerHTML = "";
@@ -74,16 +249,27 @@ async function loadQueue() {
     el.who.appendChild(li);
     el.whoCount.textContent = "";
     el.whoNote.textContent = "";
+    notesChip.hidden = true;
     el.start.disabled = true;
     el.start.textContent = "Start sending";
     return;
   }
 
   const people = res.people || [];
+  const held = res.held || [];
   el.who.innerHTML = "";
-  el.whoCount.textContent = people.length ? `· ${people.length}` : "";
+  el.whoCount.textContent = people.length + held.length ? `· ${people.length + held.length}` : "";
 
-  if (!people.length) {
+  if (res.notes) {
+    $("notesLeft").textContent = res.notes.exhaustedByLinkedIn
+      ? "none left today"
+      : `${res.notes.left} of ${res.notes.cap} left`;
+    notesChip.hidden = false;
+  } else {
+    notesChip.hidden = true;
+  }
+
+  if (!people.length && !held.length) {
     const li = document.createElement("li");
     li.className = "empty";
     li.textContent =
@@ -95,37 +281,26 @@ async function loadQueue() {
     return;
   }
 
-  people.forEach((p, i) => {
-    const li = document.createElement("li");
-
-    const n = document.createElement("span");
-    n.className = "n";
-    n.textContent = String(i + 1);
-
-    const body = document.createElement("div");
-    const name = document.createElement("div");
-    name.className = "name";
-    name.textContent = p.leadName || p.linkedinUrl;
-    const meta = document.createElement("div");
-    meta.className = "meta";
-    meta.textContent = [p.title, p.company].filter(Boolean).join(" · ") || p.linkedinUrl;
-    body.append(name, meta);
-
-    const kind = document.createElement("span");
-    kind.className = "kind";
-    kind.textContent = p.type === "message" ? "Message" : "Invite";
-
-    li.append(n, body, kind);
-    el.who.appendChild(li);
-  });
+  [...people, ...held].forEach((p, i) => el.who.appendChild(queueRow(p, i + 1)));
 
   const mins = Math.round((people.length * ((res.pacing?.minDelaySec ?? 45) + (res.pacing?.maxDelaySec ?? 120))) / 2 / 60);
-  el.whoNote.textContent = res.autoSend
+  const pace = res.autoSend
     ? `About ${mins} minute${mins === 1 ? "" : "s"}, paced ${res.pacing?.minDelaySec ?? 45}–${res.pacing?.maxDelaySec ?? 120} seconds apart.`
     : "Automatic sending is off in Followthroo, so a run will refuse to start.";
+  const notes = !res.notes
+    ? ""
+    : res.notes.exhaustedByLinkedIn
+      ? " LinkedIn says today's notes are used up — invitations marked for a note wait for tomorrow."
+      : ` ${res.notes.left} ${res.notes.left === 1 ? "note" : "notes"} left today — invitations marked for a note wait for tomorrow once they're gone.`;
+  const credits = held.some((p) => p.hold === "no_credits")
+    ? " Your workspace is out of credits for today — the rest wait for midnight or a top-up."
+    : "";
+  el.whoNote.textContent = pace + notes + credits;
 
-  el.start.disabled = false;
-  el.start.textContent = `Send ${people.length} ${people.length === 1 ? "invitation" : "invitations"}`;
+  el.start.disabled = people.length === 0;
+  el.start.textContent = people.length
+    ? `Send ${people.length} ${people.length === 1 ? "invitation" : "invitations"}`
+    : "Nothing to send yet";
 }
 
 /**

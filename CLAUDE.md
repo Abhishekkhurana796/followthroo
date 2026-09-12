@@ -3,7 +3,7 @@
 > Master context file. Claude Code reads this every session. If it conflicts with
 > what you see in code, trust the code and update this file.
 
-**Last updated:** 2026-09-02
+**Last updated:** 2026-09-12
 **Status:** draft
 
 ---
@@ -96,6 +96,13 @@ sequence. A premium Next.js UI sits on top.
   in a campaign, beside Email and WhatsApp, because a channel is a property of a
   step and not a place you visit. If you are about to add a "send" affordance to
   the LinkedIn screen, add it to the campaign builder instead.
+  **Deciding notes is there (2026-09-12).** The Queued invitations list on that
+  screen switches a queued invitation's note on or off and edits it; it sends
+  nothing and queues nothing. A free LinkedIn account gets 3 notes a day, so
+  which invitations carry one is a choice about people, and the people are on
+  that list. The allowance lives on the server (`noteAllowance` in
+  `lib/linkedin/queue.ts`), not in the desktop app, and an invitation somebody
+  chose a note for waits for tomorrow rather than going out without it.
 - **LinkedIn invitations are sent by the desktop app, not the extension.**
   Decided 2026-09-07. LinkedIn's API cannot send an invitation or a DM to a
   non-connection — `w_member_social` only posts to your own feed — so it takes a
@@ -127,6 +134,13 @@ sequence. A premium Next.js UI sits on top.
 - **Never take payment for a domain.** The reseller storefront charges the customer and
   credits us the margin — a checkout in the app would bill them twice. See
   `docs/domains-and-mailboxes.md` before touching anything in `lib/domains/`.
+- **Credits go through `lib/billing/meter.ts`, never by hand.** A charge is one conditional
+  `UPDATE`, so the balance can't go negative, and a ledger row unique per thing, so a retry
+  moves credits once. `charge()` before the thing happens, then `keepCredits` once it did or
+  `returnCredits` once it didn't — nobody pays for a failed send. New send paths pay by
+  default; `SendContext.free` is only for a person sending by hand for themselves. Prices,
+  limits and costs live once, in `lib/billing/plans.ts`. Nothing is charged until
+  `BILLING_ENFORCED=1`. See `docs/pricing.md`.
 - **The agent layer runs through OpenRouter**, via its Anthropic-compatible
   endpoint, so one SDK and one wire format serve every model. The model is
   `OPENROUTER_MODEL` (provider-prefixed ids, e.g. `minimax/minimax-m2`,
@@ -153,7 +167,7 @@ sequence. A premium Next.js UI sits on top.
 | [desktop/README.md](desktop/README.md) | The Windows app that sends LinkedIn invitations: why it is not a server, what stops a run, how to build and sign it |
 | [docs/phantombuster.md](docs/phantombuster.md) | The 35 PhantomBuster LinkedIn automations: inputs, outputs and limits, as the reference spec for our own scrapers |
 | [docs/rate-limits.md](docs/rate-limits.md) | Consolidated quotas + throttling strategy |
-| [docs/pricing.md](docs/pricing.md) | Recurring costs (infra + AI/comms COGS) + pricing tier margin analysis |
+| [docs/pricing.md](docs/pricing.md) | Plans, credits and top-ups as settled; where credits are charged; the costs they have to cover |
 | [docs/security.md](docs/security.md) | OAuth2, secrets, encryption, RBAC, GDPR |
 | [docs/domains-and-mailboxes.md](docs/domains-and-mailboxes.md) | Sending domains via the reseller storefront, DNS verification, mailbox connect |
 | [docs/crm-data-model.md](docs/crm-data-model.md) | Lead schema, logs, CSV import/export |

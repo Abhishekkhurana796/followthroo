@@ -7,6 +7,7 @@ import { TourProvider } from "@/components/dashboard/tour/TourProvider";
 import { TourOverlay } from "@/components/dashboard/tour/TourOverlay";
 import { ToastProvider, DialogsProvider } from "@/components/ui";
 import type { OnboardingState } from "@/lib/queries";
+import { BillingBanner } from "@/components/dashboard/BillingBanner";
 
 /**
  * The dashboard's single client boundary.
@@ -46,6 +47,7 @@ export function DashboardShell({
                   <Sidebar />
                   {/* pt-14 clears the fixed mobile topbar; the rail replaces it at lg. */}
                   <main id="dash-main" className="min-w-0 flex-1 pt-14 lg:pt-0">
+                    <BillingBanner />
                     {children}
                   </main>
                 </div>

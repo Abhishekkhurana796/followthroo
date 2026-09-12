@@ -132,6 +132,8 @@ export async function enqueueManyLinkedIn(input: {
       linkedinUrl: lead.linkedinUrl!,
       note,
       type,
+      // Typing a note in the invite dialog is the choice.
+      noteChoice: type === "message" ? null : note ? "yes" : "no",
       campaignId: input.campaignId ?? null,
     });
     queued++;
