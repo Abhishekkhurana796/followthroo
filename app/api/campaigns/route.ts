@@ -7,6 +7,7 @@ import { requireOrg, requireRole } from "@/lib/tenant";
 import { CampaignSequence, validateSequence } from "@/lib/campaign-engine";
 import { enrollLeads } from "@/lib/enroll";
 import { CAMPAIGN_INCLUDE } from "@/lib/queries";
+import { requireLimit } from "@/lib/billing/limits";
 
 export const runtime = "nodejs";
 
@@ -53,6 +54,8 @@ export async function POST(req: NextRequest) {
   // personalised, or a template from another workspace.
   const valid = await validateSequence(ctx.orgId, parsed.data.sequence);
   if (!valid.ok) return fail(valid.message);
+  const full = await requireLimit(ctx.orgId, "campaigns");
+  if (full) return full;
 
   const campaign = await prisma.campaign.create({
     data: {

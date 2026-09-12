@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { env, configured } from "@/lib/env";
+import { requireLimit } from "@/lib/billing/limits";
 
 export const runtime = "nodejs";
 
@@ -77,6 +78,10 @@ export async function GET(req: NextRequest) {
     // Google only returns a refresh_token on first consent; keep the stored one on re-connect.
     const effectiveRefresh = refreshToken ?? existing?.refreshToken;
     if (!effectiveRefresh) return backTo("error", "no_refresh_token");
+
+    // Reconnecting a mailbox already here never needs room; a new one counts
+    // against the plan's sending inboxes.
+    if (!existing && (await requireLimit(orgId, "inboxes"))) return backTo("error", "plan_inbox_limit");
 
     // Only trust the cookie's domain if it still belongs to this org.
     const linkedDomainId = domainId

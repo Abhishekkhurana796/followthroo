@@ -7,6 +7,7 @@ import { APPLY_MODES, applyTemplateEdit, campaignsUsingTemplate, extractVariable
 import { renderMessage, spamScore, formatEmailBody } from "@/lib/templates";
 import { safeSend } from "@/lib/channels";
 import { defaultSendingAccountId } from "@/lib/channels/email";
+import { requireLimit } from "@/lib/billing/limits";
 
 export const runtime = "nodejs";
 
@@ -137,6 +138,9 @@ export async function POST(req: NextRequest, { params }: Ctx) {
   if (!template) return fail("Template not found", 404);
 
   if (parsed.data.action === "duplicate") {
+    // A copy is a new template, and counts against the plan like one.
+    const full = await requireLimit(ctx.orgId, "templates");
+    if (full) return full;
     const copy = await prisma.template.create({
       data: {
         organizationId: ctx.orgId,
@@ -189,7 +193,10 @@ export async function POST(req: NextRequest, { params }: Ctx) {
     { id: lead.id, email: me.email, phone: null, linkedinUrl: null, firstName: lead.firstName },
     { subject: rendered.subject ? `[Test] ${rendered.subject}` : "[Test]", body: rendered.body },
     account,
-    ctx.orgId
+    ctx.orgId,
+    undefined,
+    // A test goes to the person who asked for it, not to a contact, so it costs nothing.
+    { free: true }
   );
 
   if (!result.ok) return fail(result.error ?? result.reason ?? "Test send failed", 400);

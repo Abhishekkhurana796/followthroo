@@ -10,8 +10,13 @@
  * runs server-side: there is no credential in this model at all, because the
  * session belongs to the browser doing the work. See docs/linkedin-sourcing-ux.md.
  */
+import { randomUUID } from "node:crypto";
 import { prisma } from "../db";
 import { KIND_INFO, type ScrapeKind } from "./detect";
+import { spendable } from "../billing/credits";
+import { billingEnforced } from "../billing/limits";
+import { charge, chargedRef, keepCredits, refusal, returnCredits, type Charge } from "../billing/meter";
+import { sourcingCost } from "../billing/plans";
 
 /** A job left "running" this long is assumed dead — browser closed, tab lost. */
 const CLAIM_LEASE_MS = 20 * 60_000;
@@ -254,8 +259,27 @@ export async function importScrapedRows(input: {
   if (!job) throw new Error("Job not found");
 
   const all = (job.results as unknown as ScrapedRow[]) ?? [];
-  const rows = input.rowIndexes?.length ? input.rowIndexes.map((i) => all[i]).filter(Boolean) : all;
-  if (rows.length === 0) return { received: 0, created: 0, merged: 0, duplicates: 0, suppressed: 0 };
+  const chosen = (input.rowIndexes?.length ? input.rowIndexes.map((i) => all[i]).filter(Boolean) : all).filter((r) => r.profileUrl);
+  const nothing = { received: 0, created: 0, merged: 0, duplicates: 0, suppressed: 0, waiting: 0, refused: null as string | null };
+  if (chosen.length === 0) return nothing;
+
+  // Credits: one per ten people imported. Only as many as the balance covers go
+  // in — the rest are left out and counted as `waiting`, never half-charged — and
+  // the charge kept is priced on the people actually added, so contacts you
+  // already had cost nothing.
+  let rows = chosen;
+  let paid: Charge | null = null;
+  if (billingEnforced()) {
+    rows = chosen.slice(0, (await spendable(input.organizationId)).total * 10);
+    paid = rows.length
+      ? await charge(input.organizationId, "li_sourcing", {
+          units: Math.ceil(rows.length / 10),
+          ref: { type: "linkedin_import", id: randomUUID() },
+          meta: { jobId: job.id, rows: rows.length },
+        })
+      : await refusal(input.organizationId, sourcingCost(chosen.length));
+    if (!paid.ok) return { ...nothing, waiting: chosen.length, refused: paid.message };
+  }
 
   // Which source this counts as, so ROI and the assignment rule can differ by
   // where the contact actually came from.
@@ -294,13 +318,20 @@ export async function importScrapedRows(input: {
       };
     });
 
-  const result = await ingestMany(input.organizationId, events);
+  let result: Awaited<ReturnType<typeof ingestMany>>;
+  try {
+    result = await ingestMany(input.organizationId, events);
+  } catch (e) {
+    await returnCredits(input.organizationId, chargedRef(paid), "the import failed");
+    throw e;
+  }
+  await keepCredits(input.organizationId, chargedRef(paid), sourcingCost(result.created));
 
   await prisma.linkedInScrapeJob.updateMany({
     where: { id: job.id, organizationId: input.organizationId },
     data: { importedAt: new Date(), importedCount: result.created + result.duplicates },
   });
-  return result;
+  return { ...result, waiting: chosen.length - rows.length, refused: null as string | null };
 }
 
 /**

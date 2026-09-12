@@ -108,5 +108,6 @@ export async function PATCH(req: NextRequest) {
     actorId: ctx.userId,
     createdKind: "linkedin_bulk",
   });
+  if (result.refused) return fail(result.refused, 402);
   return ok(result);
 }

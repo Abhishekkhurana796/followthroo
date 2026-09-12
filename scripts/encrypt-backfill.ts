@@ -40,6 +40,11 @@ import { encryptionConfigured, isEncrypted } from "../lib/crypto";
 const TABLES: Record<string, string> = {
   sendingAccount: "SendingAccount",
   account: "account",
+  // Missing while linkedInAccount sat in ENCRYPTED_COLUMNS, which made a real run
+  // throw "No table name mapped" after the first two tables — so the plain-text
+  // LinkedIn tokens could not be cleared out even by hand.
+  linkedInAccount: "LinkedInAccount",
+  autoRecharge: "AutoRecharge",
 };
 
 const rotate = process.argv.includes("--rotate");

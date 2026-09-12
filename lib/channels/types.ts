@@ -95,6 +95,14 @@ export interface SendContext {
   linkedinAction?: "invite" | "message" | "auto";
   /** LinkedIn invitations only: the step's "Add a note for" — who gets the template as a note. */
   noteFor?: "everyone" | "picked" | "none";
+  /** The Message this send will be recorded as, when the caller already has its id — kept with the credit charge. */
+  messageId?: string;
+  /**
+   * Not charged for. Only for sends a person makes by hand for themselves — a
+   * reply typed in the inbox, a test sent to their own address. Campaign steps,
+   * the agent and automatic acknowledgments all pay.
+   */
+  free?: boolean;
 }
 
 /**

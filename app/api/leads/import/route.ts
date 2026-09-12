@@ -7,6 +7,7 @@ import { ensureSource } from "@/lib/identity";
 import { resolveLeadOwner } from "@/lib/assignment";
 import { invalidate } from "@/lib/cache";
 import { LIMITS, tooMany } from "@/lib/api-ratelimit";
+import { roomFor } from "@/lib/billing/limits";
 
 export const runtime = "nodejs";
 
@@ -91,6 +92,11 @@ export async function POST(req: NextRequest) {
   const provenance = { leadSourceId, createdById: ctx.userId, createdKind: "import" };
 
   const results = { imported: 0, skipped: 0, errors: [] as string[] };
+  // Lead storage is a plan limit. Updating somebody already here never needs
+  // room — only a new contact does. Unlimited, or not enforced yet, is Infinity,
+  // which also skips the extra lookup email rows would otherwise need.
+  let room = await roomFor(orgId, "leads");
+  let overStorage = 0;
   for (const row of parsed.data) {
     const { lead, custom } = normalizeRow(row);
     const email = lead.email as string | undefined;
@@ -101,6 +107,21 @@ export async function POST(req: NextRequest) {
       continue;
     }
     try {
+      // LinkedIn-only contact — dedupe on the profile URL.
+      const existingByUrl = email ? null : await prisma.lead.findFirst({ where: { organizationId: orgId, linkedinUrl } });
+      const isNew = email
+        ? Number.isFinite(room) &&
+          !(await prisma.lead.findUnique({ where: { organizationId_email: { organizationId: orgId, email } }, select: { id: true } }))
+        : !existingByUrl;
+      if (isNew) {
+        if (room <= 0) {
+          overStorage++;
+          results.skipped++;
+          continue;
+        }
+        room--;
+      }
+
       // Resolved per row, not once for the batch: round-robin has to advance
       // between rows or every contact in the import lands on one person.
       const ownerId = await resolveLeadOwner(orgId, { sourceKey: "csv", actorId: null });
@@ -111,20 +132,21 @@ export async function POST(req: NextRequest) {
           create: { ...(lead as object), organizationId: orgId, ...rowProvenance, custom } as never,
           update: { ...(lead as object), custom } as never,
         });
+      } else if (existingByUrl) {
+        await prisma.lead.update({ where: { id: existingByUrl.id }, data: { ...(lead as object), custom } as never });
       } else {
-        // LinkedIn-only contact — dedupe on the profile URL.
-        const existing = await prisma.lead.findFirst({ where: { organizationId: orgId, linkedinUrl } });
-        if (existing) {
-          await prisma.lead.update({ where: { id: existing.id }, data: { ...(lead as object), custom } as never });
-        } else {
-          await prisma.lead.create({ data: { ...(lead as object), organizationId: orgId, ...rowProvenance, custom } as never });
-        }
+        await prisma.lead.create({ data: { ...(lead as object), organizationId: orgId, ...rowProvenance, custom } as never });
       }
       results.imported++;
     } catch (e) {
       results.skipped++;
       results.errors.push(e instanceof Error ? e.message : String(e));
     }
+  }
+  if (overStorage > 0) {
+    results.errors.push(
+      `${overStorage} new ${overStorage === 1 ? "contact was" : "contacts were"} not added: your plan's lead storage is full.`,
+    );
   }
   if (results.imported > 0) {
     invalidate("leads:");

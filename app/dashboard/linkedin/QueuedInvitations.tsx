@@ -6,7 +6,7 @@ import { ChevronDown, ChevronUp, Info } from "lucide-react";
 import { api } from "@/lib/client";
 import { Badge, Button, Textarea } from "@/components/ui";
 
-type Hold = "needs_pick" | "no_notes_left" | null;
+type Hold = "needs_pick" | "no_notes_left" | "no_credits" | null;
 type Invitation = {
   id: string;
   type: string;
@@ -35,7 +35,7 @@ const FILTERS: { key: Filter; label: string; match: (r: Invitation) => boolean }
   { key: "all", label: "All", match: () => true },
   { key: "note", label: "With a note", match: withNote },
   { key: "pick", label: "Needs your pick", match: (r) => r.hold === "needs_pick" },
-  { key: "waiting", label: "Waiting", match: (r) => r.hold === "no_notes_left" },
+  { key: "waiting", label: "Waiting", match: (r) => r.hold === "no_notes_left" || r.hold === "no_credits" },
 ];
 
 /**
@@ -185,7 +185,9 @@ function Row({
         : "No template note — add one, or send it without."
       : inv.hold === "no_notes_left"
         ? "No notes left today. Sends tomorrow with its note — or switch the note off to send it today."
-        : on
+        : inv.hold === "no_credits"
+          ? "Out of credits for today. Goes out when credits are back — at midnight, or once you add some."
+          : on
           ? `“${inv.note}”`
           : "Sends without a note";
 
@@ -205,6 +207,7 @@ function Row({
           <div className="flex flex-wrap items-center gap-2">
             <span className="text-sm font-semibold text-ink">{name}</span>
             {inv.hold === "no_notes_left" && <Badge>Waits for tomorrow</Badge>}
+            {inv.hold === "no_credits" && <Badge>Waits for credits</Badge>}
           </div>
           <div className="truncate text-xs text-ink-soft">{meta}</div>
           {!editing && <p className={`truncate text-xs ${inv.hold ? "text-ink-soft" : "text-ink-faint"}`}>{line}</p>}

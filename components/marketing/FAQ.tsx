@@ -3,6 +3,7 @@
 import React, { useState } from "react";
 import Link from "next/link";
 import { ChevronDown, Search, HelpCircle, ShieldCheck, Zap, Mail } from "lucide-react";
+import { CREDIT_COSTS, PLANS } from "@/lib/billing/plans";
 
 export interface FAQItem {
   id: string;
@@ -36,9 +37,9 @@ const FAQS: FAQItem[] = [
   {
     id: "faq-4",
     category: "Pricing",
-    question: "Can I try Followthroo for free before subscribing?",
-    answer:
-      "Yes. The Starter plan is free forever, with 1 sending account and 500 leads — no card required. You can also start a free trial of the Growth plan the same way, straight from the pricing page.",
+    question: "Can I try Followthroo before subscribing?",
+    // Numbers from lib/billing/plans.ts, so this answer changes when the plan does.
+    answer: `Yes, for $${PLANS.test_drive.price}. The Test Drive runs ${PLANS.test_drive.days} days on your own leads with ${PLANS.test_drive.dailyCredits} credits a day — about 10 LinkedIn invitations or 30 emails, every day. It isn't a subscription: it simply ends, and you choose a plan if you want to keep going.`,
   },
   {
     id: "faq-5",
@@ -53,6 +54,12 @@ const FAQS: FAQItem[] = [
     question: "How is Followthroo different from lemlist or Instantly?",
     answer:
       "While single-channel tools focus strictly on email or LinkedIn in isolation, Followthroo synchronizes multi-channel state natively under one roof. Our AI agent also analyzes target profiles to generate tailored opener copy per channel.",
+  },
+  {
+    id: "faq-7",
+    category: "Pricing",
+    question: "What is a credit, and what does each thing cost?",
+    answer: `Credits measure what Followthroo does for you: an email is ${CREDIT_COSTS.email_send}, a LinkedIn invitation ${CREDIT_COSTS.li_invite} (${CREDIT_COSTS.li_invite_note} with a note), a LinkedIn message ${CREDIT_COSTS.li_message}, an AI reply draft ${CREDIT_COSTS.ai_draft}. Every plan gets a fresh allowance at midnight in your time zone — ${PLANS.start.dailyCredits} a day on Start, ${PLANS.grow.dailyCredits} on Grow, ${PLANS.scale.dailyCredits} on Scale. Credits are taken only when something actually goes out, and the CRM, inbox, CSV imports and reports never cost any.`,
   },
 ];
 

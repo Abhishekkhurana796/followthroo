@@ -15,6 +15,9 @@ import { ThemeToggle } from "@/components/dashboard/ThemeToggle";
 import { tourTarget } from "@/components/dashboard/tour/target";
 import { ReplayTourMenuItem } from "@/components/dashboard/tour/ReplayTourButton";
 import { NAV_GROUPS, NAV_TOUR_TARGETS, isActiveHref, type NavItem } from "@/components/dashboard/nav-items";
+import useSWR from "swr";
+import { CreditsChip } from "@/components/dashboard/CreditsChip";
+import { SUMMARY_KEY, type Summary } from "@/components/dashboard/billing/types";
 
 function NavRow({ item, active }: { item: NavItem; active: boolean }) {
   if (item.soon) {
@@ -128,6 +131,7 @@ export default function Sidebar() {
           ))}
         </nav>
 
+        <CreditsChip />
         <ProfileMenu />
       </aside>
     </>
@@ -140,6 +144,7 @@ function ProfileMenu() {
   const { data: session } = useSession();
   const { data: org } = authClient.useActiveOrganization();
   const { data: orgs } = authClient.useListOrganizations();
+  const { data: billing } = useSWR<Summary>(SUMMARY_KEY);
   const [open, setOpen] = useState(false);
   const confirm = useConfirm();
   const prompt = usePrompt();
@@ -208,7 +213,12 @@ function ProfileMenu() {
               <div className="truncate text-sm font-semibold">{name}</div>
               <div className="flex items-center gap-1.5">
                 <span className="truncate text-xs text-ink-soft">{org?.name ?? "Workspace"}</span>
-                <span className="rounded-full bg-accent-soft px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-accent-strong">Free</span>
+                {/* The plan, once there are plans. This said "Free" for everyone, on a product with no free plan. */}
+                {billing?.enforced && billing.plan && (
+                  <span className="shrink-0 rounded-full bg-accent-soft px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-accent-strong">
+                    {billing.access === "trial" ? `${billing.plan.name} trial` : billing.plan.name}
+                  </span>
+                )}
               </div>
             </div>
             <ChevronsUpDown className="h-4 w-4 shrink-0 text-ink-soft" />

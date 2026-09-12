@@ -168,8 +168,16 @@ function queueRow(p, n) {
   kind.textContent = invite ? "Invite" : "Message";
   right.appendChild(kind);
 
+  // Out of credits, why it's waiting is the only thing worth saying about it.
+  if (p.hold === "no_credits") {
+    const wait = document.createElement("div");
+    wait.className = "note-line";
+    wait.textContent = "Waits for credits — goes out at midnight, or once you add credits";
+    body.appendChild(wait);
+  }
+
   // A server too old to know about notes sends no choice; show the row as before.
-  if (invite && p.noteChoice) {
+  if (invite && p.noteChoice && p.hold !== "no_credits") {
     const line = document.createElement("div");
     line.className = "note-line";
     const text = document.createElement("span");
@@ -284,7 +292,10 @@ async function loadQueue() {
     : res.notes.exhaustedByLinkedIn
       ? " LinkedIn says today's notes are used up — invitations marked for a note wait for tomorrow."
       : ` ${res.notes.left} ${res.notes.left === 1 ? "note" : "notes"} left today — invitations marked for a note wait for tomorrow once they're gone.`;
-  el.whoNote.textContent = pace + notes;
+  const credits = held.some((p) => p.hold === "no_credits")
+    ? " Your workspace is out of credits for today — the rest wait for midnight or a top-up."
+    : "";
+  el.whoNote.textContent = pace + notes + credits;
 
   el.start.disabled = people.length === 0;
   el.start.textContent = people.length

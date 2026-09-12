@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { env } from "@/lib/env";
+import { requireLimit } from "@/lib/billing/limits";
 import {
   exchangeCode,
   fetchZohoAccount,
@@ -78,6 +79,14 @@ export async function GET(req: NextRequest) {
           })
         )?.id ?? null
       : null;
+
+    // Reconnecting a mailbox already here never needs room; a new one counts
+    // against the plan's sending inboxes.
+    const alreadyConnected = await prisma.sendingAccount.findUnique({
+      where: { organizationId_email: { organizationId: orgId, email: account.primaryEmail } },
+      select: { id: true },
+    });
+    if (!alreadyConnected && (await requireLimit(orgId, "inboxes"))) return backTo("error", "plan_inbox_limit");
 
     const saved = await prisma.sendingAccount.upsert({
       where: { organizationId_email: { organizationId: orgId, email: account.primaryEmail } },

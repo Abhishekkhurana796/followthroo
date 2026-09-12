@@ -480,6 +480,12 @@ model Member {
   manager    Member?     @relation("MemberHierarchy", fields: [managerId], references: [id], onDelete: SetNull)
   reports    Member[]    @relation("MemberHierarchy")
 
+  /// False when the workspace is over its plan's seat limit and this person was
+  /// not chosen to stay active: they can still read everything, but not send or
+  /// change campaigns. Nullable with no default like every app-owned column on a
+  /// better-auth table (see Organization) — null reads as active.
+  seatActive Boolean?
+
   @@unique([organizationId, userId])
   @@index([organizationId, department])
   @@index([managerId])
@@ -715,6 +721,113 @@ model LinkedInAction {
   @@index([leadId])
   // Reports and the Outbox's invitations tab.
   @@index([organizationId, kind, status])
+}
+
+// ===========================================================================
+// Billing: plans, credits and Razorpay
+//
+// Plans are code (lib/billing/plans.ts), not rows. A price that lives in a table
+// is a price somebody edits in production without anyone reviewing it; these
+// tables only record what a workspace is on and what it has spent.
+// ===========================================================================
+
+/// One per workspace: the plan it is on, and where the money comes from.
+model Subscription {
+  id                     String    @id @default(uuid())
+  organizationId         String    @unique
+  /// test_drive | start | grow | scale — lib/billing/plans.ts
+  planId                 String
+  /// trialing | active | past_due | cancelled | expired
+  status                 String
+  /// Launch trials: null until somebody in the workspace first opens the app
+  /// after billing launches, which is when its 14 days start.
+  trialStartedAt         DateTime?
+  trialEndsAt            DateTime?
+  currentPeriodEnd       DateTime?
+  cancelledAt            DateTime?
+  razorpayCustomerId     String?
+  razorpaySubscriptionId String?   @unique
+  createdAt              DateTime  @default(now())
+  updatedAt              DateTime  @updatedAt
+}
+
+/// The live balance. Every change to it also writes a CreditLedger row.
+model CreditBalance {
+  organizationId String   @id
+  /// What is left of today's allowance.
+  dailyRemaining Int      @default(0)
+  /// The workspace-local day that allowance belongs to, "YYYY-MM-DD". Any other
+  /// day means today's allowance has not been granted yet.
+  dailyDate      String   @default("")
+  topupRemaining Int      @default(0)
+  updatedAt      DateTime @updatedAt
+}
+
+/// Append-only: every grant, reserve, charge, release and refund, per bucket.
+model CreditLedger {
+  id             String   @id @default(uuid())
+  organizationId String
+  /// grant | topup | reserve | capture | release | refund | adjust
+  kind           String
+  /// Signed: negative takes credits, positive gives them back.
+  amount         Int
+  /// daily | topup
+  bucket         String
+  /// A CreditAction from lib/billing/plans.ts; null for grants and purchases.
+  action         String?
+  /// What it was for — linkedin_action, message, enrichment, purchase, day — and
+  /// that thing's id. Unique with kind and bucket, so a retried reserve or a
+  /// redelivered webhook cannot move credits twice.
+  refType        String
+  refId          String
+  meta           Json     @default("{}")
+  createdAt      DateTime @default(now())
+
+  @@unique([refType, refId, kind, bucket])
+  @@index([organizationId, createdAt])
+}
+
+/// A usage top-up bought through Razorpay, by hand or by auto-recharge.
+model CreditPurchase {
+  id                String   @id @default(uuid())
+  organizationId    String
+  /// pack_500 | pack_1500 | pack_5000 | pack_15000
+  packId            String
+  credits           Int
+  amountCents       Int
+  /// created | paid | failed
+  status            String   @default("created")
+  /// checkout | auto_recharge
+  via               String   @default("checkout")
+  razorpayOrderId   String?  @unique
+  razorpayPaymentId String?  @unique
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@index([organizationId, createdAt])
+}
+
+/// Buy a pack on its own when credits run low, against a card mandate the
+/// customer approved once, with a monthly ceiling.
+model AutoRecharge {
+  organizationId     String    @id
+  enabled            Boolean   @default(false)
+  thresholdCredits   Int       @default(200)
+  packId             String    @default("pack_1500")
+  monthlyCapCents    Int       @default(5000)
+  /// The approved mandate's Razorpay token. ENCRYPTED — lib/db-encryption.ts
+  razorpayTokenId    String?
+  razorpayCustomerId String?
+  lastChargedAt      DateTime?
+  updatedAt          DateTime  @updatedAt
+}
+
+/// Razorpay webhook events already handled, so a redelivery changes nothing.
+model BillingEvent {
+  /// Razorpay's own event id.
+  id        String   @id
+  type      String
+  createdAt DateTime @default(now())
 }
 
 // ===========================================================================

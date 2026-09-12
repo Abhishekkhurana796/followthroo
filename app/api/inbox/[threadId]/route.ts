@@ -155,7 +155,9 @@ export async function POST(req: NextRequest, { params }: Ctx) {
     { subject, body: parsed.data.body },
     account?.id,
     ctx.orgId,
-    rfcMessageId
+    rfcMessageId,
+    // Typed by a person, answering someone who wrote in: that's the inbox, which is free.
+    { free: true }
   );
 
   if (!result.ok) return fail(result.reason || result.error || "send failed", 400);

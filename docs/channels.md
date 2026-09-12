@@ -6,7 +6,8 @@
 > Every channel module implements a uniform `send(lead, rendered)` interface and goes
 > through `lib/ratelimit` — except LinkedIn, whose `send()` only enqueues, so its cap is
 > enforced at claim time instead. Consolidated numbers live in
-> [rate-limits.md](rate-limits.md).
+> [rate-limits.md](rate-limits.md). Sends that cost credits are charged on the same path —
+> see [Credits on every send](#credits-on-every-send-2026-09-12).
 
 ---
 
@@ -132,6 +133,31 @@ export interface Channel {
   // must write messages + activity_log on completion
 }
 ```
+
+---
+
+## Credits on every send (2026-09-12)
+
+Plans meter actions in credits ([pricing.md](pricing.md); the numbers live in
+`lib/billing/plans.ts`). Each channel is charged where it actually sends:
+
+- **Email and WhatsApp** — in `safeSend`, after suppression and quiet hours and *before* the
+  rate limiter, because a credit can be handed back and a rate-limit slot can't. Kept once the
+  adapter reports a real send; handed back if it's skipped, fails or throws.
+- **LinkedIn** — not in `safeSend`, whose LinkedIn `send()` only queues. The desktop app's
+  claim pays for each action (3, 5 with a note, 2 for a message) and `completeAction` settles
+  it. `selectClaimable` holds what the balance doesn't cover as `no_credits`, so the list peek
+  shows is still the list that goes out. An action put back in the queue keeps its credits;
+  one cancelled without a report is settled by the billing sweep.
+- **Free sends** — `SendContext.free`, only for a person sending by hand for themselves: an
+  inbox reply, a template test send. Everything else pays by default, so a new caller that
+  never thought about credits is charged rather than handed free sends.
+- **Out of credits** — `safeSend` returns `{ skipped: true, reason: "no_credits" | "no_plan" }`.
+  The job processor records nothing, and `advanceEnrollment` holds the step until the
+  workspace's next midnight instead of moving past it. Approving an agent draft returns 402
+  and the draft stays a draft.
+
+Nothing is charged until `BILLING_ENFORCED=1`.
 
 ---
 

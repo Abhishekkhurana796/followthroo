@@ -125,6 +125,9 @@ export async function POST(req: NextRequest) {
   await completeScrapeJob({ organizationId, jobId: job.id, rows: accepted });
   const result = await importScrapedRows({ organizationId, jobId: job.id, actorId: userId, createdKind: "extension" });
 
+  // Out of credits before anybody went in: say so, rather than report an import of nobody.
+  if (result.refused) return withCors(fail(result.refused, 402));
+
   return withCors(
     ok({
       jobId: job.id,
@@ -132,6 +135,8 @@ export async function POST(req: NextRequest) {
       created: result.created,
       duplicates: result.duplicates,
       skipped: (rows?.length ?? 0) - accepted.length,
+      // Left out because the credits ran out partway through.
+      waitingForCredits: result.waiting,
     }),
   );
 }

@@ -33,6 +33,17 @@ export interface ChangelogEntry {
 export const CHANGELOG: ChangelogEntry[] = [
   {
     product: "webapp",
+    version: "0.22.0",
+    date: "Sep 2026",
+    items: [
+      "New pricing: a $2 Test Drive for 14 days, then Start at $10, Grow at $20 and Scale at $50 a month. Every plan has the CRM, the inbox and every channel; plans differ in daily credits, people, inboxes, campaigns, templates and leads. The pricing page compares them side by side and lists what every action costs",
+      "Plans & billing is rebuilt around it: your plan and how much of each limit you use, today's credits, top-up packs with what each credit costs next to your plan's own rate, and a history of every charge and refund. It used to show three plans nobody could be on",
+      "Nothing is charged yet, and nothing you send is counted, until card payments are switched on",
+      "The sidebar no longer labels every workspace \"Free\"",
+    ],
+  },
+  {
+    product: "webapp",
     version: "0.21.0",
     date: "Sep 2026",
     items: [
