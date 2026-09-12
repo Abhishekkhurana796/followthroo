@@ -7,6 +7,7 @@ import { Bot, Play, FileEdit, Check, X } from "lucide-react";
 import { api } from "@/lib/client";
 import { Banner, DashHeader, Label, Panel, Select, Textarea, useConfirm, useToast } from "@/components/ui";
 import { LeadPicker, leadLabel, type PickerLead } from "@/components/dashboard/LeadPicker";
+import { CREDIT_COSTS } from "@/lib/billing/plans";
 type Draft = {
   id: string;
   channel: string;
@@ -141,7 +142,7 @@ export default function AgentPage() {
                 disabled={busy || !selectedAccount || !lead}
                 className="btn btn-primary disabled:opacity-50"
               >
-                <Play className="h-4 w-4" /> {busy ? "Sending…" : "Send test"}
+                <Play className="h-4 w-4" /> {busy ? "Sending…" : `Send test · ${CREDIT_COSTS.ai_draft}+ credits`}
               </button>
               <span className="text-xs text-ink-soft">
                 {lead ? (

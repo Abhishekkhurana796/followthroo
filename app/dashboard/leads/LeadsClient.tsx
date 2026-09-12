@@ -12,6 +12,7 @@ import { api } from "@/lib/client";
 import { cn } from "@/lib/cn";
 import { Badge, Banner, DashHeader, Dialog, EmptyState, Input, Label, NoResults, Panel, Select, Skeleton, Textarea, useConfirm, usePrompt } from "@/components/ui";
 import { INVITE_NOTE_MAX, worstCaseNoteLength } from "@/lib/linkedin/note";
+import { CREDIT_COSTS } from "@/lib/billing/plans";
 import { tourTarget } from "@/components/dashboard/tour/target";
 type NextAction = { taskId: string | null; label: string; kind: string; dueAt: string | null; urgent: boolean; source: string };
 type Lead = {
@@ -500,9 +501,15 @@ export default function LeadsPage() {
               className="flex items-center gap-1 rounded-lg bg-ink-invert/15 px-2.5 py-1 hover:bg-ink-invert/25"
             >
               <Linkedin className="h-3.5 w-3.5" /> Connect on LinkedIn
+              <span className="font-mono text-[10px] text-ink-invert/60">{CREDIT_COSTS.li_invite}+ credits each</span>
             </button>
-            <button onClick={bulkEnrich} className="flex items-center gap-1 rounded-lg bg-ink-invert/15 px-2.5 py-1 hover:bg-ink-invert/25">
+            <button
+              onClick={bulkEnrich}
+              title={`Up to ${CREDIT_COSTS.enrich} credits each — refunded for anything not found, free if not a 1st-degree connection`}
+              className="flex items-center gap-1 rounded-lg bg-ink-invert/15 px-2.5 py-1 hover:bg-ink-invert/25"
+            >
               <IdCard className="h-3.5 w-3.5" /> Find email &amp; phone
+              <span className="font-mono text-[10px] text-ink-invert/60">up to {CREDIT_COSTS.enrich} each</span>
             </button>
             <button onClick={() => setSelected(new Set())} className="ml-auto text-ink-invert/70 hover:text-ink-invert">Clear</button>
           </div>
@@ -766,6 +773,7 @@ function InviteDialog({
   // The cap is a moving target — some of today's allowance may already be spent.
   const willSendToday = preview ? Math.min(preview.withProfile - preview.alreadyQueued, preview.remainingToday) : 0;
   const actionable = preview ? preview.withProfile - preview.alreadyQueued : 0;
+  const perInvite = note.trim() ? CREDIT_COSTS.li_invite_note : CREDIT_COSTS.li_invite;
 
   async function queue() {
     setBusy(true);
@@ -858,6 +866,16 @@ function InviteDialog({
               About {noteLen} of {INVITE_NOTE_MAX} characters once personalised
               {overLimit ? " — LinkedIn will refuse this. Shorten it." : ""}
             </p>
+          </div>
+
+          <div className="rounded-xl bg-accent-soft/60 px-3.5 py-2.5 text-sm">
+            <span className="font-mono font-semibold text-accent-strong">
+              {actionable * perInvite} credit{actionable * perInvite === 1 ? "" : "s"}
+            </span>{" "}
+            <span className="text-ink-soft">
+              — {perInvite} each{note.trim() ? " (with a note)" : ""} × {actionable}. Taken only as each one actually sends;
+              never charged for one that fails or is skipped.
+            </span>
           </div>
 
           <div className="rounded-xl border border-line p-3.5 text-xs text-ink-soft">
