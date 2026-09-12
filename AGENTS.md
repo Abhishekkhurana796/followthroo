@@ -46,28 +46,32 @@ Desktop app (`desktop/`): unset `ELECTRON_RUN_AS_NODE` before `npm start` or
 `npm run dist` — this shell exports it, and Electron blames your code for a crash
 that's actually that env var.
 
-## Where things stand (2026-09-13, updated mid-session)
+## Where things stand (2026-09-13, end of this session)
 
 On `feat/multitenant-crm-analytics`, merged into `main` as work lands (this repo
-deploys `main` straight to production on Vercel). P1 (billing/credits/Razorpay)
-shipped — see `docs/pricing.md`. **P2 (enrichment) is built and pushed**; **P3
-(Posts + Autopilot) is next, in progress as this file is being updated** — see
-`docs/enrichment.md` and (once written) `docs/posts.md` for the details, and the
-full handoff written for Codex (ask the user for it, or check this session's
-final message) for exactly what's done vs. still open across both.
+deploys `main` straight to production on Vercel). All four phases of the
+2026-09-12 plan (`~/.claude/plans/this-is-a-copy-luminous-dove.md` on the
+machine that ran this session — the decisions in it are settled, not to be
+re-litigated) are now built: **P1 billing, P2 enrichment, P3 Posts**. A full
+handoff for a fresh session (Codex or otherwise) was written at the end of
+this session — ask the user for it, or check this conversation's final
+message, for the complete picture: what's shipped, what's verified vs. not,
+and the prioritized list of what's left. `docs/pricing.md`, `docs/enrichment.md`
+and `docs/posts.md` are the three living docs for those phases respectively.
 
-**P2, done:** schema (`LinkedInEnrichment`, `LinkedInAccount.dailyEnrichCap` /
-`autoEnrichOnAccept`), the claim/charge/merge engine (`lib/linkedin/enrich.ts`),
-three routes, a campaign `enrich` node + `has_email`/`has_phone` condition
-(`lib/campaign-engine.ts`), auto-enrich on accept, web UI (Leads bulk action,
-lead record button, campaign step, LinkedIn settings), desktop DOM code
-(`desktop/page-actions.js`'s `readContactInfo`, `desktop/enrich-flow.js`,
-wired into `runner.js` after the invite lane), docs, changelog, and
-`scripts/verify-linkedin-enrichment.ts`. **Not verified against a live LinkedIn
-account** — the Contact-info overlay selectors are a best guess from documented
-markup, same as every selector in `page-actions.js` started life. Desktop app
-version has **not** been bumped or released for this — the code is merged but
-sitting unbuilt until someone runs it against a real profile first.
+**P2 (enrichment), done:** schema, the claim/charge/merge engine
+(`lib/linkedin/enrich.ts`), a campaign `enrich` node, desktop DOM code, web UI,
+21/21 verify checks. **Not verified against a live LinkedIn account** — the
+Contact-info overlay selectors are a best guess from documented markup.
+Desktop app version is **not bumped or released** for this.
+
+**P3 (Posts + Autopilot), done:** schema (`Post`, `Autopilot`, `AutopilotRun`,
+`ProductInterest`), `lib/posts/{models,research,write,schedule}.ts`,
+`lib/linkedin/post.ts` image upload, the `post-publish` queue job +
+`/api/cron/posts-sweep`, a "Posts" row under Automate, and a full UI (home,
+editor, autopilot setup). 9/9 verify checks — but that script deliberately
+never calls OpenRouter or LinkedIn's Images API; see `docs/posts.md`'s "What's
+unverified" for exactly what a first real run needs to confirm.
 
 Every doc lives under `docs/` and is indexed in CLAUDE.md's "Documentation
 index" table — check there before assuming a topic is undocumented.
