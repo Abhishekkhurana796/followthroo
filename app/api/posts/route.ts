@@ -22,19 +22,22 @@ export async function GET(req: NextRequest) {
   return ok(posts);
 }
 
-const Body = z.object({
-  body: z.string().min(1).max(3000),
-  mediaUrl: z.string().url().nullable().optional(),
-  mediaAlt: z.string().max(300).nullable().optional(),
-  /** Write it with AI first — pass a topic/brief and a model instead of `body`. */
-  write: z
-    .object({
-      model: z.string(),
-      brief: z.string().max(2000).optional(),
-      topic: z.object({ topic: z.string(), why: z.string(), sources: z.array(z.object({ title: z.string(), url: z.string() })) }).optional(),
-    })
-    .optional(),
-});
+const Body = z
+  .object({
+    /** Required only when writing by hand — the AI path below writes its own. */
+    body: z.string().min(1).max(3000).optional(),
+    mediaUrl: z.string().url().nullable().optional(),
+    mediaAlt: z.string().max(300).nullable().optional(),
+    /** Write it with AI first — pass a topic/brief and a model instead of `body`. */
+    write: z
+      .object({
+        model: z.string(),
+        brief: z.string().max(2000).optional(),
+        topic: z.object({ topic: z.string(), why: z.string(), sources: z.array(z.object({ title: z.string(), url: z.string() })) }).optional(),
+      })
+      .optional(),
+  })
+  .refine((v) => !!v.body?.trim() || !!v.write, { message: "Write something, or pass `write` to have AI write it." });
 
 /** POST /api/posts — a manual draft, written by hand or by AI (one variant, this endpoint always writes exactly one). */
 export async function POST(req: NextRequest) {
@@ -63,6 +66,9 @@ export async function POST(req: NextRequest) {
     return ok(post, { status: 201 });
   }
 
+  // The refine above guarantees body or write; write was handled and returned
+  // above, so reaching here means body is the one that's present.
+  if (!parsed.data.body?.trim()) return fail("Write something first.");
   const post = await prisma.post.create({
     data: { organizationId: ctx.orgId, userId: ctx.userId, status: "draft", body: parsed.data.body, mediaUrl: parsed.data.mediaUrl ?? null, mediaAlt: parsed.data.mediaAlt ?? null },
   });
