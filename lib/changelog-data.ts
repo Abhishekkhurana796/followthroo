@@ -33,6 +33,15 @@ export interface ChangelogEntry {
 export const CHANGELOG: ChangelogEntry[] = [
   {
     product: "webapp",
+    version: "0.28.0",
+    date: "Sep 2026",
+    items: [
+      "Start, Grow and Scale can now be bought straight from Plans & billing, not just messaged in — Razorpay Checkout, one month at a time, with a reminder before it runs out",
+      "Eight more AI models for Posts and Autopilot: Llama 3.3 70B, Qwen3 14B, Qwen3 235B A22B and GLM 5.3 on the standard tier; GPT-5.5, GPT-5.6 Sol and Gemini 3.1 Pro on premium; Claude Fable 5.1 for narrative-heavy writing at its own price",
+    ],
+  },
+  {
+    product: "webapp",
     version: "0.27.0",
     date: "Sep 2026",
     items: [

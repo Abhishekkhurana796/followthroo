@@ -51,7 +51,7 @@ type Order = {
   description: string;
   prefill: { name: string; email: string };
 };
-type Purchase = { kind: "test_drive" } | { kind: "pack"; packId: string };
+type Purchase = { kind: "test_drive" } | { kind: "pack"; packId: string } | { kind: "plan"; planId: string };
 
 /**
  * Pay through Razorpay Checkout. The server creates the order, Checkout takes the
@@ -83,7 +83,13 @@ function usePayment(onPaid: (message: string) => void) {
               body: { orderId: r.razorpay_order_id, paymentId: r.razorpay_payment_id, signature: r.razorpay_signature },
             })
               .then(() => {
-                onPaid(purchase.kind === "pack" ? "Credits added — they're ready to use." : "Your Test Drive has started.");
+                onPaid(
+                  purchase.kind === "pack"
+                    ? "Credits added — they're ready to use."
+                    : purchase.kind === "plan"
+                      ? "Your plan is live — today's credits are ready to use."
+                      : "Your Test Drive has started.",
+                );
                 resolve();
               })
               .catch(reject);
@@ -155,6 +161,7 @@ export default function Page() {
               <YourPlan data={data} onKeepActive={() => setKeepOpen(true)} />
               <TodaysCredits data={data} />
             </div>
+            <PlanPicker data={data} payment={payment} />
             <TopUps data={data} payment={payment} />
             <AutoRecharge />
             <History />
@@ -286,25 +293,94 @@ function YourPlan({ data, onKeepActive }: { data: Summary; onKeepActive: () => v
       )}
 
       <div className="mt-6 flex flex-wrap items-center gap-2">
-        <Link href="/pricing" className="btn btn-ghost !px-4 !py-2 text-sm">
-          {plan ? "Change plan" : "Choose a plan"}
-        </Link>
+        <a href="#choose-plan" className="btn btn-ghost !px-4 !py-2 text-sm">
+          {plan?.billing === "monthly" ? "Change plan" : "Choose a plan"}
+        </a>
         {over && (
           <button type="button" onClick={onKeepActive} className="btn btn-primary !px-4 !py-2 text-sm">
             Choose what stays active
           </button>
         )}
       </div>
-      {data.payments && (
+      {!data.payments && (
         <p className="mt-3 text-xs text-ink-soft">
-          Monthly plans are switched on by hand for now —{" "}
+          Card payments are being switched on —{" "}
           <Link href="/contact" className="font-semibold text-accent-strong hover:underline">
             message us
           </Link>{" "}
-          and we&apos;ll move you across. The Test Drive and top-ups can be bought here.
+          and we&apos;ll set your plan by hand until then.
         </p>
       )}
     </Panel>
+  );
+}
+
+function PlanPicker({ data, payment }: { data: Summary; payment: Payment }) {
+  const monthly = PLAN_ORDER.map((id) => PLANS[id]).filter((p) => p.billing === "monthly");
+  const current = data.plan?.billing === "monthly" ? data.plan.id : null;
+
+  return (
+    <section id="choose-plan" className="scroll-mt-6">
+      <h2 className="font-display text-lg font-bold">{current ? "Change plan" : "Choose a plan"}</h2>
+      <p className="mt-1 max-w-3xl text-sm text-ink-soft">
+        Every plan includes the CRM, the inbox and every channel — they differ in daily credits, seats and limits.
+        Switching takes effect immediately.
+      </p>
+
+      <div className="mt-4 grid gap-4 sm:grid-cols-3">
+        {monthly.map((plan) => {
+          const isCurrent = current === plan.id;
+          const featured = plan.id === "grow" && !isCurrent;
+          return (
+            <div
+              key={plan.id}
+              className={`flex flex-col rounded-2xl border bg-surface p-5 ${featured ? "border-accent ring-1 ring-accent/40" : "border-line"}`}
+            >
+              <div className="flex items-center justify-between gap-2">
+                <span className="font-display text-lg font-bold">{plan.name}</span>
+                {isCurrent && <Badge tone="accent">Current plan</Badge>}
+              </div>
+              <div className="mt-1 flex items-baseline gap-1">
+                <span className="font-display text-3xl font-extrabold">${plan.price}</span>
+                <span className="text-sm text-ink-soft">/mo</span>
+              </div>
+              <p className="mt-2 flex-1 text-xs text-ink-soft">{plan.blurb}</p>
+              <ul className="mt-3 space-y-1 text-xs text-ink-soft">
+                <li>{count(plan.dailyCredits)} credits a day</li>
+                <li>
+                  {count(plan.limits.users)} {plan.limits.users === 1 ? "user" : "users"} · {count(plan.limits.inboxes)}{" "}
+                  {plan.limits.inboxes === 1 ? "inbox" : "inboxes"}
+                </li>
+                <li>{plan.limits.leads === null ? "Unlimited leads" : `${count(plan.limits.leads)} leads stored`}</li>
+              </ul>
+              <button
+                type="button"
+                disabled={isCurrent || !data.payments || payment.busy !== null}
+                title={!data.payments ? "Card payments are being switched on" : undefined}
+                onClick={() => payment.pay(plan.id, { kind: "plan", planId: plan.id })}
+                className={`mt-4 w-full justify-center disabled:cursor-not-allowed disabled:opacity-60 ${featured ? "btn btn-primary" : "btn btn-ghost"}`}
+              >
+                {isCurrent ? "Current plan" : payment.busy === plan.id ? "Opening…" : `Subscribe for $${plan.price}/mo`}
+              </button>
+            </div>
+          );
+        })}
+      </div>
+      {payment.error && payment.busy === null && <p className="mt-3 text-sm text-danger">{payment.error}</p>}
+      <p className="mt-3 text-xs text-ink-soft">
+        {!data.payments ? (
+          <>
+            Card payments are being switched on. Until then,{" "}
+            <Link href="/contact" className="font-semibold text-accent-strong hover:underline">
+              message us
+            </Link>{" "}
+            and we&apos;ll set your plan by hand.
+          </>
+        ) : (
+          "Paid through Razorpay, one month at a time for now — you'll get a reminder before it runs out. Card-on-file auto-renewal is coming."
+        )}
+      </p>
+    </section>
   );
 }
 

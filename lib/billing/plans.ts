@@ -121,6 +121,8 @@ export type CreditAction =
   | "ai_draft"
   | "ai_post_standard"
   | "ai_post_premium"
+  /** Claude Fable 5.1 only — priced above the other premium models; see lib/posts/models.ts. */
+  | "ai_post_fable"
   | "li_sourcing";
 
 /** What each action costs, in credits. */
@@ -136,6 +138,7 @@ export const CREDIT_COSTS: Record<CreditAction, number> = {
   ai_draft: 2,
   ai_post_standard: 10,
   ai_post_premium: 20,
+  ai_post_fable: 30,
   /** Per ten people imported from LinkedIn by the extension. */
   li_sourcing: 1,
 };

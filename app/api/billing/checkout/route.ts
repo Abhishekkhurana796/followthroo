@@ -12,16 +12,23 @@ export const runtime = "nodejs";
 const Body = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("test_drive") }),
   z.object({ kind: z.literal("pack"), packId: z.enum(["pack_500", "pack_1500", "pack_5000", "pack_15000"]) }),
+  z.object({ kind: z.literal("plan"), planId: z.enum(["start", "grow", "scale"]) }),
 ]);
 
 /**
- * POST /api/billing/checkout — start a one-time payment: the $2 Test Drive, or a
- * top-up pack. Creates the Razorpay order and returns what Checkout needs to
- * open. Nothing is granted here; /api/billing/verify does that once Razorpay has
- * signed the payment.
+ * POST /api/billing/checkout — start a payment: the $2 Test Drive, a top-up
+ * pack, or a month of a paid plan. Creates the Razorpay order and returns what
+ * Checkout needs to open. Nothing is granted here; /api/billing/verify does
+ * that once Razorpay has signed the payment.
  *
- * Monthly plans aren't here: they're Razorpay subscriptions, which need
- * Subscriptions switched on for the Razorpay account first.
+ * A monthly plan is charged one order at a time, exactly like the Test Drive,
+ * rather than through Razorpay's own Subscriptions API — that needs
+ * Subscriptions switched on for the account, which needs the business bank
+ * account linked first. lib/billing/subscription.ts treats a plan bought this
+ * way (no razorpaySubscriptionId) as running out at currentPeriodEnd, same as
+ * the Test Drive, since nothing here re-charges it. Swap this for
+ * createSubscription (lib/billing/razorpay.ts, already written) once that's
+ * enabled.
  */
 export async function POST(req: NextRequest) {
   const ctx = await requireOrg(req);
@@ -52,6 +59,13 @@ export async function POST(req: NextRequest) {
     amountCents = plan.price * 100;
     description = `${plan.name}: ${plan.days} days, ${plan.dailyCredits} credits a day`;
     receipt = `testdrive_${Date.now().toString(36)}`;
+  } else if (parsed.data.kind === "plan") {
+    const plan = PLANS[parsed.data.planId];
+    if (wp.access === "active" && wp.plan?.id === plan.id) return fail(`You're already on ${plan.name}.`, 409);
+    amountCents = plan.price * 100;
+    description = `${plan.name}: one month, ${plan.dailyCredits.toLocaleString("en-US")} credits a day`;
+    receipt = `plan_${plan.id}_${Date.now().toString(36)}`;
+    notes.planId = plan.id;
   } else {
     // Paid plans only: top-ups are lost when a plan ends, so selling them to a
     // trial that may never convert is a refund request waiting to happen.

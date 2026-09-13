@@ -108,7 +108,7 @@ stays active.
 | Create-time limits (402 when enforced) | `lib/billing/limits.ts`, called from the campaign, template, lead, import and mailbox routes |
 | Billing screens | `lib/billing/summary.ts` → `/api/billing/summary`, `/api/billing/history` |
 | Stranded reservations, trial reminders | `lib/billing/sweep.ts` → `/api/cron/billing-sweep` (QStash, every 15 min) |
-| Payments (Test Drive, packs) | `lib/billing/razorpay.ts` (REST + signatures), `/api/billing/checkout` → Razorpay Checkout → `/api/billing/verify` → `lib/billing/payments.ts` |
+| Payments (Test Drive, packs, monthly plans) | `lib/billing/razorpay.ts` (REST + signatures), `/api/billing/checkout` → Razorpay Checkout → `/api/billing/verify` → `lib/billing/payments.ts` |
 | Plan features on screens | `upgradeFor` → `PlanUpsell` on Deliverability, Ageing, Escalations, Control tower; `requireFeature` on lead assignment |
 | People and roles | `organizationHooks` in `lib/auth.ts`: a seat check on invite and join (pending invitations hold a seat), and the roles feature |
 | Choose what stays active | `/api/billing/keep-active` + `KeepActiveDialog`; a read-only seat is refused writes in `requireOrg` |
@@ -157,7 +157,7 @@ workspaces.
 | LinkedIn | Desktop app (`desktop/`) sends; extension sources | Runs on the customer's machine and IP |
 | AI | OpenRouter (`OPENROUTER_MODEL`), Anthropic direct as a fallback | `docs/ai-agent.md` |
 | Auth | `better-auth`, self-hosted | Email/password + Google + org plugin |
-| Billing | **Plans, credits, limits and one-time payments built** | `lib/billing/`. Razorpay test keys are set (`RAZORPAY_API_KEY`, `RAZORPAY_SECRET`); monthly subscriptions, the webhook and auto-recharge are not built yet. |
+| Billing | **Plans, credits, limits and payments built** | `lib/billing/`. Razorpay test keys are set (`RAZORPAY_API_KEY`, `RAZORPAY_SECRET`). Monthly plans are bought too, but as one Razorpay order per month (see below) rather than a real Razorpay Subscription; the webhook and auto-recharge are not built yet. |
 
 ---
 
@@ -232,21 +232,41 @@ Done (2026-09-12):
 - The launch script, plan gates on reports, lead assignment, seats and roles,
   "Choose what stays active", and the credit estimate before a campaign launch.
 
+Done (2026-09-13) — a stand-in, not the real thing:
+
+- **Monthly plans (Start, Grow, Scale) can be bought from Billing** —
+  `PlanPicker` in `app/dashboard/settings/billing/page.tsx` — but as one
+  Razorpay **order** for that month's price, exactly like the Test Drive, not a
+  Razorpay **Subscription**. `lib/billing/subscription.ts` treats a monthly
+  plan with no `razorpaySubscriptionId` as running out at `currentPeriodEnd`
+  (30 days from the order), and `lib/billing/sweep.ts` sends the same 7/3/1-day
+  reminder emails a Test Drive gets. Nothing re-charges it automatically —
+  the customer has to come back and buy the next month by hand. This exists
+  because the test account answers 401 to the Plans API (confirmed again
+  2026-09-13; Orders in USD work fine), which needs Subscriptions switched on
+  in the Razorpay dashboard, which needs the business bank account linked —
+  expected 2026-09-14. Do this once that's done:
+  1. Create the three monthly USD plans via `createPlan`
+     (`lib/billing/razorpay.ts`, already written) and note their plan ids.
+  2. Swap `grantOrder`'s `"plan"` branch (`lib/billing/payments.ts`) for
+     `createSubscription`, storing `razorpaySubscriptionId` — that one field
+     is what turns off the order-based expiry check in `subscription.ts` and
+     the reminder query in `sweep.ts`, so no other logic needs to change.
+  3. Wire the webhook (next item) so renewals, failures and cancellations
+     update `status` without a cron job guessing from `currentPeriodEnd`.
+
 Still open:
 
-1. **Monthly plans (Start, Grow, Scale):** these are Razorpay subscriptions.
-   The test account answered 401 to the Plans API, so Subscriptions has to be
-   switched on in the Razorpay dashboard. After that, create the three monthly
-   USD plans and add their IDs to the environment. Until then, monthly plans
-   are set up by hand.
-2. **The webhook** (`payment.captured`, `subscription.*`): register
+1. **The webhook** (`payment.captured`, `subscription.*`): register
    `https://app.followthroo.com/api/billing/razorpay/webhook` in Razorpay and
    set `RAZORPAY_WEBHOOK_SECRET`. One-time payments don't depend on it, because
    Checkout's signature is verified directly.
-3. **Auto-recharge:** a card/UPI mandate needs Recurring Payments on the
+2. **Auto-recharge:** a card/UPI mandate needs Recurring Payments on the
    Razorpay account.
-4. **Going live:** run `scripts/billing-launch.ts --apply`, then set
+3. **Going live:** run `scripts/billing-launch.ts --apply`, then set
    `BILLING_ENFORCED=1`.
-5. **Inbound leads when storage is full:** webhook leads are still accepted
+4. **Inbound leads when storage is full:** webhook leads are still accepted
    over the cap, so a customer's enquiry is never lost. Confirm that's intended.
-6. **Charge points for P2 (enrichment) and P3 (AI posts)** as those ship.
+
+Done (2026-09-13): charge points for P2 (enrichment) and P3 (AI posts) — see
+`docs/enrichment.md` and `docs/posts.md`.

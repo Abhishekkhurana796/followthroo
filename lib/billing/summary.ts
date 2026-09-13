@@ -29,6 +29,7 @@ const SPENT_ON: Record<CreditAction, string> = {
   ai_draft: "AI drafts",
   ai_post_standard: "AI posts",
   ai_post_premium: "AI posts, premium model",
+  ai_post_fable: "AI posts, Claude Fable",
   li_sourcing: "LinkedIn imports",
 };
 
@@ -44,6 +45,7 @@ const ONE: Record<CreditAction, string> = {
   ai_draft: "AI draft",
   ai_post_standard: "AI post",
   ai_post_premium: "AI post, premium model",
+  ai_post_fable: "AI post, Claude Fable",
   li_sourcing: "LinkedIn import",
 };
 
