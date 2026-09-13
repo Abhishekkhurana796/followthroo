@@ -33,7 +33,13 @@ async function remindPlansEnding(now: Date) {
     where: {
       OR: [
         { status: "trialing", trialEndsAt: window },
-        { status: { in: ["active", "past_due"] }, planId: "test_drive", currentPeriodEnd: window },
+        // The Test Drive, and a monthly plan charged the same one-order way
+        // because Razorpay Subscriptions isn't switched on yet (see
+        // subscription.ts and payments.ts's "plan" grant) — both run out at
+        // currentPeriodEnd with nothing re-charging them automatically. A real
+        // subscription (razorpaySubscriptionId set) is excluded: its renewal
+        // and any failure notice come from Razorpay itself.
+        { status: { in: ["active", "past_due"] }, razorpaySubscriptionId: null, currentPeriodEnd: window },
       ],
     },
     select: { organizationId: true, planId: true, status: true, trialEndsAt: true, currentPeriodEnd: true },

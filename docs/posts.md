@@ -29,7 +29,7 @@ variant).
 |---|---|
 | `lib/posts/models.ts` | The curated model list (`POST_MODELS`) — id, tier, which `CREDIT_COSTS` key it charges. Nothing outside this list can be selected; `requireModel` enforces it. |
 | `lib/posts/research.ts` | `findTrendingTopics(query, hashtags)` — Google News RSS + Google Trends RSS (hand-rolled parser, no dependency) + OpenRouter's web-search plugin, in parallel, clustered into 3-5 topic cards by a cheap model. Each source fails independently to `[]` rather than throwing. |
-| `lib/posts/write.ts` | `writePosts(input, status)` — N variants, each its own credit reservation (`ai_post_standard`/`ai_post_premium`) settled per-variant: a failed model call releases its credit and keeps trying the rest, never charges for nothing. |
+| `lib/posts/write.ts` | `writePosts(input, status)` — N variants, each its own credit reservation (`ai_post_standard`/`ai_post_premium`/`ai_post_fable`) settled per-variant: a failed model call releases its credit and keeps trying the rest, never charges for nothing. |
 | `lib/posts/schedule.ts` | `nextScheduledAt` (pure scheduling arithmetic — see below), `publishScheduledPost`, `sweepPosts`, `scheduleAutopilot`. |
 | `lib/linkedin/post.ts` | `postToFeed` extended with `imageUrl`/`imageAlt` — LinkedIn's two-step Images API (`initializeUpload` → `PUT` the bytes), fetched server-side from a Vercel Blob URL. |
 | `app/api/posts/upload-image/route.ts` | A customer's own image → Vercel Blob (`@vercel/blob`, `BLOB_READ_WRITE_TOKEN`). JPEG/PNG/WebP, 8MB. |

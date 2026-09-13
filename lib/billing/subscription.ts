@@ -38,8 +38,16 @@ export async function workspacePlan(organizationId: string, now = new Date()): P
   }
 
   if (sub.status === "active" || sub.status === "past_due") {
-    // The Test Drive is paid once and simply runs out.
-    if (plan?.billing === "one_time" && sub.currentPeriodEnd) {
+    // The Test Drive is paid once and simply runs out. A monthly plan with no
+    // razorpaySubscriptionId was charged the same way — one order, one month —
+    // because Razorpay Subscriptions isn't enabled on the account yet, so it
+    // runs out exactly like the Test Drive rather than staying "active"
+    // forever on a single payment. Once a real subscription exists (a
+    // razorpaySubscriptionId), its currentPeriodEnd is advanced by Razorpay's
+    // webhook on every renewal and status flips on failure — this check no
+    // longer applies to it.
+    const simulatedMonthly = plan?.billing === "monthly" && !sub.razorpaySubscriptionId;
+    if ((plan?.billing === "one_time" || simulatedMonthly) && sub.currentPeriodEnd) {
       const live = sub.currentPeriodEnd > now;
       return { plan, status: sub.status, access: live ? "active" : "expired", endsAt: sub.currentPeriodEnd, daysLeft: daysUntil(sub.currentPeriodEnd) };
     }
