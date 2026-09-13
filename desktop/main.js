@@ -456,7 +456,18 @@ ipcMain.handle("run:start", async (_e, { dryRun = false } = {}) => {
   // Today's remaining allowance, not a fresh twenty per press. Without this,
   // pressing Start twice in an afternoon would send forty.
   const remaining = Math.max(0, MAX_PER_DAY - settings.sentToday);
-  if (remaining === 0 && !dryRun) {
+  let hasEnrichmentsQueued = false;
+  try {
+    const peekRes = await fetch(`${check.value}/api/linkedin/queue?peek=1`, {
+      headers: { Authorization: `Bearer ${settings.token}` },
+    });
+    const peekJson = await peekRes.json().catch(() => ({}));
+    if (peekJson.ok && peekJson.data && peekJson.data.enrichmentsQueued > 0) {
+      hasEnrichmentsQueued = true;
+    }
+  } catch (_) {}
+
+  if (remaining === 0 && !dryRun && !hasEnrichmentsQueued) {
     return { ok: false, error: `Today's ${MAX_PER_DAY} invitations have already gone out. Try again tomorrow.` };
   }
 

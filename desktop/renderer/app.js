@@ -257,8 +257,10 @@ async function loadQueue() {
 
   const people = res.people || [];
   const held = res.held || [];
+  const enrichmentsQueued = res.enrichmentsQueued || 0;
   el.who.innerHTML = "";
-  el.whoCount.textContent = people.length + held.length ? `· ${people.length + held.length}` : "";
+  const totalCount = people.length + held.length + enrichmentsQueued;
+  el.whoCount.textContent = totalCount ? `· ${totalCount}` : "";
 
   if (res.notes) {
     $("notesLeft").textContent = res.notes.exhaustedByLinkedIn
@@ -269,7 +271,7 @@ async function loadQueue() {
     notesChip.hidden = true;
   }
 
-  if (!people.length && !held.length) {
+  if (!people.length && !held.length && !enrichmentsQueued) {
     const li = document.createElement("li");
     li.className = "empty";
     li.textContent =
@@ -281,13 +283,30 @@ async function loadQueue() {
     return;
   }
 
-  [...people, ...held].forEach((p, i) => el.who.appendChild(queueRow(p, i + 1)));
+  if (!people.length && !held.length && enrichmentsQueued > 0) {
+    const li = document.createElement("li");
+    li.className = "empty";
+    li.textContent = `${enrichmentsQueued} contact info ${enrichmentsQueued === 1 ? "lookup" : "lookups"} queued for the desktop app.`;
+    el.who.appendChild(li);
+  } else {
+    [...people, ...held].forEach((p, i) => el.who.appendChild(queueRow(p, i + 1)));
+    if (enrichmentsQueued > 0) {
+      const li = document.createElement("li");
+      li.className = "empty";
+      li.style.marginTop = "6px";
+      li.style.borderTop = "1px dashed var(--line)";
+      li.textContent = `Plus ${enrichmentsQueued} contact info ${enrichmentsQueued === 1 ? "lookup" : "lookups"} queued.`;
+      el.who.appendChild(li);
+    }
+  }
 
   const mins = Math.round((people.length * ((res.pacing?.minDelaySec ?? 45) + (res.pacing?.maxDelaySec ?? 120))) / 2 / 60);
-  const pace = res.autoSend
-    ? `About ${mins} minute${mins === 1 ? "" : "s"}, paced ${res.pacing?.minDelaySec ?? 45}–${res.pacing?.maxDelaySec ?? 120} seconds apart.`
-    : "Automatic sending is off in Followthroo, so a run will refuse to start.";
-  const notes = !res.notes
+  const pace = people.length > 0
+    ? (res.autoSend
+      ? `About ${mins} minute${mins === 1 ? "" : "s"}, paced ${res.pacing?.minDelaySec ?? 45}–${res.pacing?.maxDelaySec ?? 120} seconds apart.`
+      : "Automatic sending is off in Followthroo, so a run will refuse to start.")
+    : "Runs in your browser to check contact details on LinkedIn.";
+  const notes = !res.notes || !people.length
     ? ""
     : res.notes.exhaustedByLinkedIn
       ? " LinkedIn says today's notes are used up — invitations marked for a note wait for tomorrow."
@@ -297,10 +316,18 @@ async function loadQueue() {
     : "";
   el.whoNote.textContent = pace + notes + credits;
 
-  el.start.disabled = people.length === 0;
-  el.start.textContent = people.length
-    ? `Send ${people.length} ${people.length === 1 ? "invitation" : "invitations"}`
-    : "Nothing to send yet";
+  const canRun = people.length > 0 || enrichmentsQueued > 0;
+  el.start.disabled = !canRun;
+
+  if (people.length > 0 && enrichmentsQueued > 0) {
+    el.start.textContent = `Start run (${people.length} ${people.length === 1 ? "invite" : "invites"}, ${enrichmentsQueued} ${enrichmentsQueued === 1 ? "lookup" : "lookups"})`;
+  } else if (enrichmentsQueued > 0) {
+    el.start.textContent = `Look up ${enrichmentsQueued} ${enrichmentsQueued === 1 ? "lead" : "leads"}`;
+  } else if (people.length > 0) {
+    el.start.textContent = `Send ${people.length} ${people.length === 1 ? "invitation" : "invitations"}`;
+  } else {
+    el.start.textContent = "Nothing to send yet";
+  }
 }
 
 /**
