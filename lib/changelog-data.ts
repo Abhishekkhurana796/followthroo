@@ -32,6 +32,14 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    product: "desktop",
+    version: "1.14.1",
+    date: "Sep 2026",
+    items: [
+      "Once invitations are sent for the day (or none are queued), the app now also shows and starts contact-info lookups waiting to run — the Start button reads \"Look up N leads\" instead of staying disabled with nothing queued",
+    ],
+  },
+  {
     product: "webapp",
     version: "0.28.1",
     date: "Sep 2026",
