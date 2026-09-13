@@ -138,7 +138,14 @@ export const CREDIT_COSTS: Record<CreditAction, number> = {
   ai_draft: 2,
   ai_post_standard: 10,
   ai_post_premium: 20,
-  ai_post_fable: 30,
+  /**
+   * 39, not a rounder number: Fable's real cost is ~$0.077/post, and Scale's
+   * own credits are the cheapest a customer ever pays for one (~$0.0022) — the
+   * rate a single global credit price has to clear, since every plan shares
+   * it. 39 × $0.0022 ≈ $0.0867, over the $0.085 floor even there; Start and
+   * Grow customers clear it by more.
+   */
+  ai_post_fable: 39,
   /** Per ten people imported from LinkedIn by the extension. */
   li_sourcing: 1,
 };
