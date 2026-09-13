@@ -33,6 +33,12 @@ export interface ChangelogEntry {
 export const CHANGELOG: ChangelogEntry[] = [
   {
     product: "webapp",
+    version: "0.28.1",
+    date: "Sep 2026",
+    items: ["Claude Fable 5.1 repriced to 39 credits, to stay above cost on every plan including Scale's cheapest per-credit rate"],
+  },
+  {
+    product: "webapp",
     version: "0.28.0",
     date: "Sep 2026",
     items: [

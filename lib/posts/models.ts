@@ -36,12 +36,12 @@ export interface PostModel {
  *    "-max" variant; `-flash` is the only other one, and it's the cheaper one.
  *
  * Tiers are cost-based, checked against OpenRouter's own per-token pricing at
- * the same date, not the source names above: Fable prices about 2x Opus 5 and
- * gets its own `ai_post_fable` action per the client's call (30 credits) — at
- * Scale's $0.0022/credit that's $0.066 for 30 credits against a rough
- * $0.077/post model cost, i.e. thinner than break-even on that plan alone,
- * same shape as Opus 5 already being "thin" per docs/pricing.md. Everything
- * else fits its existing standard/premium action with real margin to spare.
+ * the same date, not the source names above: Fable prices about 2x Opus 5, so
+ * it gets its own `ai_post_fable` action rather than sharing `ai_post_premium`.
+ * Priced at 39 credits (see plans.ts) to clear a ~$0.085 floor even at Scale's
+ * $0.0022/credit — the cheapest rate any plan pays per credit, and so the one
+ * a single global price has to cover. Everything else fits its existing
+ * standard/premium action with real margin to spare.
  */
 export const POST_MODELS: PostModel[] = [
   { id: "minimax/minimax-m2", label: "MiniMax M2", tier: "standard", creditAction: "ai_post_standard" },
