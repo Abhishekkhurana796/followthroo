@@ -1,7 +1,7 @@
 # enrichment.md — Email and phone from LinkedIn Contact info (P2)
 
-**Last updated:** 2026-09-13
-**Status:** draft — backend and desktop DOM logic built; the desktop selectors
+**Last updated:** 2026-09-15
+**Status:** desktop 1.15.0 built; the desktop selectors
 are unverified against a live LinkedIn account (see "What's unverified" below).
 
 > Where it fits: [CLAUDE.md](../CLAUDE.md)'s doc index, alongside
@@ -88,11 +88,14 @@ nobody asked to look up.
   report, at 6–15 seconds apart — gentler pacing than invites, because the
   cap here is so much higher. It stops on 3 consecutive failures or a login
   wall, the same discipline `runner.js` holds invites to.
-- `desktop/runner.js` runs this lane **after** the invite lane, and only if
-  the invite lane stopped because it ran out of capacity (empty queue, cap
-  reached) — never after a fatal stop (login wall, LinkedIn's own limit,
-  the user pressing Stop, "automatic sending is off"). See
-  `inviteLaneHealthy` in `runBatch`.
+- The desktop UI exposes this as its own **Profile enrichment** lane. It has a
+  separate peek endpoint and Start button; invitation sending never claims or
+  starts enrichment work, and enrichment never claims an invitation.
+- Selector recovery is layered: deterministic top-card link first, the direct
+  `/overlay/contact-info/` route second, then one AI decision as a final fallback.
+  That fallback may select only a numbered Contact info control marked as owned
+  by the profile's top card. Coordinates, typing, and outreach controls are
+  rejected again in the desktop page before any trusted Playwright click.
 
 ### Why the cap is so much lower than invites
 
@@ -112,11 +115,9 @@ technically still works.
 Contact info overlay markup, the same starting point every other selector in
 `page-actions.js` began from — **not yet run against a live profile.** If the
 overlay never opens, check the "Contact info" trigger-link selector first.
-The plan's fallback — navigating `/overlay/contact-info/` directly when no
-trigger link is found — is **not implemented**; see the comment in
-`readContactInfo` for exactly what's missing and why (it needs
-`enrich-flow.js` to wait for a full page navigation rather than this
-function's return value).
+The direct-overlay and guarded AI fallbacks are implemented, but still need a
+first live-account verification because LinkedIn can change both the overlay
+markup and which top-card controls receive accessible labels.
 
 ## Verification
 

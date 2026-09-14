@@ -489,7 +489,7 @@ function readRecentConnections() {
  * always closed again before returning, so a failed lookup does not leave a
  * modal open over the next thing this run does.
  */
-async function readContactInfo() {
+async function readContactInfo(options = {}) {
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
   if (/\/(login|checkpoint|authwall)/.test(location.pathname) || document.querySelector('input[name="session_key"]')) {
@@ -514,29 +514,27 @@ async function readContactInfo() {
     );
   };
 
-  if (!firstDegree()) {
+  if (!options.confirmedFirstDegree && !firstDegree()) {
     return { status: "skipped", degree: "not_1st", result: "not a 1st-degree connection — Contact info is not shown" };
   }
 
+  const modal = () => document.querySelector('.pv-contact-info, [aria-label="Contact info"], .artdeco-modal[role="dialog"]');
+  let dlg = options.alreadyOpen ? modal() : null;
+
   // LinkedIn's usual trigger is a link reading "Contact info" inside the
   // profile's top card, pointing at /overlay/contact-info/.
-  //
-  // KNOWN GAP: the plan also calls for falling back to navigating that URL
-  // directly when no such link is found on the page. Not implemented here —
-  // doing that from inside this function would mean returning mid-navigation,
-  // which needs enrich-flow.js to wait for the new page rather than this
-  // function's return value. Left for whoever verifies this against a real
-  // profile first; until then, a profile with no visible "Contact info" link
-  // reports failed rather than trying the direct URL.
-  const trigger = Array.from(scope().querySelectorAll('a[href*="overlay/contact-info"], a')).find(
-    (a) => /contact info/i.test(label(a)) || /overlay\/contact-info/.test(a.getAttribute("href") || ""),
-  );
-  if (!trigger) return { status: "failed", result: "no Contact info link found on this profile" };
-  trigger.click();
+  // Direct navigation and the guarded assistant fallback live in
+  // enrich-flow.js, because a page navigation cannot be completed from inside
+  // this serialized page function.
+  if (!dlg) {
+    const trigger = Array.from(scope().querySelectorAll('a[href*="overlay/contact-info"], a')).find(
+      (a) => /contact info/i.test(label(a)) || /overlay\/contact-info/.test(a.getAttribute("href") || ""),
+    );
+    if (!trigger) return { status: "failed", result: "no Contact info link found on this profile" };
+    trigger.click();
+    await sleep(900);
+  }
 
-  await sleep(900);
-  const modal = () => document.querySelector('.pv-contact-info, [aria-label="Contact info"], .artdeco-modal[role="dialog"]');
-  let dlg = null;
   for (let i = 0; i < 10 && !dlg; i++) {
     dlg = modal();
     if (!dlg) await sleep(300);

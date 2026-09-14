@@ -80,13 +80,60 @@ export interface ClaimEnrichAccount {
 }
 
 /**
+ * Read the enrichment queue without claiming work or reserving credits.
+ * Kept separate from the invitation peek so a problem in one workflow cannot
+ * blank or disable the other one in the desktop app.
+ */
+export async function peekEnrichments(account: ClaimEnrichAccount, limit = 50) {
+  const startOfToday = await startOfOrgDay(account.organizationId);
+  const [used, queued, people] = await Promise.all([
+    prisma.linkedInEnrichment.count({
+      where: {
+        organizationId: account.organizationId,
+        status: { in: ["in_progress", "done", "skipped", "failed"] },
+        updatedAt: { gte: startOfToday },
+      },
+    }),
+    prisma.linkedInEnrichment.count({
+      where: { organizationId: account.organizationId, status: "pending" },
+    }),
+    prisma.linkedInEnrichment.findMany({
+      where: { organizationId: account.organizationId, status: "pending" },
+      orderBy: { createdAt: "asc" },
+      take: Math.min(Math.max(limit, 1), 50),
+      include: {
+        lead: { select: { firstName: true, lastName: true, optedOut: true } },
+      },
+    }),
+  ]);
+
+  return {
+    queued,
+    daily: {
+      used,
+      cap: account.dailyEnrichCap,
+      remaining: Math.max(0, account.dailyEnrichCap - used),
+    },
+    people: people
+      .filter((row) => !row.lead?.optedOut)
+      .map((row) => ({
+        id: row.id,
+        leadId: row.leadId,
+        linkedinUrl: row.linkedinUrl,
+        leadName: [row.lead?.firstName, row.lead?.lastName].filter(Boolean).join(" ") || null,
+        source: row.source,
+        attempts: row.attempts,
+      })),
+  };
+}
+
+/**
  * Hand the desktop app its next batch of lookups: paid for as they're handed
  * out, capped per account per day, at most `limit` at a time.
  *
- * Runs after the invite lane in `runner.js` — the daily cap here is
- * deliberately much smaller than the invite cap, because opening a profile's
- * Contact info all day is exactly the pattern LinkedIn's abuse detection
- * watches for.
+ * Claimed only by the desktop app's independent Profile enrichment lane. Its
+ * own daily cap prevents a long lookup run from being mistaken for unlimited
+ * profile scraping; invitation capacity never affects this queue.
  */
 export async function claimEnrichments(account: ClaimEnrichAccount, limit: number) {
   await reclaimStale(account.organizationId);

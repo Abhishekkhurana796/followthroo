@@ -42,7 +42,6 @@ export async function GET(req: NextRequest) {
         notes: peek.notes,
         // Credits available right now, or null while billing isn't enforced.
         credits: peek.credits,
-        enrichmentsQueued: peek.enrichmentsQueued,
       })
     );
   }
