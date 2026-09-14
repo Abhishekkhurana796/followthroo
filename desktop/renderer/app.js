@@ -1,550 +1,232 @@
-/**
- * Control panel behaviour.
- *
- * Everything on screen is driven by events from the run — there is no polling
- * and no independent notion of state here. If the run says nothing, the panel
- * says nothing new, which is the honest thing to show.
- */
 const $ = (id) => document.getElementById(id);
-
 const el = {
-  dot: $("dot"), warn: $("warn"), sent: $("sent"), cap: $("cap"), bar: $("bar"),
-  now: $("now"), start: $("start"), stop: $("stop"), dry: $("dry"), log: $("log"),
-  apiBase: $("apiBase"), token: $("token"), save: $("save"),
-  settingsErr: $("settingsErr"), settings: $("settings"),
-  who: $("who"), whoCount: $("whoCount"), whoNote: $("whoNote"),
-  signin: $("signin"), signinBtn: $("signinBtn"), collapse: $("collapse"),
-  reload: $("reload"),
+  dot: $("dot"), reload: $("reload"), warn: $("warn"), version: $("version"),
+  sent: $("sent"), cap: $("cap"), inviteBar: $("inviteBar"), inviteNow: $("inviteNow"),
+  inviteStatus: $("inviteStatus"), inviteWho: $("inviteWho"), inviteCount: $("inviteCount"), inviteNote: $("inviteNote"),
+  inviteStart: $("inviteStart"), inviteStop: $("inviteStop"), inviteDry: $("inviteDry"),
+  enrichUsed: $("enrichUsed"), enrichCap: $("enrichCap"), enrichBar: $("enrichBar"), enrichNow: $("enrichNow"),
+  enrichStatus: $("enrichStatus"), enrichWho: $("enrichWho"), enrichCount: $("enrichCount"), enrichNote: $("enrichNote"),
+  enrichStart: $("enrichStart"), enrichStop: $("enrichStop"),
+  notesChip: $("notesChip"), notesLeft: $("notesLeft"), log: $("log"),
+  apiBase: $("apiBase"), token: $("token"), save: $("save"), settings: $("settings"), settingsErr: $("settingsErr"),
+  signin: $("signin"), signinBtn: $("signinBtn"), collapse: $("collapse"), reopen: $("reopen"), webSwitch: $("webSwitch"),
   update: $("update"), updateText: $("updateText"), updateBtn: $("updateBtn"),
 };
 
-let cap = 20;
+let inviteCap = 20;
+let activeLane = null;
 let logged = false;
-/** The run stated why it ended, so "Done" must not paper over it. */
-let ended = false;
-
-function stamp() {
-  return new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-}
-
-function log(text, status) {
-  if (!logged) { el.log.innerHTML = ""; logged = true; }
-  const li = document.createElement("li");
-  const t = document.createElement("time");
-  t.textContent = stamp();
-  const s = document.createElement("span");
-  s.textContent = text;
-  if (status) s.className = `s-${status}`;
-  li.append(t, s);
-  el.log.prepend(li);
-  // The log is a record of one sitting, not a history. Trimming keeps the panel
-  // from growing without bound over a long run.
-  while (el.log.children.length > 60) el.log.lastElementChild.remove();
-}
-
-function setProgress(sent) {
-  el.sent.textContent = String(sent);
-  el.bar.style.width = `${cap ? Math.min(100, (sent / cap) * 100) : 0}%`;
-}
-
-function setRunning(on) {
-  el.start.style.display = on ? "none" : "";
-  el.stop.style.display = on ? "" : "none";
-  el.dry.disabled = on;
-  el.warn.classList.toggle("show", on);
-  el.dot.className = `dot${on ? " on" : ""}`;
-}
-
-/** LinkedIn's ceiling on a connection note. */
+const ended = { invite: false, enrich: false };
 const NOTE_MAX = 300;
 
-/** A small text button in the panel's link style. */
-function linkButton(label, onClick) {
-  const b = document.createElement("button");
-  b.type = "button";
-  b.className = "link";
-  b.textContent = label;
-  b.addEventListener("click", onClick);
-  return b;
+function stamp() { return new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }); }
+function log(text, status, lane) {
+  if (!logged) { el.log.innerHTML = ""; logged = true; }
+  const li = document.createElement("li");
+  const time = document.createElement("time");
+  const message = document.createElement("span");
+  time.textContent = stamp();
+  message.textContent = lane ? `${lane === "invite" ? "Connections" : "Enrichment"}: ${text}` : text;
+  if (status) message.className = `s-${status}`;
+  li.append(time, message);
+  el.log.prepend(li);
+  while (el.log.children.length > 80) el.log.lastElementChild.remove();
 }
 
-/**
- * Save a note decision, then show the queue as the server now has it.
- *
- * Re-read rather than patched in place: whether an invitation goes today depends
- * on every other row's note, and only the server knows that.
- */
-async function saveNote(patch, errorEl) {
+function progress(target, value, cap) {
+  target.style.width = `${cap ? Math.min(100, (value / cap) * 100) : 0}%`;
+}
+
+function setRunning(lane) {
+  activeLane = lane || null;
+  const running = !!lane;
+  el.warn.classList.toggle("show", running);
+  el.dot.className = `dot${running ? " on" : ""}`;
+  el.inviteStart.disabled = running || el.inviteStart.dataset.empty === "1";
+  el.inviteDry.disabled = running || el.inviteDry.dataset.empty === "1";
+  el.enrichStart.disabled = running || el.enrichStart.dataset.empty === "1";
+  el.inviteStop.hidden = lane !== "invite";
+  el.enrichStop.hidden = lane !== "enrich";
+  el.inviteStatus.textContent = lane === "invite" ? "Running" : "Ready";
+  el.enrichStatus.textContent = lane === "enrich" ? "Running" : "Ready";
+}
+
+function emptyRow(list, message) {
+  list.innerHTML = "";
+  const li = document.createElement("li");
+  li.className = "empty";
+  li.textContent = message;
+  list.appendChild(li);
+}
+
+function linkButton(label, handler) {
+  const button = document.createElement("button");
+  button.type = "button"; button.className = "link"; button.textContent = label;
+  button.addEventListener("click", handler);
+  return button;
+}
+
+async function saveNote(patch, errorTarget) {
   const res = await window.ft.setNote(patch);
-  if (!res.ok) {
-    (errorEl || el.whoNote).textContent = res.error;
-    return false;
-  }
-  await loadQueue();
+  if (!res.ok) { (errorTarget || el.inviteNote).textContent = res.error; return false; }
+  await loadInvites();
   return true;
 }
 
-/** The inline note editor, full width under its row. */
-function noteEditor(p, onClose) {
-  const box = document.createElement("div");
-  box.className = "note-editor";
-
-  const ta = document.createElement("textarea");
-  ta.rows = 3;
-  ta.value = p.note || "";
-  ta.setAttribute("aria-label", `Note for ${p.leadName || "this invitation"}`);
-
-  const foot = document.createElement("div");
-  foot.className = "note-foot";
-  const counter = document.createElement("span");
-  counter.className = "counter";
-  const actions = document.createElement("div");
-  actions.className = "note-actions";
-  const cancel = document.createElement("button");
-  cancel.type = "button";
-  cancel.className = "ghost small";
-  cancel.textContent = "Cancel";
-  const save = document.createElement("button");
-  save.type = "button";
-  save.className = "primary small";
-  save.textContent = "Save";
-  const err = document.createElement("p");
-  err.className = "err";
-
-  const count = () => {
-    const len = ta.value.trim().length;
-    counter.textContent = `${len} / ${NOTE_MAX}`;
-    counter.classList.toggle("over", len > NOTE_MAX);
-    save.disabled = len === 0 || len > NOTE_MAX;
-  };
-  ta.addEventListener("input", count);
-  cancel.addEventListener("click", () => {
-    box.remove();
-    onClose();
-  });
-  save.addEventListener("click", async () => {
-    save.disabled = true;
-    err.textContent = "";
-    if (!(await saveNote({ id: p.id, noteChoice: "yes", note: ta.value.trim() }, err))) save.disabled = false;
-  });
-
-  actions.append(cancel, save);
-  foot.append(counter, actions);
-  box.append(ta, foot, err);
-  count();
-  setTimeout(() => ta.focus(), 0);
+function noteEditor(person, close) {
+  const box = document.createElement("div"); box.className = "note-editor";
+  const textarea = document.createElement("textarea"); textarea.rows = 3; textarea.value = person.note || "";
+  textarea.setAttribute("aria-label", `Note for ${person.leadName || "this invitation"}`);
+  const foot = document.createElement("div"); foot.className = "note-foot";
+  const counter = document.createElement("span"); counter.className = "counter";
+  const actions = document.createElement("div"); actions.className = "note-actions";
+  const cancel = document.createElement("button"); cancel.className = "ghost small"; cancel.textContent = "Cancel";
+  const save = document.createElement("button"); save.className = "primary small"; save.textContent = "Save";
+  const error = document.createElement("p"); error.className = "err";
+  const count = () => { const length = textarea.value.trim().length; counter.textContent = `${length} / ${NOTE_MAX}`; counter.classList.toggle("over", length > NOTE_MAX); save.disabled = !length || length > NOTE_MAX; };
+  textarea.addEventListener("input", count);
+  cancel.addEventListener("click", () => { box.remove(); close(); });
+  save.addEventListener("click", async () => { save.disabled = true; if (!(await saveNote({ id: person.id, noteChoice: "yes", note: textarea.value.trim() }, error))) save.disabled = false; });
+  actions.append(cancel, save); foot.append(counter, actions); box.append(textarea, foot, error); count();
+  setTimeout(() => textarea.focus(), 0);
   return box;
 }
 
-/**
- * One queued person, with their note.
- *
- * A free LinkedIn account gets a handful of notes a day, so "which three" is a
- * choice about people rather than a setting — made here, on the list you are
- * about to send, as well as on the LinkedIn screen.
- */
-function queueRow(p, n) {
+function personRow(person, number, enrichment = false) {
   const li = document.createElement("li");
-  const invite = p.type !== "message";
-
-  const num = document.createElement("span");
-  num.className = "n";
-  num.textContent = String(n);
-
-  const body = document.createElement("div");
-  body.className = "body";
-  const name = document.createElement("div");
-  name.className = "name";
-  name.textContent = p.leadName || p.linkedinUrl;
-  const meta = document.createElement("div");
-  meta.className = "meta";
-  meta.textContent = [p.title, p.company].filter(Boolean).join(" · ") || p.linkedinUrl;
+  const index = document.createElement("span"); index.className = "n"; index.textContent = String(number);
+  const body = document.createElement("div"); body.className = "body";
+  const name = document.createElement("div"); name.className = "name"; name.textContent = person.leadName || person.linkedinUrl;
+  const meta = document.createElement("div"); meta.className = "meta";
+  meta.textContent = enrichment ? [person.source, person.attempts ? `attempt ${person.attempts + 1}` : null].filter(Boolean).join(" · ") || person.linkedinUrl : [person.title, person.company].filter(Boolean).join(" · ") || person.linkedinUrl;
   body.append(name, meta);
+  const right = document.createElement("div"); right.className = "right";
+  const kind = document.createElement("span"); kind.className = "kind"; kind.textContent = enrichment ? "Lookup" : person.type === "message" ? "Message" : "Invite"; right.append(kind);
 
-  const right = document.createElement("div");
-  right.className = "right";
-  const kind = document.createElement("span");
-  kind.className = "kind";
-  kind.textContent = invite ? "Invite" : "Message";
-  right.appendChild(kind);
-
-  // Out of credits, why it's waiting is the only thing worth saying about it.
-  if (p.hold === "no_credits") {
-    const wait = document.createElement("div");
-    wait.className = "note-line";
-    wait.textContent = "Waits for credits — goes out at midnight, or once you add credits";
-    body.appendChild(wait);
-  }
-
-  // A server too old to know about notes sends no choice; show the row as before.
-  if (invite && p.noteChoice && p.hold !== "no_credits") {
-    const line = document.createElement("div");
-    line.className = "note-line";
-    const text = document.createElement("span");
-    text.className = "note-text";
-    line.appendChild(text);
-    const openEditor = () => {
-      if (li.querySelector(".note-editor")) return;
-      line.hidden = true;
-      li.appendChild(noteEditor(p, () => (line.hidden = false)));
-    };
-
-    if (p.hold === "needs_pick") {
-      text.textContent = "Your pick:";
-      line.append(
-        linkButton("Add note", () => (p.note ? saveNote({ id: p.id, noteChoice: "yes" }) : openEditor())),
-        linkButton("No note", () => saveNote({ id: p.id, noteChoice: "no" })),
-      );
+  if (!enrichment && person.type !== "message" && person.noteChoice && person.hold !== "no_credits") {
+    const line = document.createElement("div"); line.className = "note-line";
+    const text = document.createElement("span"); text.className = "note-text";
+    const openEditor = () => { if (li.querySelector(".note-editor")) return; line.hidden = true; li.append(noteEditor(person, () => (line.hidden = false))); };
+    if (person.hold === "needs_pick") {
+      text.textContent = "Choose:"; line.append(text, linkButton("Add note", () => person.note ? saveNote({ id: person.id, noteChoice: "yes" }) : openEditor()), linkButton("No note", () => saveNote({ id: person.id, noteChoice: "no" })));
     } else {
-      const on = p.noteChoice === "yes";
-      if (p.hold === "no_notes_left") text.textContent = "Waits for tomorrow — out of notes today";
-      else text.textContent = on ? `“${p.note}”` : "Sends without a note";
-      line.appendChild(linkButton(on ? "Edit" : "Add one", openEditor));
-
-      const sw = document.createElement("div");
-      sw.className = "note-switch";
-      const label = document.createElement("span");
-      label.textContent = "Note";
-      const toggle = document.createElement("button");
-      toggle.type = "button";
-      toggle.className = "switch";
-      toggle.setAttribute("role", "switch");
-      toggle.setAttribute("aria-checked", String(on));
-      toggle.setAttribute("aria-label", `Note for ${p.leadName || "this invitation"}`);
-      toggle.addEventListener("click", async () => {
-        // Nothing to send yet — write it first.
-        if (!on && !p.note) return openEditor();
-        toggle.disabled = true;
-        await saveNote({ id: p.id, noteChoice: on ? "no" : "yes" });
-        toggle.disabled = false;
-      });
-      sw.append(label, toggle);
-      right.appendChild(sw);
+      const on = person.noteChoice === "yes";
+      text.textContent = person.hold === "no_notes_left" ? "Waits for tomorrow — no notes left" : on ? `“${person.note}”` : "Sends without a note";
+      line.append(text, linkButton(on ? "Edit" : "Add one", openEditor));
+      const toggleWrap = document.createElement("div"); toggleWrap.className = "note-switch"; toggleWrap.textContent = "Note";
+      const toggle = document.createElement("button"); toggle.className = "switch"; toggle.type = "button"; toggle.setAttribute("role", "switch"); toggle.setAttribute("aria-checked", String(on));
+      toggle.addEventListener("click", async () => { if (!on && !person.note) return openEditor(); toggle.disabled = true; await saveNote({ id: person.id, noteChoice: on ? "no" : "yes" }); });
+      toggleWrap.append(toggle); right.append(toggleWrap);
     }
-    body.appendChild(line);
+    body.append(line);
   }
-
-  li.append(num, body, right);
+  if (!enrichment && person.hold === "no_credits") { const hold = document.createElement("div"); hold.className = "note-line"; hold.textContent = "Waiting for credits"; body.append(hold); }
+  li.append(index, body, right);
   return li;
 }
 
-/**
- * Show exactly who is queued — and whether each invitation carries its note.
- *
- * Start is irreversible — an invitation cannot be recalled — so the names belong
- * on screen before the button is pressed, not in a log afterwards. The Start
- * label counts them too, so "Send 14 invitations" is what you agree to rather
- * than a generic "Start sending". Invitations waiting on somebody's pick, or on
- * tomorrow's notes, are listed after the ones that go, with why.
- */
-async function loadQueue() {
+async function loadInvites() {
   const res = await window.ft.peekQueue();
-  const notesChip = $("notesChip");
-
   if (!res.ok) {
-    el.who.innerHTML = "";
-    const li = document.createElement("li");
-    li.className = "empty";
-    li.textContent = res.error;
-    el.who.appendChild(li);
-    el.whoCount.textContent = "";
-    el.whoNote.textContent = "";
-    notesChip.hidden = true;
-    el.start.disabled = true;
-    el.start.textContent = "Start sending";
-    return;
+    emptyRow(el.inviteWho, res.error); el.inviteCount.textContent = "—"; el.inviteNote.textContent = ""; el.notesChip.hidden = true;
+    el.inviteStart.dataset.empty = "1"; el.inviteDry.dataset.empty = "1"; setRunning(activeLane); return;
   }
+  const people = res.people || [], held = res.held || [], all = [...people, ...held];
+  el.inviteCount.textContent = String(all.length); el.inviteWho.innerHTML = "";
+  if (!all.length) emptyRow(el.inviteWho, "Nothing queued. Add leads in the web app, then choose Connect on LinkedIn.");
+  else all.forEach((person, index) => el.inviteWho.append(personRow(person, index + 1)));
+  if (res.notes) { el.notesLeft.textContent = res.notes.exhaustedByLinkedIn ? "none left" : `${res.notes.left}/${res.notes.cap}`; el.notesChip.hidden = false; } else el.notesChip.hidden = true;
+  const seconds = (res.pacing?.minDelaySec ?? 45) + (res.pacing?.maxDelaySec ?? 120);
+  const minutes = Math.max(1, Math.round((people.length * seconds) / 2 / 60));
+  el.inviteNote.textContent = people.length ? `${people.length} ready now · about ${minutes} min at the configured human pace.` : held.length ? "Queued invitations are waiting on a note choice or credits." : "";
+  const empty = people.length === 0; el.inviteStart.dataset.empty = empty ? "1" : "0"; el.inviteDry.dataset.empty = empty ? "1" : "0";
+  el.inviteStart.textContent = empty ? "Nothing ready to send" : `Send ${people.length} ${people.length === 1 ? "connection" : "connections"}`;
+  setRunning(activeLane);
+}
 
-  const people = res.people || [];
-  const held = res.held || [];
-  const enrichmentsQueued = res.enrichmentsQueued || 0;
-  el.who.innerHTML = "";
-  const totalCount = people.length + held.length + enrichmentsQueued;
-  el.whoCount.textContent = totalCount ? `· ${totalCount}` : "";
-
-  if (res.notes) {
-    $("notesLeft").textContent = res.notes.exhaustedByLinkedIn
-      ? "none left today"
-      : `${res.notes.left} of ${res.notes.cap} left`;
-    notesChip.hidden = false;
-  } else {
-    notesChip.hidden = true;
+async function loadEnrichment() {
+  const res = await window.ft.peekEnrichment();
+  if (!res.ok) {
+    emptyRow(el.enrichWho, res.error); el.enrichCount.textContent = "—"; el.enrichNote.textContent = "";
+    el.enrichStart.dataset.empty = "1"; setRunning(activeLane); return;
   }
+  const people = res.people || [], daily = res.daily || { used: 0, cap: 0, remaining: 0 };
+  el.enrichUsed.textContent = String(daily.used); el.enrichCap.textContent = String(daily.cap); progress(el.enrichBar, daily.used, daily.cap);
+  el.enrichCount.textContent = String(res.queued ?? people.length); el.enrichWho.innerHTML = "";
+  if (!people.length) emptyRow(el.enrichWho, "Nothing queued. Add a Profile enrichment step in a campaign or select leads in the web app.");
+  else people.forEach((person, index) => el.enrichWho.append(personRow(person, index + 1, true)));
+  el.enrichNote.textContent = people.length ? `Up to ${Math.min(30, people.length, daily.remaining)} will run in this batch. Only 1st-degree contact info is read.` : "";
+  const empty = !people.length || daily.remaining <= 0; el.enrichStart.dataset.empty = empty ? "1" : "0";
+  el.enrichStart.textContent = daily.remaining <= 0 ? "Daily lookup limit reached" : empty ? "Nothing ready to look up" : `Look up ${Math.min(30, people.length, daily.remaining)} profiles`;
+  setRunning(activeLane);
+}
 
-  if (!people.length && !held.length && !enrichmentsQueued) {
-    const li = document.createElement("li");
-    li.className = "empty";
-    li.textContent =
-      "Nothing queued. Pick people in Followthroo → Leads and press “Connect on LinkedIn”.";
-    el.who.appendChild(li);
-    el.whoNote.textContent = "";
-    el.start.disabled = true;
-    el.start.textContent = "Nothing to send";
-    return;
-  }
+async function loadQueues() { await Promise.all([loadInvites(), loadEnrichment()]); }
+async function refreshAuth() { const { signedIn } = await window.ft.authStatus(); el.signin.classList.toggle("show", !signedIn); return signedIn; }
 
-  if (!people.length && !held.length && enrichmentsQueued > 0) {
-    const li = document.createElement("li");
-    li.className = "empty";
-    li.textContent = `${enrichmentsQueued} contact info ${enrichmentsQueued === 1 ? "lookup" : "lookups"} queued for the desktop app.`;
-    el.who.appendChild(li);
-  } else {
-    [...people, ...held].forEach((p, i) => el.who.appendChild(queueRow(p, i + 1)));
-    if (enrichmentsQueued > 0) {
-      const li = document.createElement("li");
-      li.className = "empty";
-      li.style.marginTop = "6px";
-      li.style.borderTop = "1px dashed var(--line)";
-      li.textContent = `Plus ${enrichmentsQueued} contact info ${enrichmentsQueued === 1 ? "lookup" : "lookups"} queued.`;
-      el.who.appendChild(li);
+async function switchView(showWeb) {
+  const res = await window.ft.togglePanel(showWeb);
+  document.body.classList.toggle("collapsed", res.collapsed);
+}
+el.collapse.addEventListener("click", () => switchView(true)); el.webSwitch.addEventListener("click", () => switchView(true)); el.reopen.addEventListener("click", () => switchView(false));
+
+el.signinBtn.addEventListener("click", async () => { el.signinBtn.disabled = true; el.signinBtn.textContent = "Opening browser..."; await window.ft.signIn(); setTimeout(() => { el.signinBtn.disabled = false; el.signinBtn.textContent = "Sign in"; }, 4000); });
+el.save.addEventListener("click", async () => { el.settingsErr.textContent = ""; const res = await window.ft.saveSettings({ apiBase: el.apiBase.value, token: el.token.value }); if (!res.ok) { el.settingsErr.textContent = res.error; return; } el.apiBase.value = res.settings.apiBase; log("Settings saved."); await loadQueues(); });
+
+async function begin(lane, dryRun = false) {
+  ended[lane] = false; el.settingsErr.textContent = ""; setRunning(lane);
+  const now = lane === "invite" ? el.inviteNow : el.enrichNow;
+  now.textContent = dryRun ? "Test run — no invitation will be sent." : "Starting Chrome...";
+  log(dryRun ? "Test run started — nothing will be sent." : "Run started.", null, lane);
+  const res = await window.ft.start({ mode: lane, dryRun });
+  if (!res.ok) { setRunning(null); now.textContent = res.error; el.dot.className = "dot err"; log(res.error, "failed", lane); }
+}
+el.inviteStart.addEventListener("click", () => begin("invite")); el.inviteDry.addEventListener("click", () => begin("invite", true)); el.enrichStart.addEventListener("click", () => begin("enrich"));
+async function stop(lane) { const button = lane === "invite" ? el.inviteStop : el.enrichStop; const now = lane === "invite" ? el.inviteNow : el.enrichNow; button.disabled = true; now.textContent = "Stopping after this profile..."; await window.ft.stop(); button.disabled = false; }
+el.inviteStop.addEventListener("click", () => stop("invite")); el.enrichStop.addEventListener("click", () => stop("enrich"));
+el.reload.addEventListener("click", async () => { el.reload.disabled = true; await loadQueues(); setTimeout(() => (el.reload.disabled = false), 400); });
+
+window.ft.onEvent((event) => {
+  const lane = event.lane || activeLane || "invite";
+  const now = lane === "invite" ? el.inviteNow : el.enrichNow;
+  switch (event.type) {
+    case "status": now.textContent = event.message; break;
+    case "needs-signin": now.textContent = event.message; log(event.message, null, lane); break;
+    case "action-start": now.textContent = `Opening ${event.who}...`; break;
+    case "action-done": if (event.sent !== undefined) { el.sent.textContent = String(event.sent); progress(el.inviteBar, event.sent, inviteCap); } log(`${event.who} — ${event.result}`, event.status, lane); break;
+    case "waiting": if (event.sent !== undefined) { el.sent.textContent = String(event.sent); progress(el.inviteBar, event.sent, inviteCap); } break;
+    case "tick": now.textContent = `Waiting ${event.remaining}s before the next invitation.`; break;
+    case "enrich-start": now.textContent = `Looking up ${event.who}...`; break;
+    case "enrich-done": now.textContent = event.result || `${event.who} complete.`; log(`${event.who} — ${event.result}`, event.status, lane); break;
+    case "fatal": now.textContent = event.message; el.dot.className = "dot err"; ended[lane] = true; log(event.message, "failed", lane); break;
+    case "done": {
+      const parts = lane === "invite" ? [`${event.sent || 0} sent`, `${event.failed || 0} failed`, `${event.skipped || 0} skipped`] : [`${event.done || 0} found`, `${event.failed || 0} failed`, `${event.skipped || 0} skipped`];
+      log(`Finished — ${parts.join(", ")}.`, event.sent || event.done ? "sent" : null, lane);
+      if (event.stoppedBecause) { now.textContent = event.stoppedBecause; ended[lane] = true; }
+      break;
     }
+    case "paired": log("Paired with your Followthroo account."); load(); break;
+    case "signed-in": log("Signed in."); refreshAuth(); load(); break;
+    case "signin-failed": el.dot.className = "dot err"; log(event.message, "failed"); break;
+    case "idle": if (!ended[lane]) now.textContent = "Done."; ended[lane] = false; setRunning(null); loadQueues(); break;
   }
-
-  const mins = Math.round((people.length * ((res.pacing?.minDelaySec ?? 45) + (res.pacing?.maxDelaySec ?? 120))) / 2 / 60);
-  const pace = people.length > 0
-    ? (res.autoSend
-      ? `About ${mins} minute${mins === 1 ? "" : "s"}, paced ${res.pacing?.minDelaySec ?? 45}–${res.pacing?.maxDelaySec ?? 120} seconds apart.`
-      : "Automatic sending is off in Followthroo, so a run will refuse to start.")
-    : "Runs in your browser to check contact details on LinkedIn.";
-  const notes = !res.notes || !people.length
-    ? ""
-    : res.notes.exhaustedByLinkedIn
-      ? " LinkedIn says today's notes are used up — invitations marked for a note wait for tomorrow."
-      : ` ${res.notes.left} ${res.notes.left === 1 ? "note" : "notes"} left today — invitations marked for a note wait for tomorrow once they're gone.`;
-  const credits = held.some((p) => p.hold === "no_credits")
-    ? " Your workspace is out of credits for today — the rest wait for midnight or a top-up."
-    : "";
-  el.whoNote.textContent = pace + notes + credits;
-
-  const canRun = people.length > 0 || enrichmentsQueued > 0;
-  el.start.disabled = !canRun;
-
-  if (people.length > 0 && enrichmentsQueued > 0) {
-    el.start.textContent = `Start run (${people.length} ${people.length === 1 ? "invite" : "invites"}, ${enrichmentsQueued} ${enrichmentsQueued === 1 ? "lookup" : "lookups"})`;
-  } else if (enrichmentsQueued > 0) {
-    el.start.textContent = `Look up ${enrichmentsQueued} ${enrichmentsQueued === 1 ? "lead" : "leads"}`;
-  } else if (people.length > 0) {
-    el.start.textContent = `Send ${people.length} ${people.length === 1 ? "invitation" : "invitations"}`;
-  } else {
-    el.start.textContent = "Nothing to send yet";
-  }
-}
-
-/**
- * Sign-in state drives what the panel offers.
- *
- * Signed in, the token arrives by itself and Settings is a fallback nobody needs
- * to open. Signed out, asking someone to paste a pairing token they cannot reach
- * is a dead end, so the only thing offered is the way out of it.
- */
-async function refreshAuth() {
-  const { signedIn } = await window.ft.authStatus();
-  el.signin.style.display = signedIn ? "none" : "block";
-  return signedIn;
-}
-
-el.signinBtn.addEventListener("click", async () => {
-  el.signinBtn.disabled = true;
-  el.signinBtn.textContent = "Opening your browser…";
-  await window.ft.signIn();
-  setTimeout(() => {
-    el.signinBtn.disabled = false;
-    el.signinBtn.textContent = "Sign in";
-  }, 4000);
 });
 
-let collapsed = false;
-async function setCollapsed(next) {
-  const res = await window.ft.togglePanel(next);
-  collapsed = res.collapsed;
-  // The body class is what leaves a strip behind rather than nothing at all —
-  // the reopen button is the only thing still rendered, and it is the only way
-  // back.
-  document.body.classList.toggle("collapsed", collapsed);
-  el.collapse.textContent = collapsed ? "Show this panel" : "Hide this panel";
-}
-el.collapse.addEventListener("click", () => setCollapsed(!collapsed));
-document.getElementById("reopen").addEventListener("click", () => setCollapsed(false));
+window.ft.onUpdate((event) => {
+  if (event.type === "available" || event.type === "downloading" || event.type === "ready") el.update.classList.add("show"); else el.update.classList.remove("show");
+  if (event.type === "available") el.updateText.textContent = `Downloading v${event.version}...`;
+  if (event.type === "downloading") el.updateText.textContent = `Downloading update — ${event.percent}%`;
+  if (event.type === "ready") { el.updateText.textContent = `v${event.version} is ready.`; el.updateBtn.hidden = false; }
+});
+el.updateBtn.addEventListener("click", async () => { el.updateBtn.disabled = true; const res = await window.ft.installUpdate(); if (!res.ok) { el.updateBtn.disabled = false; el.updateText.textContent = res.error; } });
 
 async function load() {
-  const s = await window.ft.getSettings();
-  if (s.version) {
-    const v = $("version");
-    if (v) v.textContent = `v${s.version}`;
-  }
-  cap = s.maxPerDay;
-  el.cap.textContent = String(cap);
-  el.apiBase.value = s.apiBase;
-  el.token.value = s.token;
-  setProgress(s.sentToday);
-  setRunning(s.running);
-  // A first run has nothing to send with — open the one place that fixes it
-  // rather than letting Start fail with a message about settings.
-  if (!s.token) {
-    el.settings.open = true;
-    el.now.textContent = "Paste your pairing token to get started.";
-  }
-  refreshAuth();
-  loadQueue();
+  const settings = await window.ft.getSettings();
+  if (settings.version) el.version.textContent = `v${settings.version}`;
+  inviteCap = settings.maxPerDay; el.cap.textContent = String(inviteCap); el.sent.textContent = String(settings.sentToday); progress(el.inviteBar, settings.sentToday, inviteCap);
+  el.apiBase.value = settings.apiBase; el.token.value = settings.token; setRunning(settings.running ? settings.runningMode || "invite" : null);
+  if (!settings.token) { el.settings.open = true; el.inviteNow.textContent = "Sign in or paste a pairing token to begin."; }
+  await refreshAuth(); await loadQueues();
 }
-
-el.save.addEventListener("click", async () => {
-  el.settingsErr.textContent = "";
-  const res = await window.ft.saveSettings({ apiBase: el.apiBase.value, token: el.token.value });
-  if (!res.ok) { el.settingsErr.textContent = res.error; return; }
-  el.apiBase.value = res.settings.apiBase;
-  el.now.textContent = "Saved. Press Start when you're ready.";
-  log("Settings saved.");
-  loadQueue();
-});
-
-async function begin(dryRun) {
-  ended = false;
-  el.settingsErr.textContent = "";
-  setRunning(true);
-  el.now.textContent = dryRun ? "Test run — nothing will actually be sent." : "Starting…";
-  log(dryRun ? "Test run started — nothing will be sent." : "Run started.");
-  const res = await window.ft.start({ dryRun });
-  if (!res.ok) {
-    setRunning(false);
-    el.now.textContent = res.error;
-    el.dot.className = "dot err";
-    log(res.error, "failed");
-  }
-}
-
-el.reload.addEventListener("click", async () => {
-  el.reload.disabled = true;
-  await loadQueue();
-  // Long enough to read as a response rather than nothing happening.
-  setTimeout(() => (el.reload.disabled = false), 400);
-});
-
-el.start.addEventListener("click", () => begin(false));
-el.dry.addEventListener("click", () => begin(true));
-el.stop.addEventListener("click", async () => {
-  el.stop.disabled = true;
-  el.now.textContent = "Stopping after this one…";
-  await window.ft.stop();
-  el.stop.disabled = false;
-});
-
-window.ft.onEvent((evt) => {
-  switch (evt.type) {
-    case "status":
-      el.now.textContent = evt.message;
-      break;
-    case "needs-signin":
-      // Not a failure — the run is waiting on a person, and will carry on by
-      // itself once they are through. A red dot here would say "broken" about
-      // the one moment that needs them to act.
-      el.now.textContent = evt.message;
-      log(evt.message);
-      break;
-    case "action-start":
-      el.now.textContent = `Opening ${evt.who}…`;
-      break;
-    case "action-done":
-      setProgress(evt.sent);
-      log(`${evt.who} — ${evt.result}`, evt.status);
-      break;
-    case "waiting":
-      setProgress(evt.sent);
-      break;
-    case "tick":
-      el.now.textContent = `Waiting ${evt.remaining}s before the next one — this pause is what keeps the account safe.`;
-      break;
-    case "fatal":
-      el.now.textContent = evt.message;
-      el.dot.className = "dot err";
-      log(evt.message, "failed");
-      ended = true;
-      break;
-    case "done": {
-      const parts = [`${evt.sent} sent`];
-      if (evt.failed) parts.push(`${evt.failed} failed`);
-      if (evt.skipped) parts.push(`${evt.skipped} skipped`);
-      log(`Finished — ${parts.join(", ")}.`, evt.sent ? "sent" : undefined);
-      // Where to find the record of what happened, for when it did not work.
-      if (evt.logFile) log(`Details saved to ${evt.logFile}`);
-      // The run's own account of why it ended is the authoritative one. Keep it.
-      if (evt.stoppedBecause) {
-        el.now.textContent = evt.stoppedBecause;
-        ended = true;
-      }
-      break;
-    }
-    case "paired":
-      // The token arrived from the signed-in session; nobody had to paste it.
-      load();
-      log("Paired with your Followthroo account.");
-      break;
-    case "signed-in":
-      refreshAuth();
-      load();
-      log("Signed in.");
-      break;
-    case "signin-failed":
-      el.now.textContent = evt.message;
-      el.dot.className = "dot err";
-      log(evt.message, "failed");
-      break;
-    case "idle":
-      setRunning(false);
-      el.warn.classList.remove("show");
-      // Only overwrite a neutral message. A run that ended on a reason — a
-      // limit, a rejected token, a wall — must keep saying so; replacing that
-      // with "Done" is how someone concludes it worked.
-      if (!ended) el.now.textContent = "Done.";
-      ended = false;
-      // The queue moved — whatever went out is no longer waiting.
-      loadQueue();
-      break;
-  }
-});
-
-/**
- * A build found in the background. Nothing here can interrupt a run — main.js
- * never checks while one is in progress, and refuses to install while one
- * starts after a check already found something — so this only ever has to
- * represent "found it", "here's how far", and "ready when you are".
- */
-window.ft.onUpdate((evt) => {
-  switch (evt.type) {
-    case "available":
-      el.update.classList.add("show");
-      el.updateText.textContent = `Downloading v${evt.version}…`;
-      el.updateBtn.style.display = "none";
-      break;
-    case "downloading":
-      el.update.classList.add("show");
-      el.updateText.textContent = `Downloading the update — ${evt.percent}%`;
-      break;
-    case "ready":
-      el.update.classList.add("show");
-      el.updateText.textContent = `v${evt.version} is ready.`;
-      el.updateBtn.style.display = "";
-      break;
-    case "none":
-    case "error":
-      // Nothing to say about a check that found nothing, or one that failed —
-      // it tries again on its own next time, and a message here would read as
-      // something the person is meant to act on.
-      el.update.classList.remove("show");
-      break;
-  }
-});
-
-el.updateBtn.addEventListener("click", async () => {
-  el.updateBtn.disabled = true;
-  el.updateBtn.textContent = "Restarting…";
-  const res = await window.ft.installUpdate();
-  if (!res.ok) {
-    el.updateBtn.disabled = false;
-    el.updateBtn.textContent = "Restart to update";
-    el.updateText.textContent = res.error;
-  }
-  // On success the app quits and relaunches on its own — nothing left to do here.
-});
 
 load();

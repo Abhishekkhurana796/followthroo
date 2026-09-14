@@ -33,6 +33,17 @@ export interface ChangelogEntry {
 export const CHANGELOG: ChangelogEntry[] = [
   {
     product: "desktop",
+    version: "1.15.0",
+    date: "Sep 2026",
+    items: [
+      "Fixed the desktop run failing with an unhelpful fetch failed error after profile enrichment was added; requests now identify the operation and network cause, with retries limited by whether replay is safe",
+      "Connection invitations and Profile enrichment are now independent lanes with separate queues and Start buttons, so one can never claim or fail the other",
+      "The narrow side panel is now a full-page Automation workspace. The hosted web app remains available as-is, with Web app, Hide this panel, and the left-arrow rail switching between them",
+      "Profile enrichment now tries deterministic selectors, LinkedIn's direct Contact info route, and a guarded AI fallback that can only open the profile owner's Contact info control",
+    ],
+  },
+  {
+    product: "desktop",
     version: "1.14.1",
     date: "Sep 2026",
     items: [

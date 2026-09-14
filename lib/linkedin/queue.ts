@@ -336,16 +336,13 @@ type Candidate = Awaited<ReturnType<typeof selectClaimable>>["picked"][number];
  * happens.
  */
 export async function peekActions(account: ClaimAccount, limit: number, opts: { wholeQueue?: boolean } = {}) {
-  const [{ picked, held, notes, credits }, waitingForPick, enrichmentsQueued] = await Promise.all([
+  const [{ picked, held, notes, credits }, waitingForPick] = await Promise.all([
     selectClaimable(account, limit, opts),
     prisma.linkedInAction.findMany({
       where: { organizationId: account.organizationId, status: "pending", noteChoice: "undecided" },
       orderBy: { createdAt: "asc" },
       take: 50,
       include: { lead: { select: LEAD_FOR_ACTION } },
-    }),
-    prisma.linkedInEnrichment.count({
-      where: { organizationId: account.organizationId, status: "pending" },
     }),
   ]);
   const shape = (a: Candidate, hold: HoldReason | null) => ({
@@ -371,7 +368,6 @@ export async function peekActions(account: ClaimAccount, limit: number, opts: { 
     notes: { cap: notes.cap, left: notes.left, exhaustedByLinkedIn: notes.exhaustedByLinkedIn },
     /** Null while billing isn't enforced. */
     credits: credits ? { available: credits.total } : null,
-    enrichmentsQueued,
   };
 }
 

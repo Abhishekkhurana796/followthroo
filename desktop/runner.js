@@ -23,8 +23,8 @@ const { chromium } = require("playwright-core");
 const { fillLinkedInAction, readRecentConnections } = require("./page-actions");
 const { pilotAction } = require("./pilot");
 const { sendConnectionRequest } = require("./connect-flow");
-const { runEnrichmentLane } = require("./enrich-flow");
 const { CODES } = require("./outcome-codes");
+const { requestJson } = require("./api-client");
 
 /**
  * The daily ceiling, enforced here as well as on the server.
@@ -108,11 +108,11 @@ function bannerInitScript() {
  * Element labels and the note are in here. Both are already visible to whoever
  * is running it, and the file stays on their machine.
  */
-function makeLog(userDataPath) {
+function makeLog(userDataPath, lane = "invite") {
   const dir = path.join(userDataPath, "logs");
   const file = path.join(
     dir,
-    `run-${new Date().toISOString().replace(/[:.]/g, "-")}.jsonl`,
+    `${lane}-run-${new Date().toISOString().replace(/[:.]/g, "-")}.jsonl`,
   );
   let broken = false;
   return {
@@ -134,28 +134,8 @@ function makeLog(userDataPath) {
 }
 
 /** Small fetch wrapper that never throws a bare network error at the caller. */
-async function api(apiBase, pathname, { method = "GET", token, body } = {}) {
-  const res = await fetch(`${apiBase}${pathname}`, {
-    method,
-    headers: {
-      Authorization: `Bearer ${token}`,
-      // Identifies this as the desktop app. The queue hands actions to nothing
-      // else, so an old Chrome extension still polling with the same token gets
-      // an empty list instead of racing us for the same person.
-      "X-Followthroo-Client": "desktop",
-      ...(body ? { "Content-Type": "application/json" } : {}),
-    },
-    body: body ? JSON.stringify(body) : undefined,
-  });
-  const json = await res.json().catch(() => ({}));
-  if (res.status === 401)
-    throw new Error(
-      "Your pairing token was rejected. Copy a fresh one from Followthroo → LinkedIn.",
-    );
-  if (!res.ok || json.ok === false) {
-    throw new Error(json.error || `Server returned ${res.status}`);
-  }
-  return json.data;
+async function api(apiBase, pathname, { method = "GET", token, body, operation, retry } = {}) {
+  return requestJson(apiBase, pathname, { method, token, body, operation, retry });
 }
 
 /**
@@ -282,6 +262,7 @@ async function runBatch({
   onNoteUsed = () => {},
   limit = MAX_PER_DAY,
   dryRun = false,
+  version = null,
   onEvent = () => {},
   shouldStop = () => false,
   /**
@@ -300,16 +281,6 @@ async function runBatch({
   connectionsCheckDue = () => false,
   /** Called once the connections list has been read and reported. */
   onConnectionsChecked = () => {},
-  /**
-   * How many Contact-info lookups the enrichment lane may run once the
-   * invite lane above stops on its own (empty queue, cap reached, or the
-   * ordinary "ran out of consecutive room" failures) — never after a fatal
-   * stop (login wall, LinkedIn's own limit), which ends the whole run.
-   * 0 (the default) skips the lane entirely, which is what every existing
-   * caller — including scripts/verify-desktop-runner.ts — gets unless it
-   * opts in.
-   */
-  enrichCap = 0,
 }) {
   const summary = {
     sent: 0,
@@ -321,8 +292,8 @@ async function runBatch({
   const emit = (type, payload = {}) => onEvent({ type, ...payload });
 
   const cap = Math.max(0, Math.min(limit, MAX_PER_DAY));
-  const log = makeLog(userDataPath);
-  log.write({ event: "run-start", cap, dryRun, apiBase });
+  const log = makeLog(userDataPath, "invite");
+  log.write({ event: "run-start", lane: "invite", version, cap, dryRun, apiBase });
 
   /**
    * A ceiling on tries, not just on sends.
@@ -387,7 +358,11 @@ async function runBatch({
     // LinkedInAccount rows. No secrets: config returns names and caps, never
     // the token, cookies or li_at.
     try {
-      const cfg = await api(apiBase, "/api/linkedin/config", { token });
+      const cfg = await api(apiBase, "/api/linkedin/config", {
+        token,
+        operation: "Read LinkedIn account settings",
+        retry: "read",
+      });
       log.write({
         event: "run-account",
         liMemberName: cfg.liMemberName,
@@ -419,6 +394,7 @@ async function runBatch({
             method: "POST",
             token,
             body: { profileUrls },
+            operation: "Report accepted invitations",
           });
           matched = (res && res.matched) || 0;
         }
@@ -433,24 +409,16 @@ async function runBatch({
     }
 
     let consecutiveFailures = 0;
-    // Whether it's safe to move on to the enrichment lane once this loop ends
-    // — true unless something suggested the browser, the account, or the
-    // person running it wants everything to stop, not just this lane. See
-    // the enrichment-lane call right after this loop for what reads it.
-    let inviteLaneHealthy = true;
-
     while (progress() < cap) {
       if (shouldStop()) {
         summary.stoppedBecause = "You stopped the run.";
         emit("status", { message: summary.stoppedBecause });
-        inviteLaneHealthy = false;
         break;
       }
 
       if (summary.attempted >= maxAttempts) {
         summary.stoppedBecause = `Stopped after ${maxAttempts} attempts with only ${summary.sent} sent — the queue keeps returning people who cannot be invited.`;
         emit("fatal", { message: summary.stoppedBecause });
-        inviteLaneHealthy = false;
         break;
       }
 
@@ -458,11 +426,14 @@ async function runBatch({
 
       let data;
       try {
-        data = await api(apiBase, "/api/linkedin/queue?limit=1", { token });
+        data = await api(apiBase, "/api/linkedin/queue?limit=1", {
+          token,
+          operation: "Claim the next invitation",
+          retry: "claim-connect",
+        });
       } catch (e) {
         summary.stoppedBecause = String((e && e.message) || e);
         emit("fatal", { message: summary.stoppedBecause });
-        inviteLaneHealthy = false;
         break;
       }
 
@@ -487,11 +458,6 @@ async function runBatch({
           'Automatic sending is off. Turn on "Send invites automatically" in Followthroo → LinkedIn, then press Start.';
         log.write({ event: "gate", code: CODES.AUTOMATIC_SENDING_DISABLED, message: summary.stoppedBecause });
         emit("fatal", { code: CODES.AUTOMATIC_SENDING_DISABLED, message: summary.stoppedBecause });
-        // Conservative on purpose: a workspace that hasn't turned on automatic
-        // sending for invites might still want enrichment to run on its own,
-        // but that is a product decision left for whoever picks this up next
-        // (see docs/enrichment.md) rather than assumed here.
-        inviteLaneHealthy = false;
         break;
       }
 
@@ -623,6 +589,7 @@ async function runBatch({
         await api(apiBase, "/api/linkedin/queue", {
           method: "POST",
           token,
+          operation: "Report invitation outcome",
           body: {
             actionId: action.id,
             status: outcome.status,
@@ -666,7 +633,6 @@ async function runBatch({
       if (outcome.fatal) {
         summary.stoppedBecause = outcome.result;
         emit("fatal", { message: outcome.result });
-        inviteLaneHealthy = false;
         break;
       }
 
@@ -675,7 +641,6 @@ async function runBatch({
       if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
         summary.stoppedBecause = `Stopped after ${MAX_CONSECUTIVE_FAILURES} failures in a row — something has changed on LinkedIn, or this account is being throttled.`;
         emit("fatal", { message: summary.stoppedBecause });
-        inviteLaneHealthy = false;
         break;
       }
 
@@ -708,25 +673,6 @@ async function runBatch({
       }
     }
 
-    // The enrichment lane, once invites are out of the way — only when the
-    // invite lane stopped because it ran out of capacity (empty queue, cap
-    // reached), never because something told it to stop outright. Skipped
-    // entirely for a dry run and enrichCap 0, the default for every caller
-    // that hasn't opted in (including scripts/verify-desktop-runner.ts).
-    if (!dryRun && inviteLaneHealthy && enrichCap > 0 && !shouldStop()) {
-      emit("status", { message: "Looking up contact info…" });
-      const enrichSummary = await runEnrichmentLane({
-        page,
-        apiBase,
-        token,
-        cap: enrichCap,
-        log,
-        onEvent,
-        shouldStop,
-      });
-      summary.enrich = enrichSummary;
-      log.write({ event: "enrich-lane-end", ...enrichSummary });
-    }
   } finally {
     await context.close().catch(() => {});
   }
@@ -743,4 +689,6 @@ module.exports = {
   profileDir,
   openBrowser,
   waitForSignIn,
+  bannerInitScript,
+  makeLog,
 };

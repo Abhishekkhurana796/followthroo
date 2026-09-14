@@ -556,6 +556,17 @@ function observe() {
 function act({ decision, expectedName, forbiddenSource, goal, autoSend }) {
   const FORBIDDEN_RE = new RegExp(forbiddenSource, "i");
 
+  // Contact lookup is deliberately a one-click, read-only pilot. It may only
+  // open the profile owner's Contact info control from the numbered element
+  // list. Coordinates and typing are never necessary for this job and create
+  // far too much room for an assistant to touch an adjacent outreach control.
+  if (goal === "enrich") {
+    if (decision.action !== "click") return { ok: false, error: "refused: contact lookup only permits a click" };
+    if (decision.x !== undefined || decision.y !== undefined) {
+      return { ok: false, error: "refused: contact lookup does not permit coordinate clicks" };
+    }
+  }
+
   const querySelectorAllDeep = (selector, root = document) => {
     const results = [];
     const queue = [root];
@@ -899,6 +910,16 @@ function act({ decision, expectedName, forbiddenSource, goal, autoSend }) {
     return { ok: false, error: `refused: "${label}" is on somebody else's card, not this profile's` };
   }
   const href = el.getAttribute("href") || closestDeep(el, "a")?.getAttribute("href") || "";
+  if (goal === "enrich") {
+    const ownsProfile = !!closestDeep(el, '[data-ft-top="1"]');
+    const isContactInfo = /contact info/i.test(label) || /overlay\/contact-info/i.test(href);
+    if (!ownsProfile) {
+      return { ok: false, error: `refused: "${label}" is not in this profile's top card` };
+    }
+    if (!isContactInfo) {
+      return { ok: false, error: `refused: "${label}" is not the Contact info control` };
+    }
+  }
   if (href.includes("/feed/update/") || href.includes("/posts/") || href.includes("/recent-activity/")) {
     return { ok: false, error: `refused: "${label}" is an activity post link` };
   }
