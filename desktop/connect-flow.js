@@ -152,7 +152,16 @@ async function sendConnectionRequest({ page, action, onStep = () => {}, useNote 
 
   // 3. Facts the page states outright.
   if (seen.limitWall) return fail(CODES.LINKEDIN_LIMIT_REACHED, seen.limitWall, { fatal: "limit" });
-  if (seen.firstDegree) return skip(CODES.ALREADY_CONNECTED, "already connected — no invitation to send");
+  // A connection's own card never offers Connect, so a Connect that belongs to
+  // this profile outranks any degree text. Degree text alone once skipped every
+  // campaign invitation to 2nd-degree people who had a mutual connection.
+  const ownConnect = seen.elements.some((e) => CONNECT_RE.test(e.label.trim()) && !e.inAside && e.ownStrong);
+  if (seen.firstDegree && !ownConnect) {
+    return skip(
+      CODES.ALREADY_CONNECTED,
+      `already connected — no invitation to send (${(seen.connectionDegree && seen.connectionDegree.evidence) || "1st-degree"})`,
+    );
+  }
   if (seen.pending) return skip(CODES.INVITATION_PENDING, "an invitation to this person is already pending");
 
   // 4. Resolve Connect from attribution, never from a bare text search.

@@ -32,6 +32,15 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    product: "desktop",
+    version: "1.16.2",
+    date: "Sep 2026",
+    items: [
+      "Campaign invitations to 2nd-degree people who share a mutual connection were being skipped as \"already connected\" — the app read the mutual connection's own 1st-degree tag as the profile's. The degree now comes only from the badge beside the person's name, and a profile showing its own Connect button is never treated as already connected",
+      "When an invitation is skipped as already connected, the Activity log now names the text on the page that decided it",
+    ],
+  },
+  {
     product: "webapp",
     version: "0.31.0",
     date: "Sep 2026",

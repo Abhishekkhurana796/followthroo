@@ -121,8 +121,17 @@ async function pilotAction({ page, action, apiBase, token, onStep = () => {}, us
 
   // Decided here rather than by the model: it is a fact on the page, and an
   // explicit invitation to an existing connection has nothing to do.
-  if (goal === "invite" && seen.firstDegree) {
-    return { status: "skipped", code: CODES.ALREADY_CONNECTED, result: "already connected — no invitation to send" };
+  // Same rule as connect-flow.js: a Connect on this profile's own card means
+  // not connected, whatever degree text was read.
+  const ownConnect = seen.elements.some(
+    (e) => /^(connect|invite)\b/i.test(String(e.label || "").trim()) && !e.inAside && e.ownStrong,
+  );
+  if (goal === "invite" && seen.firstDegree && !ownConnect) {
+    return {
+      status: "skipped",
+      code: CODES.ALREADY_CONNECTED,
+      result: `already connected — no invitation to send (${(seen.connectionDegree && seen.connectionDegree.evidence) || "1st-degree"})`,
+    };
   }
 
   // Somebody already invited them and it has not been accepted yet. Sending a

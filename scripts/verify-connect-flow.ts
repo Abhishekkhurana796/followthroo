@@ -100,6 +100,38 @@ async function main() {
       await ctx.close();
     }
 
+    console.log("\nCASE 1c — a mutual connection's \"1st\" in the header is not this profile's degree");
+    {
+      // The live campaign failure (Sumeet Joon, Hitesh Sahota): a 2nd-degree
+      // profile whose header also says "Surabhi is a mutual connection". The
+      // short "1st" belonging to Surabhi beat LinkedIn's longer "2nd degree
+      // connection" beside the name, and the invitation was skipped as
+      // "already connected" while the profile's own Connect sat right there.
+      const ctx = await ctxFor(DRIVER);
+      const page = await ctx.newPage();
+      await page.goto(RIGHT);
+      await page.evaluate(() => {
+        const badge = document.querySelector(".dist-value");
+        if (badge) badge.textContent = "2nd degree connection";
+        const mutual = document.createElement("div");
+        mutual.innerHTML =
+          '<p>Enterprise Sales || SaaS Sales</p><p>Delhi, India</p>' +
+          '<a href="https://www.linkedin.com/in/surabhi-mutual"><img alt="" width="16" height="16"><span>1st</span></a>' +
+          "<span>Surabhi is a mutual connection</span>";
+        document.querySelector("main h1")?.parentElement?.appendChild(mutual);
+      });
+      const seen = await page.evaluate(observe);
+      ok(
+        seen.connectionDegree.degree === "2nd",
+        `the degree is read beside the name, not from the mutual connection (${seen.connectionDegree.degree} — ${seen.connectionDegree.evidence})`,
+      );
+      const out = await run(page, { note: null });
+      ok(out.status === "sent", `the invitation is sent, not skipped as already connected (${out.status} / ${out.code} — ${out.result})`);
+      const invited = await page.evaluate(() => (window as Win).__invited ?? null);
+      ok(invited === "right", `to the profile owner (${invited})`);
+      await ctx.close();
+    }
+
     console.log("\nCASE 2 — two Connects, one attributed: the owner's is chosen");
     {
       const ctx = await ctxFor(DEEP);

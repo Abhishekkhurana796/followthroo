@@ -362,19 +362,60 @@ function observe() {
       if (/\b3rd\b|3rd[- ]degree|third[- ]degree/i.test(value)) return "3rd";
       return null;
     };
-    // LinkedIn now often uses a bare "1st" span beside pronouns in the profile
-    // header. It has neither the old badge class nor an aria label, so inspect
-    // that text within the established top card only.
+    // Degree text is only this person's when it sits on the name's own line.
+    //
+    // The version this replaces took the SHORTEST degree text anywhere in the
+    // header and checked "1st" first. A header also carries other people's
+    // degrees — "Surabhi is a mutual connection", with Surabhi's own "1st"
+    // attached — and a bare "1st" is shorter than LinkedIn's "2nd degree
+    // connection". So a 2nd-degree profile read as 1st, and every campaign
+    // invitation to someone with a mutual connection was skipped as "already
+    // connected". Now: nearest to the name wins; text inside a link to a
+    // different profile, a recommendation, or a container naming two
+    // different degrees is never evidence; and a "1st" found anywhere other
+    // than beside the name is not trusted (Remove Connection still is).
+    const ownSlug = decodeURIComponent((location.pathname.match(/\/in\/([^/?#]+)/) || [])[1] || "").toLowerCase();
+    const aboutSomeoneElse = (el) => {
+      if (recommendation(el)) return true;
+      const link = closestDeep(el, 'a[href*="/in/"]');
+      const slug = link ? decodeURIComponent(((link.getAttribute("href") || "").match(/\/in\/([^/?#]+)/) || [])[1] || "").toLowerCase() : "";
+      return !!(slug && ownSlug && slug !== ownSlug);
+    };
+    // Counted independently. degree() returns the first match only, so asking
+    // it would report "2nd … 1st" as one degree and let that container through.
+    const degreesIn = (value) =>
+      [/\b1st\b|1st[- ]degree|first[- ]degree/i, /\b2nd\b|2nd[- ]degree|second[- ]degree/i, /\b3rd\b|3rd[- ]degree|third[- ]degree/i]
+        .filter((re) => re.test(value)).length;
+    const nameBox = nameEl ? nameEl.getBoundingClientRect() : null;
+    const onNameLine = (el) => {
+      if (!nameBox) return false;
+      const r = el.getBoundingClientRect();
+      if (!r.width && !r.height) return false;
+      return r.bottom >= nameBox.top - 12 && r.top <= nameBox.bottom + 28 && r.left >= nameBox.left - 24;
+    };
+    const lineDistance = (el) => {
+      const r = el.getBoundingClientRect();
+      return Math.abs((r.top + r.bottom) / 2 - (nameBox.top + nameBox.bottom) / 2);
+    };
     const badges = querySelectorAllDeep(".dist-value, .distance-badge, .pv-member-badge, [aria-label*='degree' i], [data-test-id*='degree' i], span, p, div")
       .filter((el) => {
         if (closestDeep(el, "aside") || (root && !root.contains(el))) return false;
+        if (aboutSomeoneElse(el)) return false;
         const value = text(el);
-        return !!degree(value) && (value.length <= 160 || /degree/i.test(value));
+        if (!degree(value) || degreesIn(value) > 1) return false;
+        return value.length <= 160 || /degree/i.test(value);
       });
-    badges.sort((a, b) => text(a).length - text(b).length);
-    for (const badge of badges) {
+    const beside = badges.filter(onNameLine);
+    beside.sort((a, b) => lineDistance(a) - lineDistance(b) || text(a).length - text(b).length);
+    for (const badge of beside) {
       const found = degree(text(badge));
       if (found) return { degree: found, evidence: `profile header badge: ${text(badge).slice(0, 80)}` };
+    }
+    const elsewhere = badges.filter((el) => !onNameLine(el));
+    elsewhere.sort((a, b) => text(a).length - text(b).length);
+    for (const badge of elsewhere) {
+      const found = degree(text(badge));
+      if (found && found !== "1st") return { degree: found, evidence: `profile header text: ${text(badge).slice(0, 80)}` };
     }
     const remove = querySelectorAllDeep('button, a[role="button"], div[role="button"], [role="menuitem"]')
       .find((el) => !closestDeep(el, "aside") && !closestDeep(el, "[data-followthroo-overlay]") && /remove connection/i.test(text(el)));
