@@ -4,7 +4,19 @@ Sends queued LinkedIn invitations and looks up eligible profiles' Contact info
 from the customer's own computer, own IP, and logged-in LinkedIn session.
 
 **Last updated:** 2026-09-15
-**Status:** active — desktop 1.15.1
+**Status:** active — desktop 1.15.2
+
+## 1.15.2 lookup reliability changes
+
+- Current LinkedIn profile headers can show a bare **1st** beside pronouns
+  (for example, `She/Her  1st`) rather than the historical badge class. The
+  deterministic reader now treats that text inside the owner's profile card as
+  positive 1st-degree evidence; a badge on a recommendation remains ignored.
+- Profile enrichment now drives the profile, Contact info link, and fallback
+  route in the same persistent Playwright Chrome session used for invitations.
+- **Activity** logs every lookup decision in the desktop window and local
+  `enrich-run-*.jsonl` file: profile opened, exact degree evidence, Contact
+  info route, extraction result, and whether the result reached Followthroo.
 
 ## 1.15.1 reliability changes
 

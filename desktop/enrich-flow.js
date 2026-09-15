@@ -48,7 +48,12 @@ async function trustedClick(page, outcome) {
   return clicked;
 }
 
-async function readContactInfoWithFallback({ page, lookup, apiBase, token, log }) {
+async function readContactInfoWithFallback({ page, lookup, apiBase, token, log, onDebug = () => {} }) {
+  const who = lookup.leadName || lookup.linkedinUrl;
+  const debug = (message, extra = {}) => {
+    log.write({ event: "enrich-debug", who, message, ...extra });
+    onDebug({ who, message, ...extra });
+  };
   const identity = await page.evaluate(observe);
   const wantedSlug = new URL(lookup.linkedinUrl).pathname.match(/^\/in\/([^/]+)/)?.[1];
   const actualSlug = new URL(identity.url).pathname.match(/^\/in\/([^/]+)/)?.[1];
@@ -56,8 +61,35 @@ async function readContactInfoWithFallback({ page, lookup, apiBase, token, log }
     return { status: "failed", result: `landed on /in/${actualSlug} but this lookup is for /in/${wantedSlug} — not reading the wrong profile` };
   }
 
-  const first = await page.evaluate(readContactInfo);
-  if (first.status !== "failed" || !/Contact info (link|overlay)/i.test(first.result || "")) return first;
+  // `observe()` is the same ownership-aware reader used by invitations. If a
+  // just-shipped layout prevents it from finding the top card, the independent
+  // page-action reader gets one chance to supply *positive* header evidence.
+  // An observed 2nd/3rd degree is never overridden.
+  let degree = identity.connectionDegree || { degree: "unknown", evidence: "profile degree was not observed" };
+  if (degree.degree === "unknown") {
+    const header = await page.evaluate(readContactInfo, { eligibilityOnly: true });
+    if (header.status === "eligible") degree = header;
+    else if (header.evidence) degree = header;
+  }
+  if (degree.degree !== "1st") {
+    const result = degree.degree === "unknown"
+      ? "could not verify a 1st-degree connection safely; Contact info was not opened"
+      : `detected ${degree.degree}-degree connection; Contact info is only shown for 1st-degree connections`;
+    debug(result, { status: "skipped", degree: degree.degree, evidence: degree.evidence, reasonCode: degree.degree === "unknown" ? "degree_unverified" : "degree_not_first" });
+    return { status: "skipped", ...degree, reasonCode: degree.degree === "unknown" ? "degree_unverified" : "degree_not_first", result };
+  }
+  debug(`Verified 1st-degree connection (${degree.evidence}). Opening Contact info with Playwright.`, { degree: "1st", evidence: degree.evidence });
+
+  // Keep the lookup in the same persistent Playwright Chrome context as the
+  // invitation lane. The first click is deterministic and profile-scoped.
+  const first = await page.evaluate(readContactInfo, { confirmedFirstDegree: true });
+  if (first.status !== "failed" || !/Contact info (link|overlay)/i.test(first.result || "")) {
+    debug(first.status === "done"
+      ? `Contact info read — ${first.email ? "email" : "no email"}${first.phone ? " and phone" : ""} available.`
+      : first.result || "Contact lookup finished.", { status: first.status, degree: first.degree, evidence: first.evidence });
+    return first;
+  }
+  debug(`${first.result}; trying LinkedIn's Contact info overlay route.`, { status: "failed", degree: "1st" });
 
   // The deterministic pass already established 1st-degree status. Try the
   // documented overlay route next, even if LinkedIn moved the visible link.
@@ -67,10 +99,15 @@ async function readContactInfoWithFallback({ page, lookup, apiBase, token, log }
       await page.goto(overlayUrl, { waitUntil: "domcontentloaded" });
       await sleep(1200);
       const direct = await page.evaluate(readContactInfo, { confirmedFirstDegree: true, alreadyOpen: true });
-      if (direct.status !== "failed") return direct;
+      if (direct.status !== "failed") {
+        debug(direct.status === "done" ? "Contact info opened through the overlay route." : direct.result || "Overlay lookup finished.", { status: direct.status, degree: direct.degree, evidence: direct.evidence });
+        return direct;
+      }
       log.write({ event: "enrich-direct-overlay-missed", who: lookup.leadName || lookup.linkedinUrl, result: direct.result });
+      debug(`Overlay route did not work: ${direct.result}`, { status: "failed", degree: "1st" });
     } catch (error) {
       log.write({ event: "enrich-direct-overlay-failed", error: String((error && error.message) || error) });
+      debug(`Overlay route failed: ${String((error && error.message) || error)}`, { status: "failed", degree: "1st" });
     }
   }
 
@@ -80,7 +117,11 @@ async function readContactInfoWithFallback({ page, lookup, apiBase, token, log }
   await page.goto(lookup.linkedinUrl, { waitUntil: "domcontentloaded" });
   await sleep(1500);
   const eligibility = await page.evaluate(readContactInfo, { eligibilityOnly: true });
-  if (eligibility.status !== "eligible") return eligibility;
+  if (eligibility.status !== "eligible") {
+    debug(eligibility.evidence || "Degree could not be confirmed after returning to the profile.", { status: "skipped", degree: eligibility.degree });
+    return eligibility;
+  }
+  debug("Trying the guarded Contact info control fallback.", { degree: "1st", evidence: eligibility.evidence });
   const seen = await page.evaluate(observe);
   const screenshot = (await page.screenshot({ type: "jpeg", quality: 55, fullPage: false })).toString("base64");
   let decision;
@@ -118,10 +159,14 @@ async function readContactInfoWithFallback({ page, lookup, apiBase, token, log }
     autoSend: false,
   });
   if (!(await trustedClick(page, outcome))) {
-    return { status: "failed", result: outcome.error || "Contact info control could not be clicked safely" };
+    const result = outcome.error || "Contact info control could not be clicked safely";
+    debug(result, { status: "failed", degree: "1st" });
+    return { status: "failed", result };
   }
   await sleep(1200);
-  return page.evaluate(readContactInfo, { confirmedFirstDegree: true, alreadyOpen: true });
+  const assisted = await page.evaluate(readContactInfo, { confirmedFirstDegree: true, alreadyOpen: true });
+  debug(assisted.status === "done" ? "Contact info opened through the guarded fallback." : assisted.result || "Guarded fallback finished.", { status: assisted.status, degree: assisted.degree, evidence: assisted.evidence });
+  return assisted;
 }
 
 /** Same credential-safe HTTP boundary used by the invitation lane and pilot. */
@@ -183,13 +228,16 @@ async function runEnrichmentLane({ page, apiBase, token, cap, log, onEvent = () 
     let outcome;
     try {
       await page.goto(lookup.linkedinUrl, { waitUntil: "domcontentloaded" });
+      const debug = (details) => emit("enrich-debug", details);
+      debug({ who, message: "Profile opened in the automation Playwright session." });
       await page
         .evaluate((text) => window.__ftBanner && window.__ftBanner(text), `Followthroo · looking up contact info for ${who}`)
         .catch(() => {});
       await sleep(1500 + Math.random() * 1000);
-      outcome = await readContactInfoWithFallback({ page, lookup, apiBase, token, log });
+      outcome = await readContactInfoWithFallback({ page, lookup, apiBase, token, log, onDebug: debug });
     } catch (e) {
       outcome = { status: "failed", result: String((e && e.message) || e) };
+      emit("enrich-debug", { who, message: `Lookup failed before completion: ${outcome.result}`, status: "failed" });
     }
 
     const status = outcome.status === "done" ? "done" : outcome.status === "skipped" ? "skipped" : "failed";
@@ -208,6 +256,7 @@ async function runEnrichmentLane({ page, apiBase, token, cap, log, onEvent = () 
           result: outcome.result,
         },
       });
+      emit("enrich-debug", { who, message: "Lookup outcome recorded with Followthroo.", status });
     } catch (e) {
       // Best effort, same as the invite lane: a dropped report costs a retry
       // (reclaimStale in lib/linkedin/enrich.ts), not a lost lookup.

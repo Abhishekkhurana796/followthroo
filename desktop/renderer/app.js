@@ -208,6 +208,7 @@ window.ft.onEvent((event) => {
     case "waiting": if (event.sent !== undefined) { el.sent.textContent = String(event.sent); progress(el.inviteBar, event.sent, inviteCap); } break;
     case "tick": now.textContent = `Waiting ${event.remaining}s before the next invitation.`; break;
     case "enrich-start": now.textContent = `Looking up ${event.who}...`; break;
+    case "enrich-debug": now.textContent = event.message; log(`${event.who} — ${event.message}`, event.status, lane); break;
     case "enrich-done": now.textContent = event.result || `${event.who} complete.`; log(`${event.who} — ${event.result}`, event.status, lane); break;
     case "fatal": now.textContent = event.message; el.dot.className = "dot err"; ended[lane] = true; log(event.message, "failed", lane); break;
     case "done": {

@@ -2,10 +2,10 @@
 import assert from "node:assert/strict";
 import { chromium } from "@playwright/test";
 import { readContactInfo } from "../desktop/page-actions";
+import { observe } from "../desktop/pilot-page";
 
 const pageFor = (degreeMarkup: string) => `<!doctype html><main>
-  <section><div><h1>Asha Rao</h1><a href="/in/asha-rao/overlay/contact-info/">Contact info</a></div></section>
-  <div data-view-name="profile-top-card">${degreeMarkup}</div>
+  <div data-view-name="profile-top-card"><div><h1>Asha Rao</h1><a href="/in/asha-rao/overlay/contact-info/">Contact info</a>${degreeMarkup}</div></div>
 </main>`;
 
 async function main() {
@@ -23,7 +23,28 @@ async function main() {
     const modernFirst = await run(pageFor('<span class="pv-member-badge" aria-label="1st degree connection">1st</span>'));
     assert.equal(modernFirst.status, "eligible");
     assert.equal(modernFirst.degree, "1st");
-    assert.match(String(modernFirst.evidence), /profile badge/i);
+    assert.match(String(modernFirst.evidence), /profile (header )?badge/i);
+
+    // Current LinkedIn profile headers use a plain text degree beside pronouns,
+    // not necessarily the old .pv-member-badge class.
+    const headerFirst = await run(`<!doctype html><main>
+      <div data-view-name="profile-top-card"><div><h1>Apurva Gurav</h1><span>She/Her</span><span>1st</span><a href="/in/apurva-gurav/overlay/contact-info/">Contact info</a></div></div>
+      <aside><span>1st</span></aside>
+    </main>`);
+    assert.equal(headerFirst.status, "eligible");
+    assert.equal(headerFirst.degree, "1st");
+    assert.match(String(headerFirst.evidence), /profile header badge/i);
+
+    // Enrichment begins with the same observer and persistent Playwright flow
+    // as invitation sending, so it must recognise this header too.
+    const observedPage = await ctx.newPage();
+    await observedPage.setContent(`<!doctype html><main>
+      <div data-view-name="profile-top-card"><div><h1>Apurva Gurav</h1><span>She/Her</span><span>1st</span><button>Message</button><button>More</button></div></div>
+    </main>`);
+    const observed = await observedPage.evaluate(observe);
+    await observedPage.close();
+    assert.equal(observed.connectionDegree.degree, "1st");
+    assert.match(String(observed.connectionDegree.evidence), /profile header badge/i);
 
     const removeConnection = await run(pageFor('<button aria-label="Remove Connection">Remove Connection</button>'));
     assert.equal(removeConnection.status, "eligible");
@@ -39,7 +60,7 @@ async function main() {
     assert.equal(stale.status, "skipped");
     assert.equal(stale.degree, "unknown");
     assert.equal((stale as { reasonCode?: string }).reasonCode, "degree_unverified");
-    console.log("LinkedIn enrichment degree fixtures: 12/12 passed");
+    console.log("LinkedIn enrichment degree fixtures: 17/17 passed");
   } finally {
     await browser.close();
   }
