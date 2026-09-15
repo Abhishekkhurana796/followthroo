@@ -33,6 +33,16 @@ export interface ChangelogEntry {
 export const CHANGELOG: ChangelogEntry[] = [
   {
     product: "desktop",
+    version: "1.15.2",
+    date: "Sep 2026",
+    items: [
+      "Profile enrichment now recognises LinkedIn's current plain-text 1st-degree header badge beside pronouns, so verified connections no longer stop before Contact info opens",
+      "The desktop Activity panel now records each enrichment Playwright step: profile opened, degree evidence, Contact info route used, extraction outcome, and server report",
+      "Contact-info lookups use the same persistent Playwright Chrome session and guarded profile ownership checks as connection invitations",
+    ],
+  },
+  {
+    product: "desktop",
     version: "1.15.1",
     date: "Sep 2026",
     items: [

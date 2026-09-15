@@ -1,8 +1,10 @@
 # enrichment.md — Email and phone from LinkedIn Contact info (P2)
 
 **Last updated:** 2026-09-15
-**Status:** desktop 1.15.0 built; the desktop selectors
-are unverified against a live LinkedIn account (see "What's unverified" below).
+**Status:** desktop 1.15.2. The current plain-text `1st` header badge has been
+verified from a live profile screenshot; the Contact info overlay selectors
+still need a successful live run after this release (see "What's unverified"
+below).
 
 > Where it fits: [CLAUDE.md](../CLAUDE.md)'s doc index, alongside
 > [channels.md](channels.md) and [pricing.md](pricing.md). Credits are the same
@@ -105,11 +107,18 @@ nobody asked to look up.
   That fallback may select only a numbered Contact info control marked as owned
   by the profile's top card. Coordinates, typing, and outreach controls are
   rejected again in the desktop page before any trusted Playwright click.
+- The **Activity** panel writes the same useful run trace as connection sends:
+  it records the profile opening in Playwright, the exact degree evidence,
+  which Contact info route was tried, the extraction result, and confirmation
+  that Followthroo received the outcome. The identical records remain local in
+  the desktop app-data `logs/enrich-run-*.jsonl` file for debugging. They never
+  include the pairing token or LinkedIn session cookie.
 
 ### Why the cap is so much lower than invites
 
-Degree detection now reads current profile badges and accessible labels, then
-the explicit **Remove Connection** action. It returns the detected degree and
+Degree detection now reads current profile badges, the current plain-text
+`1st` header text beside pronouns, accessible labels, then the explicit
+**Remove Connection** action. It returns the detected degree and
 diagnostic evidence. With no positive 1st-degree evidence it records a safe
 `degree_unverified` skip; known 2nd/3rd degrees record `degree_not_first`.
 The guarded AI fallback asks the same detector before it can choose a Contact

@@ -33,8 +33,20 @@ async function fillLinkedInAction(action) {
    */
   const scope = () => {
     const h1 = document.querySelector("main h1, h1");
-    const card = h1 && (h1.closest("section") || h1.closest("div.ph5") || h1.parentElement);
-    return card || document.querySelector("main") || document.body;
+    if (!h1) return document.querySelector("main") || document.body;
+
+    // Current LinkedIn profiles use a div data-view-name top card. The old
+    // selector stopped at the heading's wrapper while the visible "1st" badge
+    // sits beside pronouns higher in that same card.
+    const main = document.querySelector("main") || document.body;
+    let node = h1.parentElement;
+    while (node && node !== main && node !== document.body) {
+      const view = node.getAttribute("data-view-name") || "";
+      const classes = typeof node.className === "string" ? node.className : "";
+      if (/profile.*top.*card|top.*card.*profile/i.test(`${view} ${classes}`)) return node;
+      node = node.parentElement;
+    }
+    return h1.closest("section") || h1.closest("div.ph5") || h1.parentElement || main;
   };
   const inScope = (el) => {
     if (!el) return false;
@@ -107,6 +119,15 @@ async function fillLinkedInAction(action) {
   const isFirstDegree = () => {
     const badge = scope().querySelector(".dist-value, .distance-badge, .pv-member-badge");
     if (badge && /1st/i.test(badge.textContent || "")) return true;
+    // The current profile header may be a plain "1st" span beside pronouns.
+    // This stays inside the owner's top card; a recommendation cannot turn an
+    // invitation into a message or a lookup into an eligible profile.
+    const headerDegree = Array.from(scope().querySelectorAll("[aria-label*='degree' i], [data-test-id*='degree' i], span, p, div"))
+      .some((el) => {
+        const text = `${el.getAttribute("aria-label") || ""} ${el.textContent || ""}`.replace(/\s+/g, " ").trim();
+        return text.length <= 160 && /\b1st\b|1st[- ]degree|first[- ]degree/i.test(text);
+      });
+    if (headerDegree) return true;
     // "Remove Connection" only ever appears for someone you are connected to.
     return all(CLICKABLE).some((b) => /remove connection/i.test(label(b)));
   };
@@ -498,8 +519,20 @@ async function readContactInfo(options = {}) {
 
   const scope = () => {
     const h1 = document.querySelector("main h1, h1");
-    const card = h1 && (h1.closest("section") || h1.closest("div.ph5") || h1.parentElement);
-    return card || document.querySelector("main") || document.body;
+    if (!h1) return document.querySelector("main") || document.body;
+
+    // Current LinkedIn profiles use a div data-view-name top card. The old
+    // selector stopped at the heading's wrapper while the visible "1st" badge
+    // sits beside pronouns higher in that same card.
+    const main = document.querySelector("main") || document.body;
+    let node = h1.parentElement;
+    while (node && node !== main && node !== document.body) {
+      const view = node.getAttribute("data-view-name") || "";
+      const classes = typeof node.className === "string" ? node.className : "";
+      if (/profile.*top.*card|top.*card.*profile/i.test(`${view} ${classes}`)) return node;
+      node = node.parentElement;
+    }
+    return h1.closest("section") || h1.closest("div.ph5") || h1.parentElement || main;
   };
   const label = (el) => ((el && (el.getAttribute("aria-label") || el.textContent)) || "").trim();
 
@@ -515,12 +548,19 @@ async function readContactInfo(options = {}) {
       if (/\b3rd\b|3rd[- ]degree|third[- ]degree/i.test(text)) return "3rd";
       return null;
     };
-    const badges = Array.from(document.querySelectorAll(
-      ".dist-value, .distance-badge, .pv-member-badge, [aria-label*='degree' i], [data-test-id*='degree' i]",
-    )).filter((el) => !el.closest("aside") && (card.contains(el) || document.querySelector("main")?.contains(el)));
+    // LinkedIn's current header can render a plain <span> beside pronouns
+    // ("She/Her  1st") without a class or aria label. Only inspect the profile
+    // top card so a recommended profile can never authorise this lookup.
+    const badges = Array.from(card.querySelectorAll(
+      ".dist-value, .distance-badge, .pv-member-badge, [aria-label*='degree' i], [data-test-id*='degree' i], span, p, div",
+    )).filter((el) => {
+      if (el.closest("aside")) return false;
+      const text = degreeText(el);
+      return !!degreeFromText(text) && (text.length <= 160 || /degree/i.test(text));
+    });
     for (const badge of badges) {
       const degree = degreeFromText(degreeText(badge));
-      if (degree) return { degree, evidence: `profile badge: ${degreeText(badge).slice(0, 80)}` };
+      if (degree) return { degree, evidence: `profile header badge: ${degreeText(badge).slice(0, 80)}` };
     }
     const remove = Array.from(document.querySelectorAll('button, a[role="button"], div[role="button"], [role="menuitem"]')).find(
       (el) => !el.closest("aside") && !el.closest("[data-followthroo-overlay]") && /remove connection/i.test(label(el)),

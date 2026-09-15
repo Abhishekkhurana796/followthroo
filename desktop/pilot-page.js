@@ -362,11 +362,18 @@ function observe() {
       if (/\b3rd\b|3rd[- ]degree|third[- ]degree/i.test(value)) return "3rd";
       return null;
     };
-    const badges = querySelectorAllDeep(".dist-value, .distance-badge, .pv-member-badge, [aria-label*='degree' i], [data-test-id*='degree' i]")
-      .filter((el) => !closestDeep(el, "aside") && (!root || root.contains(el)));
+    // LinkedIn now often uses a bare "1st" span beside pronouns in the profile
+    // header. It has neither the old badge class nor an aria label, so inspect
+    // that text within the established top card only.
+    const badges = querySelectorAllDeep(".dist-value, .distance-badge, .pv-member-badge, [aria-label*='degree' i], [data-test-id*='degree' i], span, p, div")
+      .filter((el) => {
+        if (closestDeep(el, "aside") || (root && !root.contains(el))) return false;
+        const value = text(el);
+        return !!degree(value) && (value.length <= 160 || /degree/i.test(value));
+      });
     for (const badge of badges) {
       const found = degree(text(badge));
-      if (found) return { degree: found, evidence: `profile badge: ${text(badge).slice(0, 80)}` };
+      if (found) return { degree: found, evidence: `profile header badge: ${text(badge).slice(0, 80)}` };
     }
     const remove = querySelectorAllDeep('button, a[role="button"], div[role="button"], [role="menuitem"]')
       .find((el) => !closestDeep(el, "aside") && !closestDeep(el, "[data-followthroo-overlay]") && /remove connection/i.test(text(el)));
