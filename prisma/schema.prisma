@@ -152,6 +152,9 @@ model Template {
   /// working untouched; a version is a snapshot of these two fields.
   subject        String?
   body           String
+  /// Private Blob metadata for files sent with email templates. The bytes are
+  /// never stored in Postgres and the URL is fetched server-side at send time.
+  attachments    Json      @default("[]")
   variables      Json      @default("[]") // declared vars + required fallbacks
   createdById    String?
   /// Soft delete. A hard delete would leave Message.templateId dangling, and
@@ -183,6 +186,9 @@ model TemplateVersion {
   version     Int
   subject     String?
   body        String
+  /// Snapshot attachments with the wording, so an in-flight campaign keeps the
+  /// exact file set it was built with after the live template changes.
+  attachments Json      @default("[]")
   variables   Json     @default("[]")
   createdById String?
   createdAt   DateTime @default(now())
@@ -393,6 +399,9 @@ model SendingAccount {
   dkimDomain     String?
   dkimSelector   String?
   dkimPrivateKey String?
+  /// The teammate who connected this mailbox. Members may only send from their
+  /// own identity; owners/admins retain workspace administration access.
+  createdById    String?
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
 
@@ -407,6 +416,7 @@ model SendingAccount {
 
   @@unique([organizationId, email])
   @@index([organizationId])
+  @@index([organizationId, createdById])
   @@index([domainId])
 }
 
@@ -1031,6 +1041,14 @@ model LeadSource {
   /// Round-robin cursor. Stored per source, so IndiaMART and Meta Ads each
   /// rotate independently rather than fighting over one shared position.
   lastAssignedUserId String?
+
+  /// Operational delivery signals, recorded only after an authenticated inbound
+  /// request. These make missing provider credentials and bad payloads visible
+  /// without retaining the provider's raw lead data on the source row.
+  lastIngressAt      DateTime?
+  lastSuccessAt      DateTime?
+  lastFailureAt      DateTime?
+  lastFailureReason  String?
 
   createdAt DateTime @default(now())
 

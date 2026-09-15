@@ -40,7 +40,7 @@ const orgIds: string[] = [];
 async function newOrg(name: string) {
   const org = await prisma.organization.create({ data: { name: `enrich-${name}-${stamp}`, slug: `enrich-${name}-${stamp}` } });
   orgIds.push(org.id);
-  await prisma.subscription.create({ data: { organizationId: org.id, planId: "start", status: "active" } });
+  await prisma.subscription.create({ data: { organizationId: org.id, planId: "grow", status: "active" } });
   await balance(org.id); // opens the day, grants the allowance
   return org.id;
 }
@@ -81,6 +81,7 @@ async function main() {
     await enqueueEnrichment({ organizationId: org, leadId: l3.id, linkedinUrl: l3.linkedinUrl!, source: "manual" });
     const dup = await enqueueEnrichment({ organizationId: org, leadId: l1.id, linkedinUrl: l1.linkedinUrl!, source: "manual" });
     const first = await prisma.linkedInEnrichment.findFirst({ where: { organizationId: org, leadId: l1.id } });
+    if (!dup || !first) throw new Error("expected enrichment queue row");
     ok(dup.id === first!.id, "queuing the same lead twice does not create a second row");
 
     const claimed = await claimEnrichments(account, 10);
@@ -119,6 +120,7 @@ async function main() {
     });
     const e1 = await enqueueEnrichment({ organizationId: org2, leadId: withEmail.id, linkedinUrl: withEmail.linkedinUrl!, source: "manual" });
     const e2 = await enqueueEnrichment({ organizationId: org2, leadId: bare.id, linkedinUrl: bare.linkedinUrl!, source: "manual" });
+    if (!e1 || !e2) throw new Error("expected enrichment queue rows");
     await prisma.linkedInEnrichment.updateMany({ where: { id: { in: [e1.id, e2.id] } }, data: { status: "in_progress" } });
     await completeEnrichment(org2, { enrichmentId: e1.id, status: "done", degree: "1st", email: "found-on-linkedin@example.com" });
     await completeEnrichment(org2, { enrichmentId: e2.id, status: "done", degree: "1st", email: "new@example.com", phone: "+15551234567" });

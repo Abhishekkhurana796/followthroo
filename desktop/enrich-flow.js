@@ -79,6 +79,8 @@ async function readContactInfoWithFallback({ page, lookup, apiBase, token, log }
   // veto repeats these checks before producing a trusted Playwright click.
   await page.goto(lookup.linkedinUrl, { waitUntil: "domcontentloaded" });
   await sleep(1500);
+  const eligibility = await page.evaluate(readContactInfo, { eligibilityOnly: true });
+  if (eligibility.status !== "eligible") return eligibility;
   const seen = await page.evaluate(observe);
   const screenshot = (await page.screenshot({ type: "jpeg", quality: 55, fullPage: false })).toString("base64");
   let decision;
@@ -199,10 +201,10 @@ async function runEnrichmentLane({ page, apiBase, token, cap, log, onEvent = () 
         body: {
           enrichmentId: lookup.id,
           status,
-          degree: outcome.degree === "1st" ? "1st" : outcome.degree === "not_1st" ? null : null,
+          degree: ["1st", "2nd", "3rd", "out_of_network"].includes(outcome.degree) ? outcome.degree : null,
           email: outcome.email ?? null,
           phone: outcome.phone ?? null,
-          extra: outcome.extra ?? {},
+          extra: { ...(outcome.extra ?? {}), evidence: outcome.evidence ?? null, reasonCode: outcome.reasonCode ?? null },
           result: outcome.result,
         },
       });

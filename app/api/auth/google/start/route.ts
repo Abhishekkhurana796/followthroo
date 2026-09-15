@@ -69,6 +69,7 @@ export async function GET(req: NextRequest) {
   };
   res.cookies.set("g_oauth_state", state, cookieOpts);
   res.cookies.set("g_oauth_org", ctx.orgId, cookieOpts);
+  res.cookies.set("g_oauth_user", ctx.userId, cookieOpts);
   if (ownedDomainId) res.cookies.set("g_oauth_domain", ownedDomainId, cookieOpts);
   return res;
 }

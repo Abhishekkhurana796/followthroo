@@ -506,13 +506,48 @@ async function readContactInfo(options = {}) {
   // Positive evidence only — the same rule fillLinkedInAction uses for
   // isFirstDegree, repeated here rather than shared because this file has no
   // internal imports to share it through.
-  const firstDegree = () => {
-    const badge = scope().querySelector(".dist-value, .distance-badge, .pv-member-badge");
-    if (badge && /1st/i.test(badge.textContent || "")) return true;
-    return Array.from(scope().querySelectorAll('button, a[role="button"], div[role="button"]')).some((b) =>
-      /remove connection/i.test(label(b)),
+  const connectionDegree = () => {
+    const card = scope();
+    const degreeText = (el) => `${el.getAttribute("aria-label") || ""} ${el.textContent || ""}`.replace(/\s+/g, " ").trim();
+    const degreeFromText = (text) => {
+      if (/\b1st\b|1st[- ]degree|first[- ]degree/i.test(text)) return "1st";
+      if (/\b2nd\b|2nd[- ]degree|second[- ]degree/i.test(text)) return "2nd";
+      if (/\b3rd\b|3rd[- ]degree|third[- ]degree/i.test(text)) return "3rd";
+      return null;
+    };
+    const badges = Array.from(document.querySelectorAll(
+      ".dist-value, .distance-badge, .pv-member-badge, [aria-label*='degree' i], [data-test-id*='degree' i]",
+    )).filter((el) => !el.closest("aside") && (card.contains(el) || document.querySelector("main")?.contains(el)));
+    for (const badge of badges) {
+      const degree = degreeFromText(degreeText(badge));
+      if (degree) return { degree, evidence: `profile badge: ${degreeText(badge).slice(0, 80)}` };
+    }
+    const remove = Array.from(document.querySelectorAll('button, a[role="button"], div[role="button"], [role="menuitem"]')).find(
+      (el) => !el.closest("aside") && !el.closest("[data-followthroo-overlay]") && /remove connection/i.test(label(el)),
     );
+    if (remove) return { degree: "1st", evidence: "profile action: Remove Connection" };
+    return { degree: "unknown", evidence: "no current profile degree badge or Remove Connection action found" };
   };
+  const firstDegree = () => connectionDegree().degree === "1st";
+  const detected = options.confirmedFirstDegree
+    ? { degree: "1st", evidence: "confirmed by the deterministic profile check" }
+    : connectionDegree();
+
+  if (options.eligibilityOnly) {
+    return detected.degree === "1st"
+      ? { status: "eligible", ...detected }
+      : { status: "skipped", ...detected, reasonCode: detected.degree === "unknown" ? "degree_unverified" : "degree_not_first" };
+  }
+  if (detected.degree !== "1st") {
+    return {
+      status: "skipped",
+      ...detected,
+      reasonCode: detected.degree === "unknown" ? "degree_unverified" : "degree_not_first",
+      result: detected.degree === "unknown"
+        ? "could not verify a 1st-degree connection safely; Contact info was not opened"
+        : `detected ${detected.degree}-degree connection; Contact info is only shown for 1st-degree connections`,
+    };
+  }
 
   if (!options.confirmedFirstDegree && !firstDegree()) {
     return { status: "skipped", degree: "not_1st", result: "not a 1st-degree connection — Contact info is not shown" };
@@ -567,6 +602,7 @@ async function readContactInfo(options = {}) {
     return {
       status: "done",
       degree: "1st",
+      evidence: detected.evidence,
       email,
       phone,
       extra: { websites, connectedSince, im },

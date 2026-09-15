@@ -15,7 +15,13 @@
     "db:studio": "prisma studio",
     "desktop": "npm start --prefix desktop",
     "desktop:dist": "npm run dist --prefix desktop",
-    "verify:linkedin": "tsx scripts/verify-linkedin-target.ts && tsx scripts/verify-desktop-api-client.ts && tsx scripts/verify-desktop-renderer.ts && tsx scripts/verify-desktop-runner.ts && tsx scripts/verify-linkedin-pilot.ts && tsx scripts/verify-connect-flow.ts"
+    "verify:linkedin": "tsx scripts/verify-linkedin-target.ts && tsx scripts/verify-desktop-api-client.ts && tsx scripts/verify-desktop-renderer.ts && tsx scripts/verify-desktop-runner.ts && tsx scripts/verify-linkedin-pilot.ts && tsx scripts/verify-connect-flow.ts",
+    "verify:inbound": "tsx scripts/verify-inbound-adapters.ts",
+    "verify:linkedin-enrichment-selectors": "tsx scripts/verify-linkedin-enrichment-selectors.ts",
+    "verify:lead-import": "tsx scripts/verify-lead-import-parser.ts",
+    "check:task-notifications": "tsx --env-file=.env --env-file=.env.local scripts/check-qstash-schedules.ts",
+    "ensure:task-notifications": "tsx --env-file=.env --env-file=.env.local scripts/ensure-task-notification-schedules.ts",
+    "verify:sending-account-access": "tsx scripts/verify-sending-account-access.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.32.1",
@@ -38,6 +44,7 @@
     "swr": "^2.4.2",
     "tailwind-merge": "^3.6.0",
     "twilio": "^5.4.0",
+    "xlsx": "^0.18.5",
     "zod": "^3.24.1"
   },
   "devDependencies": {

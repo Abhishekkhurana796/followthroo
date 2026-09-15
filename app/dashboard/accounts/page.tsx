@@ -8,7 +8,7 @@ export const dynamic = "force-dynamic";
 export default async function Page() {
   const tenant = await getServerTenant();
   const [accounts, domains] = await Promise.all([
-    tenant ? getSendingAccounts(tenant.orgId).catch(() => []) : [],
+    tenant ? getSendingAccounts(tenant).catch(() => []) : [],
     tenant ? getSendingDomains(tenant.orgId).catch(() => ({ available: false, domains: [] })) : { available: false, domains: [] },
   ]);
   return (

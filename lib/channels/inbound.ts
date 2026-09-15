@@ -235,7 +235,9 @@ export const indiamartAdapter = aggregatorAdapter("indiamart", {
 export const justdialAdapter = aggregatorAdapter("justdial", {
   email: ["email", "EMAIL"],
   phone: ["mobile", "MOBILE", "phone"],
-  fullName: ["name", "NAME", "prefix"],
+  // `prefix` is normally only Mr/Ms. Treating it as a person name made an
+  // otherwise valid phone-only JustDial lead look like somebody called "Mr".
+  fullName: ["name", "NAME", "customer_name", "CUSTOMER_NAME", "contact_person"],
   message: ["category", "CATEGORY", "area"],
 });
 

@@ -31,7 +31,6 @@ import { EXTENSION_STORE_URL, DESKTOP_APP_URL } from "@/lib/constants";
  * screen exists to say so, once, to anyone who came looking.
  */
 
-type Usage = { cap: number; used: number; remaining: number; connected: boolean };
 type AccountState = "disconnected" | "expiring" | "expired" | "connected";
 type Connect = {
   extToken: string;
@@ -70,13 +69,11 @@ const OAUTH_ERRORS: Record<string, string> = {
 const SCOPE_ERRORS = new Set(["invalid_scope_error", "unauthorized_scope_error", "invalid_scope"]);
 
 export default function LinkedInClient() {
-  const { data: scrape } = useSWR<{ usage: Usage }>("/api/linkedin/scrape");
   const { data, mutate, isLoading } = useSWR<Connect>("/api/linkedin/connect");
   const [msg, setMsg] = useState<{ kind: "error" | "success" | "info"; text: string } | null>(null);
   const [scopeError, setScopeError] = useState(false);
   const confirm = useConfirm();
 
-  const usage = scrape?.usage;
   const acct = data?.account;
   const helperRunning = data ? recentlySeen(data.lastSeenAt) : false;
   const expiry = daysLeft(acct?.expiresAt ?? null);
@@ -128,14 +125,12 @@ export default function LinkedInClient() {
             bulk by CSV. What remains is what those imports produced. */}
         <section>
           <div className="mb-3 flex items-baseline justify-between">
-            <h2 className="font-display text-base font-bold">Recent imports</h2>
-            {usage && (
-              <span className="font-mono text-[11px] text-ink-faint">
-                {usage.remaining.toLocaleString()} of {usage.cap.toLocaleString()} rows left today
-              </span>
-            )}
+            <h2 className="font-display text-base font-bold">Connect the Chrome extension</h2>
+            <span className={`rounded-full px-2.5 py-1 text-xs font-medium ${helperRunning ? "bg-success/10 text-success" : "bg-warning/10 text-warning-strong"}`}>
+              {helperRunning ? "Connected" : "Not connected"}
+            </span>
           </div>
-          <p className="mb-3 text-sm text-ink-soft">
+          <p className="hidden">
             Open a people search or your connections on LinkedIn and tick who you want — the Followthroo
             extension adds them. For a long list, use{" "}
             <Link href="/dashboard/leads" className="font-medium text-ink underline">
@@ -143,7 +138,7 @@ export default function LinkedInClient() {
             </Link>{" "}
             on Leads with a LinkedIn URL column.
           </p>
-          <SourcingView />
+          <BrowserHelper data={data} running={helperRunning} onChange={mutate} setMsg={setMsg} />
         </section>
 
         {/* Whether anything is going out at all, and what is waiting. Above the
@@ -219,8 +214,10 @@ export default function LinkedInClient() {
           {/* Reading LinkedIn pages needs the browser helper, which is a
               different thing from the account and only matters when it is not
               running — so it stays folded away until it does. */}
-          <BrowserHelper data={data} running={helperRunning} onChange={mutate} setMsg={setMsg} />
           <Limits data={data} onSaved={mutate} setMsg={setMsg} />
+          <Disclosure title="Logs" summary="Import history and page-reading outcomes">
+            <SourcingView />
+          </Disclosure>
         </section>
 
         <p className="border-t border-line pt-6 text-sm text-ink-soft">
@@ -265,14 +262,16 @@ function Disclosure({
   summary,
   children,
   tone,
+  open,
 }: {
   title: string;
   summary: string;
   children: React.ReactNode;
   tone?: "warning";
+  open?: boolean;
 }) {
   return (
-    <details className="group mt-3 rounded-xl border border-line bg-surface">
+    <details open={open} className="group mt-3 rounded-xl border border-line bg-surface">
       <summary className="flex cursor-pointer list-none items-center gap-3 p-4">
         <div className="min-w-0 flex-1">
           <div className="text-sm font-medium">{title}</div>
@@ -498,6 +497,7 @@ function BrowserHelper({
 
   return (
     <Disclosure
+      open
       title="Browser helper"
       summary={running ? "Running — reading pages in your own tab" : "Not running. Reading LinkedIn pages needs it."}
       tone={running ? undefined : "warning"}
@@ -634,7 +634,7 @@ function Limits({
       <div className="mt-4 grid gap-4 sm:grid-cols-3">
         <div>
           <Label>Actions per day</Label>
-          <Input type="number" min={1} max={50} placeholder={String(data?.dailyInviteCap ?? 20)} value={cap} onChange={(e) => setCap(e.target.value === "" ? "" : Number(e.target.value))} />
+          <Input type="number" min={1} max={20} placeholder={String(data?.dailyInviteCap ?? 20)} value={cap} onChange={(e) => setCap(e.target.value === "" ? "" : Number(e.target.value))} />
         </div>
         <div>
           <Label>Min gap (sec)</Label>
@@ -646,7 +646,7 @@ function Limits({
         </div>
       </div>
       <div className="mt-3 flex items-center gap-2 text-xs text-ink-soft">
-        <Clock className="h-3.5 w-3.5" /> A random pause inside that range is taken between actions.
+        <Clock className="h-3.5 w-3.5" /> A random pause is taken between actions; 20 invitations is the daily safety ceiling.
       </div>
 
       <div className="mt-6 border-t border-line pt-4">

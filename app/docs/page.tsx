@@ -1,7 +1,7 @@
 import Link from "next/link";
 import SiteShell from "@/components/site/SiteShell";
 import PageHero from "@/components/site/PageHero";
-import { Boxes, Waypoints, Braces, Bot, Database, Gauge, TerminalSquare, Activity } from "lucide-react";
+import { Boxes, Waypoints, Braces, Bot, Database, Gauge, TerminalSquare, Activity, Linkedin, Webhook, FileSpreadsheet } from "lucide-react";
 
 export const metadata = {
   title: "Documentation — Followthroo",
@@ -14,6 +14,9 @@ export const metadata = {
 };
 
 const LINKS = [
+  { icon: Linkedin, title: "LinkedIn guide", href: "/docs/linkedin", body: "Set up the extension and desktop app, manage limits and logs, and run profile enrichment." },
+  { icon: Webhook, title: "Lead sources", href: "/docs/lead-sources", body: "Connect IndiaMART, JustDial, Meta Lead Ads and Google Ads with honest delivery status." },
+  { icon: FileSpreadsheet, title: "Leads and imports", href: "/docs/leads", body: "Import CSV or Excel, filter your CRM, export, and send template attachments." },
   { icon: Boxes, title: "Channels", href: "/channels", body: "Email, LinkedIn, WhatsApp, and social." },
   { icon: Waypoints, title: "Sequences", href: "/sequences", body: "Multi-step, reply-aware flows." },
   { icon: Braces, title: "Templates", href: "/templates", body: "Variables and fallbacks." },
@@ -27,7 +30,7 @@ const LINKS = [
 export default function DocsPage() {
   return (
     <SiteShell>
-      <PageHero kicker="Docs" title="Everything you need to ship outreach" subtitle="Guides for each part of Followthroo. Start with a channel, then wire a sequence." />
+      <PageHero kicker="Docs" title="Everything you need to run Followthroo" subtitle="Start with the LinkedIn guide if you are sourcing, sending connection requests, or looking up contact details." />
       <section className="bg-canvas pb-24">
         <div className="mx-auto grid max-w-6xl gap-4 px-6 sm:grid-cols-2 lg:grid-cols-4">
           {LINKS.map((l) => (

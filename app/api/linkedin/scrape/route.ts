@@ -60,7 +60,7 @@ export async function GET(req: NextRequest) {
       select: {
         id: true, kind: true, inputUrl: true, status: true, progress: true,
         resultCount: true, importedAt: true, importedCount: true,
-        failureKind: true, createdAt: true, finishedAt: true,
+        failureKind: true, error: true, createdAt: true, finishedAt: true,
       },
     }),
     scrapeUsageToday(ctx.orgId, ctx.userId),

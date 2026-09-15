@@ -355,7 +355,7 @@ export async function runAgent(opts: {
   // through a SendingAccount this org connected, so the env SMTP flag says nothing
   // about whether THIS org can send. Checking the org's accounts is the difference
   // between the agent using a connected Gmail and refusing to email at all.
-  const emailAccountId = opts.sendingAccountId ?? (await defaultSendingAccountId(opts.orgId));
+  const emailAccountId = opts.sendingAccountId ?? (await defaultSendingAccountId(opts.orgId, opts.userId));
 
   // social has no working adapter yet (lib/channels/social.ts is a stub — isConfigured()
   // always returns false), so it's deliberately never offered here.

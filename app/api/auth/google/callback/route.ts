@@ -42,11 +42,12 @@ export async function GET(req: NextRequest) {
   const state = params.get("state");
   const cookieState = req.cookies.get("g_oauth_state")?.value;
   const orgId = req.cookies.get("g_oauth_org")?.value;
+  const userId = req.cookies.get("g_oauth_user")?.value;
   const domainId = req.cookies.get("g_oauth_domain")?.value ?? null;
 
   if (!code) return backTo("error", "missing_code");
   if (!state || !cookieState || state !== cookieState) return backTo("error", "state_mismatch");
-  if (!orgId) return backTo("error", "no_org");
+  if (!orgId || !userId) return backTo("error", "no_org");
 
   try {
     const redirectUri = `${env.appUrl}/api/auth/google/callback`;
@@ -75,6 +76,7 @@ export async function GET(req: NextRequest) {
     const existing = await prisma.sendingAccount.findUnique({
       where: { organizationId_email: { organizationId: orgId, email } },
     });
+    if (existing?.createdById && existing.createdById !== userId) return backTo("error", "mailbox_linked_to_another_member");
     // Google only returns a refresh_token on first consent; keep the stored one on re-connect.
     const effectiveRefresh = refreshToken ?? existing?.refreshToken;
     if (!effectiveRefresh) return backTo("error", "no_refresh_token");
@@ -97,6 +99,7 @@ export async function GET(req: NextRequest) {
       where: { organizationId_email: { organizationId: orgId, email } },
       create: {
         organizationId: orgId,
+        createdById: userId,
         name: email,
         email,
         provider: "gmail_oauth",
@@ -106,6 +109,7 @@ export async function GET(req: NextRequest) {
         user: email,
         refreshToken: effectiveRefresh,
         active: true,
+        ...(existing?.createdById ? {} : { createdById: userId }),
         domainId: linkedDomainId,
       },
       update: {
@@ -129,6 +133,7 @@ export async function GET(req: NextRequest) {
     const res = backTo("connected", email, linkedDomainId);
     res.cookies.delete("g_oauth_state");
     res.cookies.delete("g_oauth_org");
+    res.cookies.delete("g_oauth_user");
     res.cookies.delete("g_oauth_domain");
     return res;
   } catch (e) {

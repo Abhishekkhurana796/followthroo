@@ -9,6 +9,7 @@ import { randomUUID } from "node:crypto";
 import { buildRfcMessageId, domainOfAddress } from "./inbox/threading";
 import type { SendJob } from "./queue";
 import { isOutOfCredits } from "./billing/meter";
+import { readEmailAttachments } from "./email-attachments";
 
 /**
  * Shared job processor.
@@ -33,7 +34,7 @@ export async function processSendJob(jobData: SendJob) {
       ? await prisma.templateVersion
           .findFirst({
             where: { id: templateVersionId, templateId, template: { organizationId } },
-            select: { subject: true, body: true, variables: true },
+            select: { subject: true, body: true, variables: true, attachments: true },
           })
           .then((v) => v ?? prisma.template.findFirst({ where: { id: templateId, organizationId } }))
       : await prisma.template.findFirst({ where: { id: templateId, organizationId } })
@@ -46,6 +47,7 @@ export async function processSendJob(jobData: SendJob) {
   const rendered = tpl
     ? renderMessage(tpl, lead, { senderName })
     : { body: "", subject: undefined };
+  const attachments = channel === "email" && tpl ? readEmailAttachments(tpl.attachments) : [];
 
   // Pre-generate the Message id so open/click tracking can key on it before
   // sending — and so the RFC Message-ID below can be derived from it rather than
@@ -81,7 +83,7 @@ export async function processSendJob(jobData: SendJob) {
     rfcMessageId,
     // Which campaign and which LinkedIn gesture. Without this the queue could
     // not tell an invite from a message, or apply a campaign's own caps.
-    { campaignId, nodeId, linkedinAction, noteFor, messageId }
+    { campaignId, nodeId, linkedinAction, noteFor, messageId, attachments }
   );
 
   // Out of credits, or no plan: nothing was sent and nothing failed. The step

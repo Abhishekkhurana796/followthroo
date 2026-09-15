@@ -57,6 +57,7 @@ export async function snapshotTemplate(templateId: string, createdById?: string 
       version: (last?.version ?? 0) + 1,
       subject: tpl.subject,
       body: tpl.body,
+      attachments: tpl.attachments as Prisma.InputJsonValue,
       variables: tpl.variables as Prisma.InputJsonValue,
       createdById: createdById ?? tpl.createdById,
     },
@@ -127,7 +128,7 @@ export interface ApplyResult {
 export async function applyTemplateEdit(
   organizationId: string,
   templateId: string,
-  next: { name?: string; subject?: string | null; body?: string },
+  next: { name?: string; subject?: string | null; body?: string; attachments?: Prisma.InputJsonValue },
   mode: ApplyMode,
   opts: { campaignId?: string; userId?: string | null } = {}
 ): Promise<ApplyResult> {
@@ -155,6 +156,7 @@ export async function applyTemplateEdit(
       ...(next.name !== undefined ? { name: next.name } : {}),
       subject,
       body,
+      ...(next.attachments !== undefined ? { attachments: next.attachments } : {}),
       variables: extractVariables(subject, body) as unknown as Prisma.InputJsonValue,
     },
   });

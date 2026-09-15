@@ -17,6 +17,13 @@ type Source = {
   instructions: string;
   ingestUrl: string;
   needsEnvSetup: boolean;
+  health: {
+    status: "configured" | "awaiting_provider_credentials" | "awaiting_provider_sample";
+    lastIngressAt: string | null;
+    lastSuccessAt: string | null;
+    lastFailureAt: string | null;
+    lastFailureReason: string | null;
+  };
   assignmentRule: AssignmentRule;
   assignedToId: string | null;
   assignmentDept: string | null;
@@ -34,6 +41,11 @@ export default function SourcesClient() {
   const [msg, setMsg] = useState<string | null>(null);
   const prompt = usePrompt();
   const toast = useToast();
+  const healthLabel = (source: Source) => {
+    if (source.health.status === "awaiting_provider_credentials") return "Awaiting provider credentials";
+    if (source.health.status === "awaiting_provider_sample") return "Awaiting provider test delivery";
+    return "Configured";
+  };
 
   function copy(url: string, id: string) {
     navigator.clipboard.writeText(url);
@@ -122,6 +134,7 @@ export default function SourcesClient() {
                         <AlertTriangle className="h-3 w-3" /> Needs env setup
                       </Badge>
                     )}
+                    <Badge tone={s.health.status === "configured" ? "success" : "warning"}>{healthLabel(s)}</Badge>
                     <Badge tone={s.active ? "success" : "neutral"}>{s.active ? "Active" : "Paused"}</Badge>
                   </div>
                 </div>
@@ -136,6 +149,14 @@ export default function SourcesClient() {
                     {copiedId === s.id ? "Copied" : "Copy"}
                   </button>
                 </div>
+
+                <p className="mt-2 text-xs text-ink-faint">
+                  {s.health.lastFailureAt
+                    ? `Last failed delivery: ${new Date(s.health.lastFailureAt).toLocaleString()}${s.health.lastFailureReason ? ` (${s.health.lastFailureReason})` : ""}`
+                    : s.health.lastSuccessAt
+                      ? `Last successful delivery: ${new Date(s.health.lastSuccessAt).toLocaleString()}`
+                      : "No provider delivery has been confirmed yet."}
+                </p>
 
                 <div className="mt-4 flex flex-wrap items-end justify-between gap-3">
                   <div className="w-40">

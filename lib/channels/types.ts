@@ -1,5 +1,6 @@
 import type { RenderedMessage } from "../templates";
 import type { IdentityInput } from "../identity";
+import type { EmailAttachment } from "../email-attachments";
 
 export interface Lead {
   id: string;
@@ -97,6 +98,8 @@ export interface SendContext {
   noteFor?: "everyone" | "picked" | "none";
   /** The Message this send will be recorded as, when the caller already has its id — kept with the credit charge. */
   messageId?: string;
+  /** Email only: private Blob metadata resolved from the chosen template. */
+  attachments?: EmailAttachment[];
   /**
    * Not charged for. Only for sends a person makes by hand for themselves — a
    * reply typed in the inbox, a test sent to their own address. Campaign steps,

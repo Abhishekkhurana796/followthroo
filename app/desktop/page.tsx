@@ -39,7 +39,7 @@ const FACTS = [
   {
     icon: AlertTriangle,
     title: "It stops before it becomes a problem",
-    body: "Twenty sent, LinkedIn's own weekly-limit wall, three failures in a row, or a sign-in prompt — any of these ends the run and says which one. Pressing Start twice in an afternoon doesn't send forty; the day's count is remembered.",
+    body: "Twenty sent, LinkedIn's own weekly-limit wall, three failures in a row, or a sign-in prompt — any of these ends the run and says which one. The server is the source of truth for the account's daily usage and cap, so restarting the app cannot bypass it.",
   },
   {
     icon: MousePointerClick,

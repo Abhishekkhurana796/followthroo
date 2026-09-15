@@ -20,8 +20,9 @@ import { prisma } from "../db";
 import { logActivity } from "../crm";
 import { charge, keepCredits, returnCredits } from "../billing/meter";
 import { billingEnforced } from "../billing/limits";
-import { enrichmentCharge } from "../billing/plans";
+import { enrichmentCharge, hasFeature } from "../billing/plans";
 import { startOfOrgDay } from "../org-day";
+import { workspacePlan } from "../billing/subscription";
 
 const STALE_MS = 20 * 60 * 1000; // a browser closed mid-lookup
 const MAX_ATTEMPTS = 3;
@@ -48,6 +49,10 @@ export async function enqueueEnrichment(input: {
   enrollmentId?: string | null;
   nodeId?: string | null;
 }) {
+  if (billingEnforced()) {
+    const plan = await workspacePlan(input.organizationId);
+    if (!plan.plan || !hasFeature(plan.plan, "linkedin_enrichment")) return null;
+  }
   const open = await prisma.linkedInEnrichment.findFirst({
     where: { organizationId: input.organizationId, leadId: input.leadId, status: { in: ["pending", "in_progress"] } },
   });

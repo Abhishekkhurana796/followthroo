@@ -4,7 +4,18 @@ Sends queued LinkedIn invitations and looks up eligible profiles' Contact info
 from the customer's own computer, own IP, and logged-in LinkedIn session.
 
 **Last updated:** 2026-09-15
-**Status:** active — desktop 1.15.0
+**Status:** active — desktop 1.15.1
+
+## 1.15.1 reliability changes
+
+- Invitation usage, the 20/day account ceiling, remaining capacity, and note
+  allowance now come from the server. The desktop never treats its local
+  counters as authority.
+- Profile enrichment is independently plan-gated by the API (Grow and Scale)
+  and shows an upgrade state rather than claiming a lookup on a lower plan.
+- Contact-info eligibility reports a concrete connection degree and evidence;
+  current profile badges, accessible labels, and Remove Connection are all
+  recognized before the deterministic and guarded AI paths proceed.
 
 ---
 

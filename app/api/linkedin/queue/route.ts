@@ -3,7 +3,7 @@ import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { ok, fail } from "@/lib/http";
 import { requireExtAuth } from "@/lib/linkedin/auth";
-import { claimActions, completeAction, noteLimitReached, peekActions } from "@/lib/linkedin/queue";
+import { claimActions, completeAction, effectiveInviteCap, inviteUsage, noteLimitReached, peekActions } from "@/lib/linkedin/queue";
 import { corsPreflight, withCors } from "@/lib/linkedin/cors";
 
 export const runtime = "nodejs";
@@ -29,11 +29,13 @@ export async function GET(req: NextRequest) {
   if (req.nextUrl.searchParams.get("peek")) {
     const upto = Math.min(Math.max(Number(req.nextUrl.searchParams.get("limit") ?? 20), 1), 50);
     const peek = await peekActions(account, upto);
+    const usage = await inviteUsage(account);
     return withCors(
       ok({
         pacing: { minDelaySec: account.minDelaySec, maxDelaySec: account.maxDelaySec },
         autoSend: account.autoSend,
-        dailyInviteCap: account.dailyInviteCap,
+        dailyInviteCap: effectiveInviteCap(account),
+        usage,
         people: peek.people,
         // Invitations that would go out but are waiting — on somebody's pick, or
         // on tomorrow's notes. Kept apart from `people` so a desktop app too old
