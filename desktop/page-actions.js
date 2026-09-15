@@ -558,6 +558,10 @@ async function readContactInfo(options = {}) {
       const text = degreeText(el);
       return !!degreeFromText(text) && (text.length <= 160 || /degree/i.test(text));
     });
+    // Prefer the smallest matching node. A top-card wrapper can include a
+    // suggested person's 2nd badge in its text; the actual header's own span
+    // is the short, precise evidence we want to record.
+    badges.sort((a, b) => degreeText(a).length - degreeText(b).length);
     for (const badge of badges) {
       const degree = degreeFromText(degreeText(badge));
       if (degree) return { degree, evidence: `profile header badge: ${degreeText(badge).slice(0, 80)}` };
@@ -593,7 +597,28 @@ async function readContactInfo(options = {}) {
     return { status: "skipped", degree: "not_1st", result: "not a 1st-degree connection — Contact info is not shown" };
   }
 
-  const modal = () => document.querySelector('.pv-contact-info, [aria-label="Contact info"], .artdeco-modal[role="dialog"]');
+  // Contact info is now commonly a generic accessible dialog rather than the
+  // old .pv-contact-info modal. The old selector let the click visibly work
+  // while the runner claimed that nothing had opened.
+  const modal = () => {
+    const candidates = Array.from(document.querySelectorAll(
+      '.pv-contact-info, .artdeco-modal, .artdeco-modal-overlay, [role="dialog"], [aria-modal="true"], [data-view-name*="contact-info" i], #artdeco-modal-outlet > *, section, div',
+    )).filter((el) => {
+      const style = getComputedStyle(el);
+      if (style.display === "none" || style.visibility === "hidden") return false;
+      // The modern overlay can be an unlabelled div. Its stable shape is its
+      // Contact info heading plus one or more labeled contact rows, as in the
+      // live Email / IM / Connected since panel. Do not search combined
+      // textContent: LinkedIn's nested spans concatenate it as "infoEmail".
+      const labels = Array.from(el.querySelectorAll('h1, h2, h3, h4, [role="heading"], span, p, dt, div'))
+        .map((child) => (child.textContent || "").replace(/\s+/g, " ").trim());
+      return labels.some((text) => /^contact info$/i.test(text)) && labels.some((text) => /^(email|phone|im|connected since|website)$/i.test(text));
+    });
+    // Containers are nested heavily; the smallest matching one is the actual
+    // dialog body, rather than main or the page shell behind it.
+    candidates.sort((a, b) => (a.textContent || "").length - (b.textContent || "").length);
+    return candidates[0] || null;
+  };
   let dlg = options.alreadyOpen ? modal() : null;
 
   // LinkedIn's usual trigger is a link reading "Contact info" inside the
@@ -601,6 +626,7 @@ async function readContactInfo(options = {}) {
   // Direct navigation and the guarded assistant fallback live in
   // enrich-flow.js, because a page navigation cannot be completed from inside
   // this serialized page function.
+  if (!dlg && options.alreadyOpen) return { status: "failed", result: "Contact info overlay did not open" };
   if (!dlg) {
     const trigger = Array.from(scope().querySelectorAll('a[href*="overlay/contact-info"], a')).find(
       (a) => /contact info/i.test(label(a)) || /overlay\/contact-info/.test(a.getAttribute("href") || ""),
@@ -624,7 +650,11 @@ async function readContactInfo(options = {}) {
 
   try {
     const emailEl = dlg.querySelector('.ci-email a[href^="mailto:"], a[href^="mailto:"]');
-    const email = emailEl ? emailEl.getAttribute("href").replace(/^mailto:/i, "").split("?")[0] : null;
+    const displayedEmail = Array.from(dlg.querySelectorAll("a, span, p, div, li, dd"))
+      .map((el) => (el.textContent || "").trim())
+      .map((text) => text.match(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/i)?.[0] || null)
+      .find(Boolean) || null;
+    const email = emailEl ? emailEl.getAttribute("href").replace(/^mailto:/i, "").split("?")[0] : displayedEmail;
 
     const phoneEl = dlg.querySelector(".ci-phone .t-14, .ci-phone span");
     const phone = phoneEl ? (phoneEl.textContent || "").trim() : null;

@@ -371,6 +371,7 @@ function observe() {
         const value = text(el);
         return !!degree(value) && (value.length <= 160 || /degree/i.test(value));
       });
+    badges.sort((a, b) => text(a).length - text(b).length);
     for (const badge of badges) {
       const found = degree(text(badge));
       if (found) return { degree: found, evidence: `profile header badge: ${text(badge).slice(0, 80)}` };

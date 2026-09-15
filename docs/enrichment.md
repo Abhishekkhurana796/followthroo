@@ -1,10 +1,10 @@
 # enrichment.md — Email and phone from LinkedIn Contact info (P2)
 
 **Last updated:** 2026-09-15
-**Status:** desktop 1.15.2. The current plain-text `1st` header badge has been
-verified from a live profile screenshot; the Contact info overlay selectors
-still need a successful live run after this release (see "What's unverified"
-below).
+**Status:** desktop 1.15.4. The current plain-text `1st` header badge and
+LinkedIn's visible labeled Contact info rows are covered by the desktop
+fixtures. A successful live extraction remains the final confirmation (see
+"What's unverified" below).
 
 > Where it fits: [CLAUDE.md](../CLAUDE.md)'s doc index, alongside
 > [channels.md](channels.md) and [pricing.md](pricing.md). Credits are the same
@@ -102,11 +102,11 @@ nobody asked to look up.
 - The desktop UI exposes this as its own **Profile enrichment** lane. It has a
   separate peek endpoint and Start button; invitation sending never claims or
   starts enrichment work, and enrichment never claims an invitation.
-- Selector recovery is layered: deterministic top-card link first, the direct
-  `/overlay/contact-info/` route second, then one AI decision as a final fallback.
-  That fallback may select only a numbered Contact info control marked as owned
-  by the profile's top card. Coordinates, typing, and outreach controls are
-  rejected again in the desktop page before any trusted Playwright click.
+- Selector recovery is deterministic: Playwright clicks the current profile's
+  top-card Contact info link first and waits for LinkedIn's visible accessible
+  dialog; the documented `/overlay/contact-info/` route is a second fallback.
+  The Contact-info step does not use an AI click decision, so a visible dialog
+  cannot be mistaken for an assistant-selector failure.
 - The **Activity** panel writes the same useful run trace as connection sends:
   it records the profile opening in Playwright, the exact degree evidence,
   which Contact info route was tried, the extraction result, and confirmation
@@ -121,8 +121,8 @@ Degree detection now reads current profile badges, the current plain-text
 **Remove Connection** action. It returns the detected degree and
 diagnostic evidence. With no positive 1st-degree evidence it records a safe
 `degree_unverified` skip; known 2nd/3rd degrees record `degree_not_first`.
-The guarded AI fallback asks the same detector before it can choose a Contact
-info control, so it cannot reinterpret an eligibility skip as a selector miss.
+Only the deterministic Playwright Contact info path runs after an eligibility
+decision, so an eligibility skip cannot be reinterpreted as a selector miss.
 
 `dailyInviteCap` defaults to 20; `dailyEnrichCap` defaults to **150**. That
 looks backwards until you notice what each action actually is: an invitation
@@ -135,14 +135,12 @@ technically still works.
 
 ### What's unverified
 
-`readContactInfo`'s selectors (`.pv-contact-info`, `.ci-email`, `.ci-phone`,
-`.ci-websites`, `.ci-connected`) are written from LinkedIn's documented
-Contact info overlay markup, the same starting point every other selector in
-`page-actions.js` began from — **not yet run against a live profile.** If the
-overlay never opens, check the "Contact info" trigger-link selector first.
-The direct-overlay and guarded AI fallbacks are implemented, but still need a
-first live-account verification because LinkedIn can change both the overlay
-markup and which top-card controls receive accessible labels.
+`readContactInfo` accepts both the older `.pv-contact-info` shape and the
+current visible dialog's plain **Email**, **IM**, **Phone**, **Website**, and
+**Connected since** rows. It reads a displayed email even if LinkedIn does not
+provide a `mailto:` link. The fixtures exercise the current nested-row markup,
+but a first successful live extraction is still required because LinkedIn can
+change the overlay markup or profile-link URL without notice.
 
 ## Verification
 
@@ -152,7 +150,6 @@ what each outcome costs, technical-failure retries, the CRM merge (both
 resuming an enrollment, and the 7-day timeout, simulated by fast-forwarding
 `nextRunAt`. Run with `npx tsx --env-file=.env scripts/verify-linkedin-enrichment.ts`.
 
-No script yet drives `readContactInfo` against a real or fixture LinkedIn
-page, the way `scripts/verify-desktop-runner.ts` does for invitations — that
-has to wait for the first real run to confirm the selectors, then a fixture
-can be built from what was actually seen.
+`scripts/verify-linkedin-enrichment-selectors.ts` drives the current degree
+header and accessible Contact info dialog fixtures. It does not use a real
+LinkedIn account; a successful live extraction remains the final check.
