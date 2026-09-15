@@ -4,7 +4,7 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { ok, fail } from "@/lib/http";
 import { requireExtAuth } from "@/lib/linkedin/auth";
-import { queueStats } from "@/lib/linkedin/queue";
+import { effectiveInviteCap, queueStats } from "@/lib/linkedin/queue";
 import { corsPreflight, withCors } from "@/lib/linkedin/cors";
 
 export const runtime = "nodejs";
@@ -38,7 +38,7 @@ export async function GET(req: NextRequest) {
       status: account.status,
       liMemberName: account.liMemberName,
       lastSeenAt: account.lastSeenAt,
-      dailyInviteCap: account.dailyInviteCap,
+      dailyInviteCap: effectiveInviteCap(account),
       minDelaySec: account.minDelaySec,
       maxDelaySec: account.maxDelaySec,
       mode: account.mode,
@@ -68,7 +68,7 @@ const PerCampaign = z.object({
 const Body = z.object({
   selectedCampaignIds: z.array(z.string()).optional(),
   mode: z.enum(["auto", "invite", "message"]).optional(),
-  dailyInviteCap: z.number().int().min(1).max(100).optional(),
+  dailyInviteCap: z.number().int().min(1).max(20).optional(),
   minDelaySec: z.number().int().min(10).max(900).optional(),
   maxDelaySec: z.number().int().min(15).max(1200).optional(),
   campaignSettings: z.record(z.string(), PerCampaign).optional(),
@@ -96,7 +96,7 @@ export async function PUT(req: NextRequest) {
     ok({
       mode: updated.mode,
       selectedCampaignIds: updated.selectedCampaignIds,
-      dailyInviteCap: updated.dailyInviteCap,
+      dailyInviteCap: effectiveInviteCap(updated),
       minDelaySec: updated.minDelaySec,
       maxDelaySec: updated.maxDelaySec,
       campaignSettings: updated.campaignSettings,

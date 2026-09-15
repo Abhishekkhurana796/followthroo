@@ -8,6 +8,8 @@ import { CampaignSequence, validateSequence } from "@/lib/campaign-engine";
 import { enrollLeads } from "@/lib/enroll";
 import { CAMPAIGN_INCLUDE } from "@/lib/queries";
 import { requireLimit } from "@/lib/billing/limits";
+import { canUseSendingAccountWhere } from "@/lib/sending-account-access";
+import type { TenantContext } from "@/lib/tenant";
 
 export const runtime = "nodejs";
 
@@ -30,10 +32,10 @@ export async function GET(req: NextRequest) {
   return ok(campaigns);
 }
 
-/** A sending account may only be attached by the org that owns it. */
-async function ownsSendingAccount(orgId: string, accountId: string): Promise<boolean> {
+/** A team member may only attach the mailbox they connected. */
+async function canUseSendingAccount(ctx: TenantContext, accountId: string): Promise<boolean> {
   const hit = await prisma.sendingAccount.findFirst({
-    where: { id: accountId, organizationId: orgId },
+    where: canUseSendingAccountWhere(ctx, accountId),
     select: { id: true },
   });
   return !!hit;
@@ -46,8 +48,8 @@ export async function POST(req: NextRequest) {
   if (gate) return gate;
   const parsed = CreateCampaign.safeParse(await req.json().catch(() => null));
   if (!parsed.success) return fail(parsed.error.issues[0]?.message ?? "invalid body");
-  if (parsed.data.sendingAccountId && !(await ownsSendingAccount(ctx.orgId, parsed.data.sendingAccountId))) {
-    return fail("Sending account not found", 404);
+  if (parsed.data.sendingAccountId && !(await canUseSendingAccount(ctx, parsed.data.sendingAccountId))) {
+    return fail("You can only send from a mailbox you connected.", 403);
   }
   // Beyond Zod's shape check: a sequence can be well-formed and still impossible
   // to run — a connection note that will exceed LinkedIn's 300 characters once

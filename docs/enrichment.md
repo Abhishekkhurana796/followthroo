@@ -25,6 +25,15 @@ and merges anything found into the CRM.
 4. "Look up contact info when an invitation is accepted" (off by default),
    under LinkedIn → Limits.
 
+## Plan access
+
+Profile enrichment is a **Grow ($20/month) and Scale ($50/month)** feature.
+When `BILLING_ENFORCED=1`, lower plans see an upgrade state in Leads and the
+campaign builder; the individual and bulk enqueue route, campaign validation,
+desktop peek/claim endpoints, and campaign completion path also reject or
+skip it server-side. That keeps an old desktop client or a saved campaign from
+bypassing the plan boundary.
+
 ## The engine (`lib/linkedin/enrich.ts`)
 
 Structurally identical to the invite queue (`lib/linkedin/queue.ts`), because
@@ -98,6 +107,13 @@ nobody asked to look up.
   rejected again in the desktop page before any trusted Playwright click.
 
 ### Why the cap is so much lower than invites
+
+Degree detection now reads current profile badges and accessible labels, then
+the explicit **Remove Connection** action. It returns the detected degree and
+diagnostic evidence. With no positive 1st-degree evidence it records a safe
+`degree_unverified` skip; known 2nd/3rd degrees record `degree_not_first`.
+The guarded AI fallback asks the same detector before it can choose a Contact
+info control, so it cannot reinterpret an eligibility skip as a selector miss.
 
 `dailyInviteCap` defaults to 20; `dailyEnrichCap` defaults to **150**. That
 looks backwards until you notice what each action actually is: an invitation

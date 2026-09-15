@@ -19,6 +19,9 @@ import type { Enrollment, Campaign } from "@prisma/client";
 import { INVITE_NOTE_MAX, worstCaseNoteLength } from "./linkedin/note";
 import { startOfOrgDay } from "./org-day";
 import { isOutOfCredits, type Refusal } from "./billing/meter";
+import { billingEnforced } from "./billing/limits";
+import { hasFeature } from "./billing/plans";
+import { workspacePlan } from "./billing/subscription";
 
 const CHANNELS = ["email", "linkedin", "whatsapp", "social"] as const;
 
@@ -152,6 +155,13 @@ export async function validateSequence(
 ): Promise<{ ok: true } | { ok: false; message: string }> {
   const graph = normalizeSequence(raw);
   const nodes = Object.values(graph.nodes);
+
+  if (nodes.some((node) => node.type === "enrich") && billingEnforced()) {
+    const plan = await workspacePlan(organizationId);
+    if (!plan.plan || !hasFeature(plan.plan, "linkedin_enrichment")) {
+      return { ok: false, message: "LinkedIn profile enrichment is available on the Grow plan and above." };
+    }
+  }
 
   // Step numbers are what the person sees in the builder, so errors name those
   // rather than internal node ids.
@@ -351,6 +361,24 @@ export async function resumeWaitingForCredits(organizationId: string) {
 async function advanceEnrich(enr: Enrollment & { campaign: Campaign }, node: z.infer<typeof EnrichNode>) {
   const orgId = enr.organizationId ?? enr.campaign.organizationId;
   if (!orgId) return finish(enr.id, "stopped");
+
+  if (billingEnforced()) {
+    const plan = await workspacePlan(orgId);
+    if (!plan.plan || !hasFeature(plan.plan, "linkedin_enrichment")) {
+      await logActivity({
+        organizationId: orgId,
+        leadId: enr.leadId,
+        campaignId: enr.campaignId,
+        type: "enrichment_skipped",
+        meta: { from: node.id, reason: "plan_required", requiredPlan: "grow" },
+      }).catch(() => {});
+      const nextId = node.next ?? null;
+      if (!nextId) return finish(enr.id, "completed");
+      const graph = normalizeSequence(enr.campaign.sequence);
+      const nextNode = graph.nodes[nextId];
+      return nextNode ? scheduleAdvance(enr.id, nextNode) : finish(enr.id, "completed");
+    }
+  }
 
   const { enqueueEnrichment } = await import("./linkedin/enrich");
   const open = await prisma.linkedInEnrichment.findFirst({
@@ -562,7 +590,8 @@ export async function advanceEnrollment(enrollmentId: string): Promise<void> {
   } else if (node.type === "wait") {
     nextId = node.next ?? null;
   } else if (node.type === "enrich") {
-    return advanceEnrich(enr, node);
+    await advanceEnrich(enr, node);
+    return;
   } else if (node.type === "condition") {
     const yes = await evaluateCondition(enr, node);
     await prisma.enrollment.update({

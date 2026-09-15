@@ -58,15 +58,36 @@ A send with no connected account now fails loudly with a reason the UI shows.
 alerts, SLA escalations). It is a separate function from `emailChannel.send` so the
 line can't blur, and nothing it sends is ever addressed to a lead.
 
-**Tenant scoping:** an account id is a bare uuid, so every lookup is
-`findFirst({ id, organizationId })` and `orgId` is part of the adapter's `send()`
-signature. `/api/campaigns` (POST + PATCH) and `/api/agent` verify the submitted
-account belongs to the caller before attaching it. Guarded by
-`scripts/verify-sending.ts`.
+**Mailbox ownership:** a `SendingAccount` records who connected it. An owner/admin
+can administer the workspace set; a team member only sees, selects, replies from, or
+configures warm-up for their own mailbox. `/api/campaigns` (POST + PATCH),
+`/api/agent`, template tests, inbox replies, and warm-up all enforce this server-side
+instead of trusting the picker. Legacy accounts with no recorded connector remain
+owner/admin-managed until their owner reconnects them.
 
 ---
 
 ## LinkedIn
+
+### Desktop safety limits and sourcing logs
+
+The server is the source of truth for a LinkedIn account's daily invite cap,
+used invitations, remaining capacity, and note allowance. The safe ceiling is
+20 invitations per account/day; a workspace may choose a lower cap. The
+desktop reads that state before a run and displays it rather than persisting a
+device-local count. LinkedIn import history and selector/page-reading errors
+live under **LinkedIn → Your LinkedIn → Logs**; the dashboard starts with the
+Chrome extension pairing steps instead.
+
+### Lead-source delivery health
+
+Settings → Lead sources distinguishes a configured source, one awaiting
+provider credentials, and one awaiting a real provider test delivery. It keeps
+the latest authenticated success or failed-auth reason without storing the
+provider payload. IndiaMART supports Push webhook delivery and optional Pull
+API backfill; JustDial remains account-manager webhook delivery and requires a
+real account sample before its mapping is certified; Meta requires a signed
+webhook plus Graph lookup; Google Ads requires its webhook key.
 
 **Reality:** LinkedIn is stringent. Automation of a personal account is a gray area
 that violates LinkedIn's terms and risks restriction. Use with extreme care.

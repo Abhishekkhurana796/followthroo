@@ -33,6 +33,30 @@ export interface ChangelogEntry {
 export const CHANGELOG: ChangelogEntry[] = [
   {
     product: "desktop",
+    version: "1.15.1",
+    date: "Sep 2026",
+    items: [
+      "Invitation limits and note allowance now come from the server for the linked account; the desktop shows the same used, remaining and 20/day safe cap as queue claiming",
+      "Profile enrichment recognizes current LinkedIn degree badges, accessible labels and Remove Connection evidence, and records clear skipped or selector-failure diagnostics",
+      "Profile enrichment is available on Grow and Scale only, with the desktop showing an upgrade state instead of claiming lower-tier lookups",
+    ],
+  },
+  {
+    product: "webapp",
+    version: "0.29.0",
+    date: "Sep 2026",
+    items: [
+      "LinkedIn now opens with Chrome extension setup; import history and readable page-reading errors moved to Your LinkedIn → Logs",
+      "Public pricing and in-app upgrades now show LinkedIn profile enrichment on Grow and Scale, including its up-to-three-credit refund policy",
+      "Lead source settings now distinguish configured providers, missing credentials, pending real test deliveries, and latest authenticated delivery outcomes",
+      "Leads now have stage, owner and source filters plus an owner/admin CSV export that preserves custom import fields; imports accept CSV or Excel (.xlsx) with the same headers",
+      "Email templates can carry private attachments that campaigns send with the selected template",
+      "Task reminder and daily digest scheduling now has a read-only health check; a failed digest email releases its daily claim so it can retry instead of being silently lost",
+      "A successful lead import now clears prior table filters so the new rows appear immediately; team members can only use the mailbox they connected, never a colleague's identity",
+    ],
+  },
+  {
+    product: "desktop",
     version: "1.15.0",
     date: "Sep 2026",
     items: [

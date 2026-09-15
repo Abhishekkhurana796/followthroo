@@ -13,6 +13,7 @@ import { cn } from "@/lib/cn";
 import { Badge, Banner, DashHeader, Dialog, EmptyState, Input, Label, NoResults, Panel, Select, Skeleton, Textarea, useConfirm, usePrompt } from "@/components/ui";
 import { INVITE_NOTE_MAX, worstCaseNoteLength } from "@/lib/linkedin/note";
 import { CREDIT_COSTS } from "@/lib/billing/plans";
+import { SUMMARY_KEY, type Summary } from "@/components/dashboard/billing/types";
 import { tourTarget } from "@/components/dashboard/tour/target";
 type NextAction = { taskId: string | null; label: string; kind: string; dueAt: string | null; urgent: boolean; source: string };
 type Lead = {
@@ -41,11 +42,12 @@ type Assignees = { self: string; members: { userId: string; name: string; email:
 type Segment = { id: string; name: string; kind: string; count: number; leadIds: string[] };
 type Campaign = { id: string; name: string };
 type ImportResult = { imported: number; skipped: number; errors?: string[] };
+type LeadSource = { key: string; label: string };
 
 const PAGE_SIZE = 50;
 
 /**
- * What the CSV import understands, shown in the Add Lead dialog.
+ * What CSV and Excel imports understand, shown in the Add Lead dialog.
  *
  * "What columns does the CSV need?" was a question the screen could not answer:
  * the only way to find out was to upload a file and read the skip count. Mirrors
@@ -99,6 +101,9 @@ export default function LeadsPage() {
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [tagFilter, setTagFilter] = useState<string[]>([]);
   const [groupFilter, setGroupFilter] = useState("");
+  const [stageFilter, setStageFilter] = useState("");
+  const [ownerFilter, setOwnerFilter] = useState("");
+  const [sourceFilter, setSourceFilter] = useState("");
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [msg, setMsg] = useState<{ kind: "error" | "success" | "info"; text: string } | null>(null);
   const [addOpen, setAddOpen] = useState(false);
@@ -129,9 +134,14 @@ export default function LeadsPage() {
   if (debouncedSearch.trim()) params.set("q", debouncedSearch.trim());
   if (tagFilter.length) params.set("tags", tagFilter.join(","));
   if (groupFilter) params.set("group", groupFilter);
+  if (stageFilter) params.set("stage", stageFilter);
+  if (ownerFilter) params.set("owner", ownerFilter);
+  if (sourceFilter) params.set("source", sourceFilter);
   const { data, isLoading, error, mutate } = useSWR<LeadsResponse>(`/api/leads?${params}`);
   const { data: segments, mutate: mutateSegments } = useSWR<Segment[]>("/api/segments");
   const { data: campaigns } = useSWR<Campaign[]>("/api/campaigns");
+  const { data: sources } = useSWR<LeadSource[]>("/api/lead-sources");
+  const { data: billing } = useSWR<Summary>(SUMMARY_KEY);
   // Who this person may hand contacts to. Same source as task assignment, so the
   // two can never disagree about who reports to whom.
   const { data: assignees } = useSWR<Assignees>("/api/tasks/assignees");
@@ -142,8 +152,9 @@ export default function LeadsPage() {
   const total = data?.total ?? 0;
   // Distinguishes "you have no leads" from "your filters match nothing" —
   // they need different copy and a different action.
-  const hasFilters = !!(debouncedSearch.trim() || tagFilter.length || groupFilter || book);
+  const hasFilters = !!(debouncedSearch.trim() || tagFilter.length || groupFilter || book || stageFilter || ownerFilter || sourceFilter);
   const totalPages = data?.totalPages ?? 1;
+  const enrichmentLocked = !!billing?.enforced && !billing.plan?.features.includes("linkedin_enrichment");
 
   // All tags seen on the current page (for quick filter chips).
   const pageTags = useMemo(() => {
@@ -216,22 +227,68 @@ export default function LeadsPage() {
     }
   }
 
-  async function importCsv(file: File) {
+  async function importFile(file: File) {
     setBusy(true);
     setMsg(null);
     setImportResult(null);
     try {
-      const text = await file.text();
-      const res = await api<ImportResult>("/api/leads/import", { raw: text, contentType: "text/csv" });
+      const isXlsx = /\.xlsx$/i.test(file.name);
+      let res: ImportResult;
+      if (isXlsx) {
+        const form = new FormData();
+        form.set("file", file);
+        const response = await fetch("/api/leads/import", { method: "POST", body: form });
+        const body = await response.json().catch(() => null);
+        if (!response.ok || !body?.ok) throw new Error(body?.error ?? "Could not import the Excel workbook.");
+        res = body.data as ImportResult;
+      } else {
+        const text = await file.text();
+        res = await api<ImportResult>("/api/leads/import", { raw: text, contentType: "text/csv" });
+      }
       // Shown in the dialog, beside the column list: "skipped 3" is only useful
       // next to the reasons and the rules those rows broke.
       setImportResult(res);
+      // The import succeeded but the previous view may have been LinkedIn-only,
+      // an owner/source filter, or page 4. Put the new rows in view immediately
+      // rather than leaving a truthful "Imported 4" beside an empty table.
+      setPage(1);
+      setBook("");
+      setSearch("");
+      setDebouncedSearch("");
+      setTagFilter([]);
+      setGroupFilter("");
+      setStageFilter("");
+      setOwnerFilter("");
+      setSourceFilter("");
       mutate();
     } catch (e) {
       setImportResult({ imported: 0, skipped: 0, errors: [(e as Error).message] });
     } finally {
       setBusy(false);
       if (fileRef.current) fileRef.current.value = "";
+    }
+  }
+
+  async function exportCsv() {
+    setMsg(null);
+    try {
+      const query = new URLSearchParams(params);
+      query.delete("page");
+      query.delete("pageSize");
+      const res = await fetch(`/api/leads/export?${query.toString()}`);
+      if (!res.ok) {
+        const body = await res.json().catch(() => null);
+        throw new Error(body?.error ?? "Could not export leads.");
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "followthroo-leads.csv";
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      setMsg({ kind: "error", text: (e as Error).message });
     }
   }
 
@@ -338,6 +395,10 @@ export default function LeadsPage() {
    * since most of a batch selected from a search often isn't.
    */
   async function bulkEnrich() {
+    if (enrichmentLocked) {
+      setMsg({ kind: "info", text: "LinkedIn profile enrichment is available on Grow and Scale." });
+      return;
+    }
     const est = await api<{ eligible: number; noLinkedIn: number; optedOut: number; alreadyQueued: number }>(
       "/api/linkedin/enrich?estimate=1",
       { body: { leadIds: selectedIds() } },
@@ -401,6 +462,9 @@ export default function LeadsPage() {
                 <button onClick={() => setGroupsOpen(true)} className="btn btn-ghost !py-2 !text-sm">
                   <FolderPlus className="h-4 w-4" /> Groups
                 </button>
+                <button onClick={exportCsv} className="btn btn-ghost !py-2 !text-sm">
+                  <Download className="h-4 w-4" /> Export CSV
+                </button>
               </>
             )}
             <button {...tourTarget("leads-import")} onClick={() => setAddOpen(true)} className="btn btn-primary !py-2 !text-sm">
@@ -410,9 +474,9 @@ export default function LeadsPage() {
         }
       />
 
-      {/* The CSV picker lives outside the dialog so closing the dialog on click
+      {/* The import picker lives outside the dialog so closing the dialog on click
           doesn't unmount the input mid-selection. */}
-      <input ref={fileRef} type="file" accept=".csv,text/csv" className="hidden" onChange={(e) => e.target.files?.[0] && importCsv(e.target.files[0])} />
+      <input ref={fileRef} type="file" accept=".csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" className="hidden" onChange={(e) => e.target.files?.[0] && importFile(e.target.files[0])} />
 
       <div className="space-y-4 p-8">
         {msg ? <Banner kind={msg.kind}>{msg.text}</Banner> : error ? <Banner kind="error">{(error as Error).message}</Banner> : null}
@@ -436,6 +500,20 @@ export default function LeadsPage() {
           <Select value={groupFilter} onChange={(e) => { setGroupFilter(e.target.value); setPage(1); }} className="!w-52 !py-2 text-sm">
             <option value="">All groups</option>
             {(segments ?? []).map((s) => <option key={s.id} value={s.id}>{s.name} ({s.count})</option>)}
+          </Select>
+          <Select value={stageFilter} onChange={(e) => { setStageFilter(e.target.value); setPage(1); }} className="!w-40 !py-2 text-sm">
+            <option value="">All stages</option>
+            <option value="new">New</option><option value="contacted">Contacted</option><option value="replied">Replied</option>
+            <option value="qualified">Qualified</option><option value="won">Won</option><option value="lost">Lost</option>
+          </Select>
+          <Select value={ownerFilter} onChange={(e) => { setOwnerFilter(e.target.value); setPage(1); }} className="!w-44 !py-2 text-sm">
+            <option value="">All owners</option>
+            <option value="unassigned">Unassigned</option>
+            {assignees?.members.map((member) => <option key={member.userId} value={member.userId}>{member.isSelf ? `${member.name} (me)` : member.name}</option>)}
+          </Select>
+          <Select value={sourceFilter} onChange={(e) => { setSourceFilter(e.target.value); setPage(1); }} className="!w-44 !py-2 text-sm">
+            <option value="">All sources</option>
+            {sources?.map((source) => <option key={source.key} value={source.key}>{source.label}</option>)}
           </Select>
           <div className="relative min-w-[240px] flex-1">
             <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-ink-faint" />
@@ -503,6 +581,11 @@ export default function LeadsPage() {
               <Linkedin className="h-3.5 w-3.5" /> Connect on LinkedIn
               <span className="font-mono text-[10px] text-ink-invert/60">{CREDIT_COSTS.li_invite}+ credits each</span>
             </button>
+            {enrichmentLocked ? (
+              <Link href="/dashboard/settings/billing" className="flex items-center gap-1 rounded-lg bg-ink-invert/15 px-2.5 py-1 hover:bg-ink-invert/25">
+                <IdCard className="h-3.5 w-3.5" /> Upgrade for profile lookup
+              </Link>
+            ) : (
             <button
               onClick={bulkEnrich}
               title={`Up to ${CREDIT_COSTS.enrich} credits each — refunded for anything not found, free if not a 1st-degree connection`}
@@ -511,6 +594,7 @@ export default function LeadsPage() {
               <IdCard className="h-3.5 w-3.5" /> Find email &amp; phone
               <span className="font-mono text-[10px] text-ink-invert/60">up to {CREDIT_COSTS.enrich} each</span>
             </button>
+            )}
             <button onClick={() => setSelected(new Set())} className="ml-auto text-ink-invert/70 hover:text-ink-invert">Clear</button>
           </div>
         )}
@@ -551,7 +635,7 @@ export default function LeadsPage() {
                     {hasFilters ? (
                       <NoResults
                         query={debouncedSearch.trim() || undefined}
-                        onClear={() => { setSearch(""); setTagFilter([]); setGroupFilter(""); setBook(""); setPage(1); }}
+                        onClear={() => { setSearch(""); setTagFilter([]); setGroupFilter(""); setStageFilter(""); setOwnerFilter(""); setSourceFilter(""); setBook(""); setPage(1); }}
                       />
                     ) : (
                       <EmptyState
@@ -963,7 +1047,7 @@ function AddLeadDialog({
           <Plus className="mx-auto mb-1 h-3.5 w-3.5" /> Add manually
         </button>
         <button onClick={() => setTab("csv")} className={tabClass(tab === "csv")}>
-          <Upload className="mx-auto mb-1 h-3.5 w-3.5" /> Import CSV
+          <Upload className="mx-auto mb-1 h-3.5 w-3.5" /> Import CSV or Excel
         </button>
       </div>
 
@@ -1031,7 +1115,7 @@ function AddLeadDialog({
               <Download className="h-4 w-4" /> Sample CSV
             </button>
             <button type="button" onClick={onImport} disabled={busy} className="btn btn-primary !py-2 !text-sm disabled:opacity-50">
-              <Upload className="h-4 w-4" /> {busy ? "Importing…" : "Choose CSV file"}
+              <Upload className="h-4 w-4" /> {busy ? "Importing…" : "Choose CSV or Excel"}
             </button>
           </div>
         </div>

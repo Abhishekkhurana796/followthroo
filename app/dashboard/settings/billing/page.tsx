@@ -352,6 +352,7 @@ function PlanPicker({ data, payment }: { data: Summary; payment: Payment }) {
                   {plan.limits.inboxes === 1 ? "inbox" : "inboxes"}
                 </li>
                 <li>{plan.limits.leads === null ? "Unlimited leads" : `${count(plan.limits.leads)} leads stored`}</li>
+                <li>{plan.features.includes("linkedin_enrichment") ? "LinkedIn profile enrichment included" : "LinkedIn profile enrichment on Grow and Scale"}</li>
               </ul>
               <button
                 type="button"

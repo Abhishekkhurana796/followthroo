@@ -43,7 +43,7 @@ const CARD: Record<PlanId, { cta: string; buys: string; extras: string[] }> = {
   grow: {
     cta: "Choose Grow",
     buys: "≈ 40 invites + 100 emails + 3 AI posts",
-    extras: ["Lead assignment, roles, team view", "Premium AI models"],
+    extras: ["Lead assignment, roles, team view", "LinkedIn profile enrichment", "Premium AI models"],
   },
   scale: { cta: "Choose Scale", buys: "≈ 100 invites + 300 emails + 15 AI posts", extras: ["Escalations and SLA rules", "Everything in Grow"] },
 };
@@ -71,6 +71,7 @@ const COMPARE: { title: string; rows: Row[] }[] = [
       { label: "Email, LinkedIn, WhatsApp and SMS", cell: () => "Uses credits" },
       { label: "Reports overview", cell: () => true },
       { label: "Deliverability report", cell: (p) => hasFeature(p, "deliverability") },
+      { label: "LinkedIn profile enrichment", cell: (p) => hasFeature(p, "linkedin_enrichment") },
       { label: "Lead assignment", cell: (p) => (hasFeature(p, "lead_assignment") ? true : p.billing === "monthly" ? "Just you" : false) },
       { label: "Roles: admin and group lead", cell: (p) => hasFeature(p, "roles") },
       { label: "Control tower and ageing reports", cell: (p) => hasFeature(p, "team_reports") },
@@ -116,7 +117,6 @@ const COSTS: { label: string; note?: string; credits: number | "Free"; soon?: bo
     label: "Find email and phone on LinkedIn",
     note: `1 back per missing field · all ${CREDIT_COSTS.enrich} back if not a connection`,
     credits: CREDIT_COSTS.enrich,
-    soon: true,
   },
   { label: "WhatsApp or SMS message", note: "On your own number or provider", credits: CREDIT_COSTS.whatsapp_send },
   { label: "AI reply draft", credits: CREDIT_COSTS.ai_draft },

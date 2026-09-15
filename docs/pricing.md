@@ -50,6 +50,19 @@ both numbers side by side for that reason.
 
 ### Credits
 
+### LinkedIn profile enrichment access
+
+**LinkedIn profile enrichment is included on Grow ($20/month) and Scale
+($50/month) only.** Test Drive and Start can still import LinkedIn leads and
+send invitations, but cannot queue or run a Contact info lookup. The API,
+campaign validator, desktop queue endpoints, and UI all enforce the same
+`linkedin_enrichment` feature gate when billing is enabled.
+
+An eligible lookup reserves up to 3 credits: one each for opening Contact
+info, finding an email, and finding a phone. One credit is returned for every
+missing field, and all reserved credits are returned when the profile is not a
+1st-degree connection or the lookup fails technically.
+
 | Action | Credits |
 |---|---|
 | Email sent | 1 |

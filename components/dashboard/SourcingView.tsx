@@ -16,6 +16,7 @@ type Job = {
   importedAt: string | null;
   importedCount: number;
   failureKind: string | null;
+  error: string | null;
   createdAt: string;
   outcome: string;
 };
@@ -85,6 +86,7 @@ export function SourcingView() {
                   <span className="truncate text-sm font-medium">{j.outcome}</span>
                 </div>
                 <p className="mt-0.5 truncate font-mono text-[11px] text-ink-faint">{j.inputUrl}</p>
+                {j.error && <p className="mt-1 text-xs text-warning-strong">{j.error}</p>}
               </div>
 
               <div className="flex items-center gap-2">

@@ -3,6 +3,7 @@ import { ok } from "@/lib/http";
 import { requireExtAuth } from "@/lib/linkedin/auth";
 import { corsPreflight, withCors } from "@/lib/linkedin/cors";
 import { peekEnrichments } from "@/lib/linkedin/enrich";
+import { requireFeature } from "@/lib/billing/limits";
 
 export const runtime = "nodejs";
 
@@ -14,6 +15,9 @@ export function OPTIONS() {
 export async function GET(req: NextRequest) {
   const account = await requireExtAuth(req);
   if (account instanceof Response) return withCors(account);
+
+  const locked = await requireFeature(account.organizationId, "linkedin_enrichment", "LinkedIn profile enrichment");
+  if (locked) return withCors(locked);
 
   const client = req.headers.get("x-followthroo-client");
   if (client !== "desktop") return withCors(ok({ queued: 0, people: [], daily: { used: 0, cap: 0, remaining: 0 } }));

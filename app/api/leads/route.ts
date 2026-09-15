@@ -1,6 +1,6 @@
 import { NextRequest } from "next/server";
 import { z } from "zod";
-import { Prisma } from "@prisma/client";
+import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { ok, fail } from "@/lib/http";
 import { requireOrg } from "@/lib/tenant";
@@ -8,10 +8,10 @@ import { leadScope, resolveViewAs, unassignedScope } from "@/lib/scope";
 import { canAssignTo } from "@/lib/tasks";
 import { ensureSource } from "@/lib/identity";
 import { resolveLeadOwner } from "@/lib/assignment";
-import { resolveSegmentLeadIds } from "@/lib/segments";
 import { enrichLeadRows } from "@/lib/queries";
 import { cached, invalidate } from "@/lib/cache";
 import { requireLimit } from "@/lib/billing/limits";
+import { leadFiltersKey, leadWhere, readLeadFilters } from "@/lib/lead-filters";
 
 export const runtime = "nodejs";
 
@@ -58,13 +58,7 @@ export async function GET(req: NextRequest) {
 
   const scope = unassigned ? { where: unassigned, userIds: null } : await leadScope(ctx, viewAs);
 
-  const stage = searchParams.get("stage") ?? undefined;
-  const q = searchParams.get("q")?.trim() || undefined;
-  const company = searchParams.get("company")?.trim() || undefined;
-  const book = searchParams.get("book") ?? undefined; // "email" | "linkedin"
-  const group = searchParams.get("group") ?? undefined; // segmentId
-  const tags = searchParams.get("tags")?.split(",").map((t) => t.trim()).filter(Boolean);
-  const ids = searchParams.get("ids")?.split(",").map((id) => id.trim()).filter(Boolean);
+  const filters = readLeadFilters(searchParams);
 
   // Parsed defensively: Number("abc") is NaN, and a NaN take or skip reached
   // Prisma and failed the whole request with a 500 instead of using the default.
@@ -76,36 +70,12 @@ export async function GET(req: NextRequest) {
   const page = Math.max(int(searchParams.get("page"), 1), 1);
   const skip = searchParams.has("skip") ? Math.max(int(searchParams.get("skip"), 0), 0) : (page - 1) * pageSize;
 
-  // A saved group resolves to a concrete set of lead ids (static or dynamic).
-  const groupIds = group ? await resolveSegmentLeadIds(orgId, group) : undefined;
-  const idFilter = ids ?? groupIds;
-
-  // AND, not a spread: the scope carries its own OR (assigned / created by me /
-  // unassigned) and the search below carries another. Merged into one object the
-  // second would silently replace the first and widen the result set.
-  const where: Prisma.LeadWhereInput = {
-    AND: [scope.where],
-    ...(idFilter ? { id: { in: idFilter } } : {}),
-    ...(stage ? { stage: stage as never } : {}),
-    ...(company ? { company: { equals: company, mode: "insensitive" } } : {}),
-    ...(book === "email" ? { email: { not: null } } : book === "linkedin" ? { linkedinUrl: { not: null } } : {}),
-    ...(tags && tags.length ? { tags: { hasSome: tags } } : {}),
-    ...(q
-      ? {
-          OR: [
-            { email: { contains: q, mode: "insensitive" } },
-            { firstName: { contains: q, mode: "insensitive" } },
-            { lastName: { contains: q, mode: "insensitive" } },
-            { company: { contains: q, mode: "insensitive" } },
-          ],
-        }
-      : {}),
-  };
+  const where = await leadWhere(orgId, scope.where, filters);
 
   // The scope is part of the cache key: without it a member would be served the
   // owner's cached count and see a total that does not match their own list.
   const scopeKey = scope.userIds ? scope.userIds.join("+") : "all";
-  const filterKey = `leads:count:${orgId}:${scopeKey}:${stage ?? ""}:${company ?? ""}:${book ?? ""}:${group ?? ""}:${(tags ?? []).join("|")}:${q ?? ""}`;
+  const filterKey = `leads:count:${orgId}:${scopeKey}:${leadFiltersKey(filters)}`;
   const [rows, total] = await Promise.all([
     prisma.lead.findMany({ where, orderBy: { createdAt: "desc" }, take: pageSize, skip }),
     cached(filterKey, 15_000, () => prisma.lead.count({ where })),

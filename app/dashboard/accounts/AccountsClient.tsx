@@ -125,7 +125,7 @@ export default function SendingAccountsPage() {
     <>
       <DashHeader
         title="Mailboxes & domains"
-        subtitle="The domains you send from, and the mailboxes that send."
+        subtitle="Connect and send from your own mailbox. Teammates cannot send as you."
       />
       {/* Domains come first: on this screen the domain is the container and the
           mailbox is the thing inside it, so reading order should match. */}

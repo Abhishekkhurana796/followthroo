@@ -1,5 +1,4 @@
 import { NextRequest } from "next/server";
-import Papa from "papaparse";
 import { prisma } from "@/lib/db";
 import { ok, fail } from "@/lib/http";
 import { requireOrg } from "@/lib/tenant";
@@ -8,8 +7,10 @@ import { resolveLeadOwner } from "@/lib/assignment";
 import { invalidate } from "@/lib/cache";
 import { LIMITS, tooMany } from "@/lib/api-ratelimit";
 import { roomFor } from "@/lib/billing/limits";
+import { parseCsvRows, parseXlsxRows, type ImportRow } from "@/lib/lead-import-file";
 
 export const runtime = "nodejs";
+const MAX_XLSX_BYTES = 10 * 1024 * 1024;
 
 // Known columns map onto lead fields; everything else becomes a custom variable.
 // Keep in step with IMPORT_COLUMNS in app/dashboard/leads/LeadsClient.tsx, which
@@ -20,7 +21,7 @@ const KNOWN = new Set([
   "company", "title", "tags",
 ]);
 
-function normalizeRow(row: Record<string, string>) {
+function normalizeRow(row: ImportRow) {
   const lead: Record<string, unknown> = {};
   const custom: Record<string, unknown> = {};
   for (const [rawKey, value] of Object.entries(row)) {
@@ -69,17 +70,25 @@ export async function POST(req: NextRequest) {
   const { orgId } = ctx;
 
   const contentType = req.headers.get("content-type") ?? "";
-  let csv: string;
-  if (contentType.includes("application/json")) {
-    const j = await req.json().catch(() => null);
-    csv = j?.csv;
-  } else {
-    csv = await req.text();
+  let rows: ImportRow[];
+  try {
+    if (contentType.includes("multipart/form-data")) {
+      const form = await req.formData();
+      const file = form.get("file");
+      if (!(file instanceof File)) return fail("attach an .xlsx file");
+      if (!/\.xlsx$/i.test(file.name)) return fail("only .xlsx files are supported for Excel imports");
+      if (file.size > MAX_XLSX_BYTES) return fail("Excel files must be 10 MB or smaller");
+      rows = parseXlsxRows(await file.arrayBuffer());
+    } else {
+      const csv = contentType.includes("application/json")
+        ? (await req.json().catch(() => null))?.csv
+        : await req.text();
+      if (typeof csv !== "string" || csv.trim() === "") return fail("empty CSV");
+      rows = parseCsvRows(csv);
+    }
+  } catch (error) {
+    return fail(error instanceof Error ? error.message : "Could not read the import file.");
   }
-  if (!csv || csv.trim() === "") return fail("empty CSV");
-
-  const parsed = Papa.parse<Record<string, string>>(csv, { header: true, skipEmptyLines: true });
-  if (parsed.errors.length) return fail(`CSV parse error: ${parsed.errors[0].message}`);
 
   // Imported contacts get the "csv" source and the importer as creator.
   //
@@ -97,7 +106,7 @@ export async function POST(req: NextRequest) {
   // which also skips the extra lookup email rows would otherwise need.
   let room = await roomFor(orgId, "leads");
   let overStorage = 0;
-  for (const row of parsed.data) {
+  for (const row of rows) {
     const { lead, custom } = normalizeRow(row);
     const email = lead.email as string | undefined;
     const linkedinUrl = lead.linkedinUrl as string | undefined;

@@ -4,6 +4,7 @@ import { prisma } from "@/lib/db";
 import { ok, fail } from "@/lib/http";
 import { requireOrg } from "@/lib/tenant";
 import { enqueueEnrichment, estimateEnrichment } from "@/lib/linkedin/enrich";
+import { requireFeature } from "@/lib/billing/limits";
 
 export const runtime = "nodejs";
 
@@ -20,6 +21,8 @@ const Body = z.object({ leadIds: z.array(z.string()).min(1).max(2000) });
 export async function POST(req: NextRequest) {
   const ctx = await requireOrg(req);
   if (ctx instanceof Response) return ctx;
+  const locked = await requireFeature(ctx.orgId, "linkedin_enrichment", "LinkedIn profile enrichment");
+  if (locked) return locked;
   const parsed = Body.safeParse(await req.json().catch(() => null));
   if (!parsed.success) return fail("Pass leadIds.", 422);
 
@@ -36,5 +39,6 @@ export async function POST(req: NextRequest) {
       enqueueEnrichment({ organizationId: ctx.orgId, leadId: l.id, linkedinUrl: l.linkedinUrl!, source: "bulk" }),
     ),
   );
-  return ok({ queued: queued.length, skipped: parsed.data.leadIds.length - queued.length });
+  const queuedCount = queued.filter(Boolean).length;
+  return ok({ queued: queuedCount, skipped: parsed.data.leadIds.length - queuedCount });
 }

@@ -14,6 +14,8 @@ import { SEED_TEMPLATES } from "./templates-seed";
 import { nextActionsFor, nextActionFor, getTaskBuckets, startOfToday, type NextAction } from "./tasks";
 import { getBoard } from "./pipeline";
 import type { Prisma } from "@prisma/client";
+import type { TenantContext } from "./tenant";
+import { sendingAccountWhere } from "./sending-account-access";
 
 /**
  * The only safe projection of a SendingAccount. The row also carries `pass`,
@@ -93,9 +95,9 @@ export async function getSendingDomains(orgId: string) {
   };
 }
 
-export function getSendingAccounts(orgId: string) {
+export function getSendingAccounts(ctx: TenantContext) {
   return prisma.sendingAccount.findMany({
-    where: { organizationId: orgId },
+    where: sendingAccountWhere(ctx),
     orderBy: { createdAt: "desc" },
     select: SEND_ACCOUNT_SELECT,
   });

@@ -1,5 +1,6 @@
 import { NextRequest } from "next/server";
 import { z } from "zod";
+import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { ok, fail } from "@/lib/http";
 import { requireOrg } from "@/lib/tenant";
@@ -8,6 +9,7 @@ import { renderMessage, spamScore, formatEmailBody } from "@/lib/templates";
 import { safeSend } from "@/lib/channels";
 import { defaultSendingAccountId } from "@/lib/channels/email";
 import { requireLimit } from "@/lib/billing/limits";
+import { EmailAttachmentsSchema, readEmailAttachments } from "@/lib/email-attachments";
 
 export const runtime = "nodejs";
 
@@ -30,7 +32,7 @@ export async function GET(req: NextRequest, { params }: Ctx) {
     include: {
       versions: {
         orderBy: { version: "desc" },
-        select: { id: true, version: true, subject: true, body: true, createdAt: true, createdById: true },
+        select: { id: true, version: true, subject: true, body: true, attachments: true, createdAt: true, createdById: true },
       },
     },
   });
@@ -49,6 +51,7 @@ const UpdateTemplate = z.object({
   name: z.string().min(1).optional(),
   subject: z.string().nullable().optional(),
   body: z.string().min(1).optional(),
+  attachments: EmailAttachmentsSchema.optional(),
   /** What to do about campaigns already running on this template. */
   apply: z.enum(APPLY_MODES).default("future_only"),
   /** Required when apply is "this_campaign". */
@@ -63,6 +66,10 @@ export async function PATCH(req: NextRequest, { params }: Ctx) {
   const parsed = UpdateTemplate.safeParse(await req.json().catch(() => null));
   if (!parsed.success) return fail(parsed.error.issues[0]?.message ?? "invalid body");
   const { apply, campaignId, ...next } = parsed.data;
+
+  const existing = await prisma.template.findFirst({ where: { id, organizationId: ctx.orgId }, select: { channel: true } });
+  if (!existing) return fail("Template not found", 404);
+  if (next.attachments?.length && existing.channel !== "email") return fail("Attachments are available on email templates only.", 422);
 
   if (apply === "this_campaign" && !campaignId) {
     return fail("Choosing 'this campaign' needs a campaignId.", 400);
@@ -148,6 +155,7 @@ export async function POST(req: NextRequest, { params }: Ctx) {
         name: `${template.name} (copy)`,
         subject: template.subject,
         body: template.body,
+        attachments: template.attachments as Prisma.InputJsonValue,
         variables: extractVariables(template.subject, template.body),
         createdById: ctx.userId,
       },
@@ -185,7 +193,7 @@ export async function POST(req: NextRequest, { params }: Ctx) {
   const me = await prisma.user.findUnique({ where: { id: ctx.userId }, select: { email: true } });
   if (!me?.email) return fail("Your account has no email address to send a test to.", 400);
 
-  const account = await defaultSendingAccountId(ctx.orgId);
+  const account = await defaultSendingAccountId(ctx.orgId, ctx.userId);
   if (!account) return fail("Connect a mailbox before sending a test.", 400);
 
   const result = await safeSend(
@@ -196,7 +204,7 @@ export async function POST(req: NextRequest, { params }: Ctx) {
     ctx.orgId,
     undefined,
     // A test goes to the person who asked for it, not to a contact, so it costs nothing.
-    { free: true }
+    { free: true, attachments: readEmailAttachments(template.attachments) }
   );
 
   if (!result.ok) return fail(result.error ?? result.reason ?? "Test send failed", 400);

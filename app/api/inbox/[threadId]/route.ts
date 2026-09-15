@@ -10,6 +10,7 @@ import { recordOutbound } from "@/lib/inbox/store";
 import { buildRfcMessageId, domainOfAddress } from "@/lib/inbox/threading";
 import { logActivity } from "@/lib/crm";
 import { leadScope } from "@/lib/scope";
+import { sendingAccountWhere } from "@/lib/sending-account-access";
 
 export const runtime = "nodejs";
 
@@ -137,13 +138,14 @@ export async function POST(req: NextRequest, { params }: Ctx) {
   if (!thread) return fail("not found", 404);
   if (!thread.lead?.email) return fail("thread has no lead email to reply to", 400);
 
-  // The workspace's own mailbox. No platform fallback: replying from Followthroo's
-  // address would strand the contact's answer in an inbox nobody polls.
+  // Reply from the caller's own connected mailbox. A teammate must never answer
+  // from a colleague's identity just because it is the oldest workspace account.
   const account = await prisma.sendingAccount.findFirst({
-    where: { organizationId: ctx.orgId, active: true },
+    where: { ...sendingAccountWhere(ctx), active: true },
     orderBy: { createdAt: "asc" },
     select: { id: true, email: true },
   });
+  if (!account) return fail("Connect your own mailbox before sending a reply.", 400);
 
   const subject = parsed.data.subject ?? (thread.subject ? `Re: ${thread.subject}` : "Re:");
   // Stamped like a campaign send, so an answer to this reply threads back to it.
@@ -153,7 +155,7 @@ export async function POST(req: NextRequest, { params }: Ctx) {
     "email",
     { id: thread.lead.id, email: thread.lead.email, firstName: thread.lead.firstName },
     { subject, body: parsed.data.body },
-    account?.id,
+    account.id,
     ctx.orgId,
     rfcMessageId,
     // Typed by a person, answering someone who wrote in: that's the inbox, which is free.

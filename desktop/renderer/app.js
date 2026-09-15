@@ -132,6 +132,12 @@ async function loadInvites() {
     el.inviteStart.dataset.empty = "1"; el.inviteDry.dataset.empty = "1"; setRunning(activeLane); return;
   }
   const people = res.people || [], held = res.held || [], all = [...people, ...held];
+  if (res.usage) {
+    inviteCap = res.usage.cap;
+    el.cap.textContent = String(res.usage.cap);
+    el.sent.textContent = String(res.usage.used);
+    progress(el.inviteBar, res.usage.used, res.usage.cap);
+  }
   el.inviteCount.textContent = String(all.length); el.inviteWho.innerHTML = "";
   if (!all.length) emptyRow(el.inviteWho, "Nothing queued. Add leads in the web app, then choose Connect on LinkedIn.");
   else all.forEach((person, index) => el.inviteWho.append(personRow(person, index + 1)));
@@ -147,7 +153,12 @@ async function loadInvites() {
 async function loadEnrichment() {
   const res = await window.ft.peekEnrichment();
   if (!res.ok) {
-    emptyRow(el.enrichWho, res.error); el.enrichCount.textContent = "—"; el.enrichNote.textContent = "";
+    const locked = /isn't included|upgrade to use it/i.test(res.error || "");
+    emptyRow(el.enrichWho, locked ? "Profile enrichment is available on Grow and Scale." : res.error);
+    el.enrichCount.textContent = "—";
+    el.enrichNote.textContent = locked ? "Upgrade in the Followthroo web app, then reload this queue." : "";
+    el.enrichStatus.textContent = locked ? "Upgrade required" : "Unavailable";
+    el.enrichStart.textContent = locked ? "Upgrade in web app" : "Profile lookup unavailable";
     el.enrichStart.dataset.empty = "1"; setRunning(activeLane); return;
   }
   const people = res.people || [], daily = res.daily || { used: 0, cap: 0, remaining: 0 };
@@ -223,7 +234,9 @@ el.updateBtn.addEventListener("click", async () => { el.updateBtn.disabled = tru
 async function load() {
   const settings = await window.ft.getSettings();
   if (settings.version) el.version.textContent = `v${settings.version}`;
-  inviteCap = settings.maxPerDay; el.cap.textContent = String(inviteCap); el.sent.textContent = String(settings.sentToday); progress(el.inviteBar, settings.sentToday, inviteCap);
+  // A brief loading fallback only. loadInvites immediately replaces this with
+  // the server's shared queue usage, so another computer cannot over-send.
+  inviteCap = settings.maxPerDay; el.cap.textContent = "…"; el.sent.textContent = "…"; progress(el.inviteBar, 0, inviteCap);
   el.apiBase.value = settings.apiBase; el.token.value = settings.token; setRunning(settings.running ? settings.runningMode || "invite" : null);
   if (!settings.token) { el.settings.open = true; el.inviteNow.textContent = "Sign in or paste a pairing token to begin."; }
   await refreshAuth(); await loadQueues();

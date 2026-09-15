@@ -1,14 +1,15 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import useSWR from "swr";
 import { api } from "@/lib/client";
 import { Banner, DashHeader, EmptyState, Input, Label, Panel, Select, Textarea, useConfirm } from "@/components/ui";
-import { FileText, Pencil, Copy, Archive, Eye, Send, History, Search, Plus, X, AlertTriangle, Bot, RotateCcw, Trash2 } from "lucide-react";
+import { FileText, Pencil, Copy, Archive, Eye, Send, History, Search, Plus, X, AlertTriangle, Bot, RotateCcw, Trash2, Paperclip } from "lucide-react";
 import Link from "next/link";
 
-type Template = { id: string; channel: string; name: string; subject: string | null; body: string; updatedAt?: string };
-type Version = { id: string; version: number; subject: string | null; body: string; createdAt: string };
+type EmailAttachment = { url: string; name: string; contentType: string; size: number };
+type Template = { id: string; channel: string; name: string; subject: string | null; body: string; attachments?: EmailAttachment[]; updatedAt?: string };
+type Version = { id: string; version: number; subject: string | null; body: string; attachments?: EmailAttachment[]; createdAt: string };
 type Campaign = { id: string; name: string; status: string };
 type Detail = Template & {
   versions: Version[];
@@ -48,7 +49,7 @@ const APPLY_OPTIONS = [
   },
 ] as const;
 
-const EMPTY_FORM = { channel: "email", name: "", subject: "", body: "" };
+const EMPTY_FORM = { channel: "email", name: "", subject: "", body: "", attachments: [] as EmailAttachment[] };
 
 export default function TemplatesPage() {
   const { data: templates = [], mutate } = useSWR<Template[]>("/api/templates");
@@ -170,7 +171,7 @@ export default function TemplatesPage() {
           <form onSubmit={create} className="mt-4 space-y-3">
             <div>
               <Label>Channel</Label>
-              <Select value={form.channel} onChange={(e) => setForm({ ...form, channel: e.target.value })}>
+              <Select value={form.channel} onChange={(e) => setForm({ ...form, channel: e.target.value, attachments: e.target.value === "email" ? form.attachments : [] })}>
                 <option value="email">Email</option>
                 <option value="linkedin">LinkedIn</option>
                 <option value="whatsapp">WhatsApp</option>
@@ -181,6 +182,7 @@ export default function TemplatesPage() {
               <Label>Name *</Label>
               <Input required value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="HR Outreach — First Contact" />
             </div>
+            {form.channel === "email" && <AttachmentPicker attachments={form.attachments} onChange={(attachments) => setForm({ ...form, attachments })} />}
             {form.channel === "email" && (
               <div>
                 <Label>Subject</Label>
@@ -279,6 +281,7 @@ export default function TemplatesPage() {
                     <div className="min-w-0">
                       <h3 className="font-display text-lg font-bold">{t.name}</h3>
                       {t.subject && <div className="mt-1 text-sm font-medium">{t.subject}</div>}
+                      {!!t.attachments?.length && <div className="mt-1 flex items-center gap-1 text-xs text-ink-soft"><Paperclip className="h-3 w-3" /> {t.attachments.length} attachment{t.attachments.length === 1 ? "" : "s"}</div>}
                     </div>
                     <span className="shrink-0 rounded-full bg-tint px-2.5 py-0.5 font-mono text-xs">{t.channel}</span>
                   </div>
@@ -336,6 +339,7 @@ function TemplateEditor({
   const [name, setName] = useState(template.name);
   const [subject, setSubject] = useState(template.subject ?? "");
   const [body, setBody] = useState(template.body);
+  const [attachments, setAttachments] = useState<EmailAttachment[]>(template.attachments ?? []);
   const [apply, setApply] = useState<(typeof APPLY_OPTIONS)[number]["value"]>("future_only");
   const [campaignId, setCampaignId] = useState("");
   const [preview, setPreview] = useState<Preview | null>(null);
@@ -345,7 +349,7 @@ function TemplateEditor({
   const [showHistory, setShowHistory] = useState(false);
 
   const running = detail?.usedBy ?? [];
-  const dirty = name !== template.name || subject !== (template.subject ?? "") || body !== template.body;
+  const dirty = name !== template.name || subject !== (template.subject ?? "") || body !== template.body || JSON.stringify(attachments) !== JSON.stringify(template.attachments ?? []);
 
   async function act<T>(fn: () => Promise<T>, onOk?: (r: T) => void) {
     setBusy(true);
@@ -365,7 +369,7 @@ function TemplateEditor({
       () =>
         api<{ campaignsAffected: number; version: number }>(`/api/templates/${template.id}`, {
           method: "PATCH",
-          body: { name, subject: subject || null, body, apply, ...(apply === "this_campaign" ? { campaignId } : {}) },
+          body: { name, subject: subject || null, body, ...(template.channel === "email" ? { attachments } : {}), apply, ...(apply === "this_campaign" ? { campaignId } : {}) },
         }),
       (r) =>
         onSaved(
@@ -394,6 +398,7 @@ function TemplateEditor({
           <Label>Template name</Label>
           <Input value={name} onChange={(e) => setName(e.target.value)} />
         </div>
+        {template.channel === "email" && <AttachmentPicker attachments={attachments} onChange={setAttachments} />}
         {template.channel === "email" && (
           <div>
             <Label>Subject</Label>
@@ -505,6 +510,7 @@ function TemplateEditor({
                       <span className="text-ink-soft">{new Date(v.createdAt).toLocaleString()}</span>
                     </div>
                     <pre className="mt-1 max-h-24 overflow-y-auto whitespace-pre-wrap font-sans text-xs text-ink-soft">{v.body}</pre>
+                    {!!v.attachments?.length && <div className="mt-1 flex items-center gap-1 text-xs text-ink-soft"><Paperclip className="h-3 w-3" /> {v.attachments.length} attachment{v.attachments.length === 1 ? "" : "s"}</div>}
                   </div>
                 ))}
               </div>
@@ -514,4 +520,38 @@ function TemplateEditor({
       </div>
     </Panel>
   );
+}
+
+function AttachmentPicker({ attachments, onChange }: { attachments: EmailAttachment[]; onChange: (attachments: EmailAttachment[]) => void }) {
+  const input = useRef<HTMLInputElement>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function upload(file: File) {
+    if (attachments.length >= 5) return setError("An email template can have up to 5 attachments.");
+    setBusy(true); setError(null);
+    try {
+      const form = new FormData(); form.set("file", file);
+      const res = await fetch("/api/templates/attachments", { method: "POST", body: form });
+      const payload = await res.json().catch(() => null);
+      if (!res.ok || !payload?.ok) throw new Error(payload?.error ?? "Could not upload attachment.");
+      onChange([...attachments, payload.data.attachment as EmailAttachment]);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+      if (input.current) input.current.value = "";
+    }
+  }
+
+  return <div>
+    <Label>Attachments</Label>
+    <input ref={input} type="file" className="hidden" accept=".pdf,.txt,.csv,.zip,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.jpg,.jpeg,.png,.webp" onChange={(e) => e.target.files?.[0] && upload(e.target.files[0])} />
+    <div className="mt-1.5 flex flex-wrap gap-2">
+      {attachments.map((attachment) => <span key={attachment.url} className="inline-flex max-w-full items-center gap-1 rounded-full bg-tint px-2.5 py-1 text-xs"><Paperclip className="h-3 w-3 shrink-0" /><span className="truncate">{attachment.name}</span><button type="button" aria-label={`Remove ${attachment.name}`} onClick={() => onChange(attachments.filter((item) => item.url !== attachment.url))} className="ml-0.5 text-ink-soft hover:text-danger"><X className="h-3 w-3" /></button></span>)}
+      <button type="button" disabled={busy || attachments.length >= 5} onClick={() => input.current?.click()} className="btn btn-ghost !px-2.5 !py-1 text-xs disabled:opacity-50"><Paperclip className="h-3.5 w-3.5" /> {busy ? "Uploading…" : "Add file"}</button>
+    </div>
+    <p className="mt-1 text-xs text-ink-soft">Up to 5 private files, 10MB each. PDF, Office, ZIP, CSV, text and images.</p>
+    {error && <p className="mt-1 text-xs text-danger">{error}</p>}
+  </div>;
 }

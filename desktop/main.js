@@ -390,14 +390,13 @@ ipcMain.handle("queue:peek", async () => {
   const check = store.normaliseApiBase(settings.apiBase);
   if (!check.ok) return { ok: false, error: check.error };
 
-  const remaining = Math.max(0, MAX_PER_DAY - settings.sentToday);
   try {
-    const data = await requestJson(check.value, `/api/linkedin/queue?peek=1&limit=${Math.max(1, remaining)}`, {
+    const data = await requestJson(check.value, "/api/linkedin/queue?peek=1&limit=50", {
       token: settings.token,
       operation: "Read invitation queue",
       retry: "read",
     });
-    return { ok: true, ...data, remaining };
+    return { ok: true, ...data };
   } catch (e) {
     return { ok: false, error: String((e && e.message) || e) };
   }
@@ -468,9 +467,22 @@ ipcMain.handle("run:start", async (_e, { mode = "invite", dryRun = false } = {})
   const check = store.normaliseApiBase(settings.apiBase);
   if (!check.ok) return { ok: false, error: check.error };
 
-  const remaining = Math.max(0, MAX_PER_DAY - settings.sentToday);
-  if (mode === "invite" && remaining === 0 && !dryRun) {
-    return { ok: false, error: `Today's ${MAX_PER_DAY} invitations have already gone out. Try again tomorrow.` };
+  let invitationUsage = null;
+  if (mode === "invite") {
+    try {
+      const peek = await requestJson(check.value, "/api/linkedin/queue?peek=1&limit=1", {
+        token: settings.token,
+        operation: "Read invitation limit",
+        retry: "read",
+      });
+      invitationUsage = peek.usage;
+    } catch (e) {
+      return { ok: false, error: `Could not read today's invitation limit: ${String((e && e.message) || e)}` };
+    }
+    if (!dryRun && (!invitationUsage || invitationUsage.remaining <= 0)) {
+      const cap = invitationUsage?.cap ?? MAX_PER_DAY;
+      return { ok: false, error: `Today's ${cap} invitations have already gone out. Try again tomorrow.` };
+    }
   }
 
   running = true;
@@ -493,15 +505,17 @@ ipcMain.handle("run:start", async (_e, { mode = "invite", dryRun = false } = {})
       ? await runEnrichmentBatch({ ...common, limit: 30 })
       : await runBatch({
           ...common,
-          limit: dryRun ? MAX_PER_DAY : remaining,
+          limit: dryRun ? invitationUsage?.cap ?? MAX_PER_DAY : invitationUsage.remaining,
           dryRun,
-          noteAllowed: () => store.noteAllowed(userDataPath),
-          onNoteUsed: () => store.countNote(userDataPath),
+          // The API has already decided which claimed actions may carry a note.
+          // Local disk state is never an authority for LinkedIn limits.
+          noteAllowed: () => true,
+          onNoteUsed: () => {},
           connectionsCheckDue: () => store.connectionsCheckDue(userDataPath),
           onConnectionsChecked: () => store.markConnectionsChecked(userDataPath),
           onEvent: (evt) => {
-            if (evt.type === "action-done" && evt.status === "sent" && !dryRun) store.countSend(userDataPath);
-            send("run:event", { lane: mode, ...evt });
+            const total = typeof evt.sent === "number" && invitationUsage ? invitationUsage.used + evt.sent : evt.sent;
+            send("run:event", { lane: mode, ...evt, sent: total, cap: invitationUsage?.cap });
           },
         });
     return { ok: true, summary };

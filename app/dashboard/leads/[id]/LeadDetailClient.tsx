@@ -12,6 +12,7 @@ import { api } from "@/lib/client";
 import { TaskDialog } from "@/components/dashboard/TaskDialog";
 import { cn } from "@/lib/cn";
 import { Badge, Banner, Panel, Skeleton, Textarea, Select, useConfirm, usePrompt, useToast } from "@/components/ui";
+import { SUMMARY_KEY, type Summary } from "@/components/dashboard/billing/types";
 
 /* ------------------------------------------------------------------ */
 /* Types — mirror lib/queries.ts getLeadDetail / getLeadTimeline        */
@@ -316,6 +317,8 @@ function ProfileColumn({
   const [enriching, setEnriching] = useState(false);
   const [enrichMsg, setEnrichMsg] = useState<string | null>(null);
   const prompt = usePrompt();
+  const { data: billing } = useSWR<Summary>(SUMMARY_KEY);
+  const enrichmentLocked = !!billing?.enforced && !billing.plan?.features.includes("linkedin_enrichment");
 
   async function patch(data: Record<string, unknown>) {
     setBusy(true); onError(null);
@@ -431,6 +434,11 @@ function ProfileColumn({
 
         {lead.linkedinUrl && (
           <div className="mt-3 border-t border-line pt-3">
+            {enrichmentLocked ? (
+              <Link href="/dashboard/settings/billing" className="flex items-center gap-1.5 text-xs font-semibold text-accent-strong hover:underline">
+                <Sparkles className="h-3.5 w-3.5" /> Upgrade for LinkedIn profile enrichment
+              </Link>
+            ) : (
             <button
               disabled={enriching}
               onClick={enrich}
@@ -438,6 +446,7 @@ function ProfileColumn({
             >
               <Sparkles className="h-3.5 w-3.5" /> Find email and phone on LinkedIn
             </button>
+            )}
             <p className="mt-1 text-[11px] text-ink-faint">
               Up to 3 credits · free if not yet a 1st-degree connection
             </p>

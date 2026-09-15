@@ -353,6 +353,27 @@ function observe() {
     return null;
   })();
 
+  const connectionDegree = (() => {
+    const root = topCard || nameEl?.closest("section") || nameEl?.parentElement || document.querySelector("main");
+    const text = (el) => `${el.getAttribute("aria-label") || ""} ${el.textContent || ""}`.replace(/\s+/g, " ").trim();
+    const degree = (value) => {
+      if (/\b1st\b|1st[- ]degree|first[- ]degree/i.test(value)) return "1st";
+      if (/\b2nd\b|2nd[- ]degree|second[- ]degree/i.test(value)) return "2nd";
+      if (/\b3rd\b|3rd[- ]degree|third[- ]degree/i.test(value)) return "3rd";
+      return null;
+    };
+    const badges = querySelectorAllDeep(".dist-value, .distance-badge, .pv-member-badge, [aria-label*='degree' i], [data-test-id*='degree' i]")
+      .filter((el) => !closestDeep(el, "aside") && (!root || root.contains(el)));
+    for (const badge of badges) {
+      const found = degree(text(badge));
+      if (found) return { degree: found, evidence: `profile badge: ${text(badge).slice(0, 80)}` };
+    }
+    const remove = querySelectorAllDeep('button, a[role="button"], div[role="button"], [role="menuitem"]')
+      .find((el) => !closestDeep(el, "aside") && !closestDeep(el, "[data-followthroo-overlay]") && /remove connection/i.test(text(el)));
+    if (remove) return { degree: "1st", evidence: "profile action: Remove Connection" };
+    return { degree: "unknown", evidence: "no current profile degree badge or Remove Connection action found" };
+  })();
+
   /**
    * The profile's own controls, established from evidence rather than structure.
    *
@@ -511,11 +532,8 @@ function observe() {
       ),
     // Read from the page rather than inferred, so "already connected" is a fact
     // and not a guess made from the absence of a button.
-    firstDegree:
-      /1st/i.test(document.querySelector(".dist-value, .distance-badge")?.textContent || "") ||
-      querySelectorAllDeep('button, div[role="button"], [role="menuitem"]').some((b) =>
-        /remove connection/i.test((b.getAttribute("aria-label") || b.textContent || "")),
-      ),
+    firstDegree: connectionDegree.degree === "1st",
+    connectionDegree,
     limitWall: (() => {
       const dlg = querySelectorDeep(
         '[role="dialog"], [aria-modal="true"], .artdeco-modal, .artdeco-modal-overlay, #artdeco-modal-outlet, .send-invite, [data-view-name*="modal"]',

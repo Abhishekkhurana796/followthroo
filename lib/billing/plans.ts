@@ -24,6 +24,8 @@ export type Feature =
   | "team_reports"
   /** SLA rules and escalations. */
   | "escalations"
+  /** LinkedIn Contact-info email/phone lookup, performed by the desktop app. */
+  | "linkedin_enrichment"
   | "premium_ai_models";
 
 export interface Plan {
@@ -85,7 +87,7 @@ export const PLANS: Record<PlanId, Plan> = {
     blurb: "For you and a teammate working one pipeline.",
     dailyCredits: 250,
     limits: { users: 2, inboxes: 2, campaigns: 10, templates: 25, leads: 2500, autopilots: 3 },
-    features: ["deliverability", "lead_assignment", "roles", "team_reports", "premium_ai_models"],
+    features: ["deliverability", "lead_assignment", "roles", "team_reports", "linkedin_enrichment", "premium_ai_models"],
     topUps: true,
   },
   scale: {
@@ -96,7 +98,7 @@ export const PLANS: Record<PlanId, Plan> = {
     blurb: "For a proper outreach team.",
     dailyCredits: 750,
     limits: { users: 5, inboxes: 5, campaigns: 25, templates: 50, leads: null, autopilots: 10 },
-    features: ["deliverability", "lead_assignment", "roles", "team_reports", "escalations", "premium_ai_models"],
+    features: ["deliverability", "lead_assignment", "roles", "team_reports", "escalations", "linkedin_enrichment", "premium_ai_models"],
     topUps: true,
   },
 };

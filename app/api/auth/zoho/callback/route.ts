@@ -42,11 +42,12 @@ export async function GET(req: NextRequest) {
   const state = params.get("state");
   const cookieState = req.cookies.get("z_oauth_state")?.value;
   const orgId = req.cookies.get("z_oauth_org")?.value;
+  const userId = req.cookies.get("z_oauth_user")?.value;
   const domainId = req.cookies.get("z_oauth_domain")?.value ?? null;
 
   if (!code) return backTo("error", "missing_code");
   if (!state || !cookieState || state !== cookieState) return backTo("error", "state_mismatch");
-  if (!orgId) return backTo("error", "no_org");
+  if (!orgId || !userId) return backTo("error", "no_org");
 
   const dc = resolveDc(params.get("accounts-server"), params.get("location"));
 
@@ -84,14 +85,16 @@ export async function GET(req: NextRequest) {
     // against the plan's sending inboxes.
     const alreadyConnected = await prisma.sendingAccount.findUnique({
       where: { organizationId_email: { organizationId: orgId, email: account.primaryEmail } },
-      select: { id: true },
+      select: { id: true, createdById: true },
     });
+    if (alreadyConnected?.createdById && alreadyConnected.createdById !== userId) return backTo("error", "mailbox_linked_to_another_member");
     if (!alreadyConnected && (await requireLimit(orgId, "inboxes"))) return backTo("error", "plan_inbox_limit");
 
     const saved = await prisma.sendingAccount.upsert({
       where: { organizationId_email: { organizationId: orgId, email: account.primaryEmail } },
       create: {
         organizationId: orgId,
+        createdById: userId,
         name: account.displayName || account.primaryEmail,
         email: account.primaryEmail,
         provider: "zoho_oauth",
@@ -110,6 +113,7 @@ export async function GET(req: NextRequest) {
         dkimSelector: account.accountId,
         refreshToken,
         active: true,
+        ...(alreadyConnected?.createdById ? {} : { createdById: userId }),
         domainId: linkedDomainId,
       },
       update: {
@@ -141,6 +145,7 @@ export async function GET(req: NextRequest) {
     const res = backTo("connected", account.primaryEmail, linkedDomainId);
     res.cookies.delete("z_oauth_state");
     res.cookies.delete("z_oauth_org");
+    res.cookies.delete("z_oauth_user");
     res.cookies.delete("z_oauth_domain");
     return res;
   } catch (e) {
