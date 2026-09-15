@@ -33,6 +33,16 @@ export interface ChangelogEntry {
 export const CHANGELOG: ChangelogEntry[] = [
   {
     product: "desktop",
+    version: "1.15.3",
+    date: "Sep 2026",
+    items: [
+      "Profile enrichment now clicks Contact info with the same Playwright action path as invitations and reads LinkedIn's current accessible dialog overlay",
+      "Removed the lookup AI fallback after a confirmed Playwright click; a visible Contact info overlay is now parsed directly instead of being falsely reported as an unsafe selector failure",
+      "Activity now distinguishes the Playwright click, overlay wait, overlay route fallback, and extraction result",
+    ],
+  },
+  {
+    product: "desktop",
     version: "1.15.2",
     date: "Sep 2026",
     items: [

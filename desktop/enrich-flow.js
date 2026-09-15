@@ -5,12 +5,11 @@
  *
  * Deliberately much simpler than connect-flow.js. Reading a page is not
  * sending anything — there is no note or Send button. Deterministic DOM
- * selectors run first, then the documented overlay URL, and finally a tightly
- * constrained assistant may choose only this profile's Contact info control.
+ * selectors run first, then the documented overlay URL. Both are driven by
+ * Playwright in the same persistent Chrome session as invitations.
  */
 const { readContactInfo } = require("./page-actions");
-const { observe, act, FORBIDDEN } = require("./pilot-page");
-const { askServer } = require("./pilot");
+const { observe } = require("./pilot-page");
 const { CODES } = require("./outcome-codes");
 const { requestJson } = require("./api-client");
 const { openBrowser, waitForSignIn, bannerInitScript, makeLog } = require("./runner");
@@ -27,28 +26,7 @@ function contactOverlayUrl(profileUrl) {
   return url.toString();
 }
 
-async function trustedClick(page, outcome) {
-  if (!outcome || !outcome.ok || outcome.action !== "click") return false;
-  let clicked = false;
-  if (outcome.selector) {
-    try {
-      await page.click(outcome.selector, { timeout: 2000, noWaitAfter: true });
-      clicked = true;
-    } catch (_) {}
-  }
-  if (!clicked && outcome.point && Number.isFinite(outcome.point.x) && Number.isFinite(outcome.point.y)) {
-    try {
-      await page.mouse.click(outcome.point.x, outcome.point.y);
-      clicked = true;
-    } catch (_) {}
-  }
-  await page
-    .evaluate(() => document.querySelectorAll("[data-ft-act]").forEach((el) => el.removeAttribute("data-ft-act")))
-    .catch(() => {});
-  return clicked;
-}
-
-async function readContactInfoWithFallback({ page, lookup, apiBase, token, log, onDebug = () => {} }) {
+async function readContactInfoWithFallback({ page, lookup, log, onDebug = () => {} }) {
   const who = lookup.leadName || lookup.linkedinUrl;
   const debug = (message, extra = {}) => {
     log.write({ event: "enrich-debug", who, message, ...extra });
@@ -80,9 +58,27 @@ async function readContactInfoWithFallback({ page, lookup, apiBase, token, log, 
   }
   debug(`Verified 1st-degree connection (${degree.evidence}). Opening Contact info with Playwright.`, { degree: "1st", evidence: degree.evidence });
 
-  // Keep the lookup in the same persistent Playwright Chrome context as the
-  // invitation lane. The first click is deterministic and profile-scoped.
-  const first = await page.evaluate(readContactInfo, { confirmedFirstDegree: true });
+  // The Contact info control is part of the profile page, just like Connect.
+  // Click it with Playwright (rather than a synthetic in-page event), then let
+  // the page reader inspect the visible overlay. Limit the locator to the
+  // documented Contact info overlay link in main, never a recommendation rail.
+  const profileContact = page.locator('main a[href*="/overlay/contact-info"]', { hasText: /contact info/i }).first();
+  let openedWithPlaywright = false;
+  try {
+    if (await profileContact.isVisible({ timeout: 2500 })) {
+      await profileContact.click({ timeout: 3000, noWaitAfter: true });
+      openedWithPlaywright = true;
+      debug("Clicked this profile's Contact info link with Playwright; waiting for its overlay.", { degree: "1st" });
+      await sleep(900);
+    }
+  } catch (error) {
+    debug(`Playwright could not click the visible Contact info link: ${String((error && error.message) || error)}`, { status: "failed", degree: "1st" });
+  }
+
+  const first = await page.evaluate(readContactInfo, {
+    confirmedFirstDegree: true,
+    alreadyOpen: openedWithPlaywright,
+  });
   if (first.status !== "failed" || !/Contact info (link|overlay)/i.test(first.result || "")) {
     debug(first.status === "done"
       ? `Contact info read — ${first.email ? "email" : "no email"}${first.phone ? " and phone" : ""} available.`
@@ -111,62 +107,11 @@ async function readContactInfoWithFallback({ page, lookup, apiBase, token, log, 
     }
   }
 
-  // One constrained assistant decision is the final fallback. It must name an
-  // indexed Contact info control from the profile owner's top card. The page
-  // veto repeats these checks before producing a trusted Playwright click.
-  await page.goto(lookup.linkedinUrl, { waitUntil: "domcontentloaded" });
-  await sleep(1500);
-  const eligibility = await page.evaluate(readContactInfo, { eligibilityOnly: true });
-  if (eligibility.status !== "eligible") {
-    debug(eligibility.evidence || "Degree could not be confirmed after returning to the profile.", { status: "skipped", degree: eligibility.degree });
-    return eligibility;
-  }
-  debug("Trying the guarded Contact info control fallback.", { degree: "1st", evidence: eligibility.evidence });
-  const seen = await page.evaluate(observe);
-  const screenshot = (await page.screenshot({ type: "jpeg", quality: 55, fullPage: false })).toString("base64");
-  let decision;
-  try {
-    decision = await askServer(apiBase, token, {
-      goal: "enrich",
-      personName: seen.personName || lookup.leadName || "",
-      note: null,
-      autoSend: false,
-      useNote: false,
-      url: seen.url,
-      step: 0,
-      history: [],
-      elements: seen.elements.slice(0, 150),
-      screenshot,
-      viewport: page.viewportSize() || null,
-    });
-  } catch (error) {
-    return { status: "failed", result: `Contact info selector changed and the assistant was unavailable: ${String((error && error.message) || error)}` };
-  }
-
-  if (decision.action !== "click" || decision.index === undefined || decision.label || decision.x !== undefined || decision.y !== undefined) {
-    return { status: "failed", result: `Contact info selector changed and the assistant stopped safely: ${decision.reason || "no safe indexed control"}` };
-  }
-  const candidate = seen.elements.find((element) => element.i === decision.index);
-  if (!candidate || !candidate.inTopCard || candidate.inAside || !/contact info/i.test(candidate.label || "")) {
-    return { status: "failed", result: "Contact info selector changed and the assistant did not identify a safe profile-owned control" };
-  }
-
-  const outcome = await page.evaluate(act, {
-    decision,
-    expectedName: seen.personName,
-    forbiddenSource: FORBIDDEN.source,
-    goal: "enrich",
-    autoSend: false,
-  });
-  if (!(await trustedClick(page, outcome))) {
-    const result = outcome.error || "Contact info control could not be clicked safely";
-    debug(result, { status: "failed", degree: "1st" });
-    return { status: "failed", result };
-  }
-  await sleep(1200);
-  const assisted = await page.evaluate(readContactInfo, { confirmedFirstDegree: true, alreadyOpen: true });
-  debug(assisted.status === "done" ? "Contact info opened through the guarded fallback." : assisted.result || "Guarded fallback finished.", { status: assisted.status, degree: assisted.degree, evidence: assisted.evidence });
-  return assisted;
+  return {
+    status: "failed",
+    degree: "1st",
+    result: "Contact info opened but its overlay could not be read. The Activity log records the exact Playwright and overlay step that failed.",
+  };
 }
 
 /** Same credential-safe HTTP boundary used by the invitation lane and pilot. */
@@ -234,7 +179,7 @@ async function runEnrichmentLane({ page, apiBase, token, cap, log, onEvent = () 
         .evaluate((text) => window.__ftBanner && window.__ftBanner(text), `Followthroo · looking up contact info for ${who}`)
         .catch(() => {});
       await sleep(1500 + Math.random() * 1000);
-      outcome = await readContactInfoWithFallback({ page, lookup, apiBase, token, log, onDebug: debug });
+      outcome = await readContactInfoWithFallback({ page, lookup, log, onDebug: debug });
     } catch (e) {
       outcome = { status: "failed", result: String((e && e.message) || e) };
       emit("enrich-debug", { who, message: `Lookup failed before completion: ${outcome.result}`, status: "failed" });

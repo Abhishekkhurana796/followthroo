@@ -4,7 +4,16 @@ Sends queued LinkedIn invitations and looks up eligible profiles' Contact info
 from the customer's own computer, own IP, and logged-in LinkedIn session.
 
 **Last updated:** 2026-09-15
-**Status:** active — desktop 1.15.2
+**Status:** active — desktop 1.15.3
+
+## 1.15.3 Contact info overlay fix
+
+- The Profile enrichment lane now clicks this profile's **Contact info** link
+  through Playwright, the same browser action path used for Connect and Send.
+- LinkedIn's current accessible Contact info dialog (`role="dialog"` /
+  `aria-modal`) is detected and read after the click. The former AI fallback is
+  not used after a visible overlay opens, so it cannot turn a real overlay into
+  a misleading “unsafe selector” failure.
 
 ## 1.15.2 lookup reliability changes
 
@@ -27,7 +36,7 @@ from the customer's own computer, own IP, and logged-in LinkedIn session.
   and shows an upgrade state rather than claiming a lookup on a lower plan.
 - Contact-info eligibility reports a concrete connection degree and evidence;
   current profile badges, accessible labels, and Remove Connection are all
-  recognized before the deterministic and guarded AI paths proceed.
+  recognized before the deterministic Playwright path proceeds.
 
 ---
 

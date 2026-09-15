@@ -558,6 +558,10 @@ async function readContactInfo(options = {}) {
       const text = degreeText(el);
       return !!degreeFromText(text) && (text.length <= 160 || /degree/i.test(text));
     });
+    // Prefer the smallest matching node. A top-card wrapper can include a
+    // suggested person's 2nd badge in its text; the actual header's own span
+    // is the short, precise evidence we want to record.
+    badges.sort((a, b) => degreeText(a).length - degreeText(b).length);
     for (const badge of badges) {
       const degree = degreeFromText(degreeText(badge));
       if (degree) return { degree, evidence: `profile header badge: ${degreeText(badge).slice(0, 80)}` };
@@ -593,7 +597,18 @@ async function readContactInfo(options = {}) {
     return { status: "skipped", degree: "not_1st", result: "not a 1st-degree connection — Contact info is not shown" };
   }
 
-  const modal = () => document.querySelector('.pv-contact-info, [aria-label="Contact info"], .artdeco-modal[role="dialog"]');
+  // Contact info is now commonly a generic accessible dialog rather than the
+  // old .pv-contact-info modal. The old selector let the click visibly work
+  // while the runner claimed that nothing had opened.
+  const modal = () =>
+    Array.from(document.querySelectorAll(
+      '.pv-contact-info, .artdeco-modal, .artdeco-modal-overlay, [role="dialog"], [aria-modal="true"], [data-view-name*="contact-info" i], #artdeco-modal-outlet > *',
+    )).find((el) => {
+      const style = getComputedStyle(el);
+      if (style.display === "none" || style.visibility === "hidden") return false;
+      const text = label(el);
+      return /contact info/i.test(text) || !!el.querySelector('a[href^="mailto:"], .ci-email, .ci-phone, .ci-websites');
+    }) || null;
   let dlg = options.alreadyOpen ? modal() : null;
 
   // LinkedIn's usual trigger is a link reading "Contact info" inside the
@@ -601,6 +616,7 @@ async function readContactInfo(options = {}) {
   // Direct navigation and the guarded assistant fallback live in
   // enrich-flow.js, because a page navigation cannot be completed from inside
   // this serialized page function.
+  if (!dlg && options.alreadyOpen) return { status: "failed", result: "Contact info overlay did not open" };
   if (!dlg) {
     const trigger = Array.from(scope().querySelectorAll('a[href*="overlay/contact-info"], a')).find(
       (a) => /contact info/i.test(label(a)) || /overlay\/contact-info/.test(a.getAttribute("href") || ""),
