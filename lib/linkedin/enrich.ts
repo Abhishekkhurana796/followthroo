@@ -7,8 +7,11 @@
  * paced against a daily cap, paid for in credits reserved at claim and settled
  * on completion:
  *
- *   - One claimer, always. `claimEnrichments` marks a row `in_progress` with a
- *     single atomic UPDATE, never a read then a write.
+ *   - One claimer, always. `claimEnrichments` marks each row `in_progress`
+ *     with `status` still in the WHERE clause and keeps only the rows whose
+ *     update actually matched, so two clients reading the same pending row
+ *     cannot both be handed it. (This comment described that guard for a while
+ *     before the code had it — the update was keyed on id alone.)
  *   - Credits are reserved when a row is claimed and settled when it's
  *     completed — kept for what was actually found, handed back for a
  *     technical failure or a lead who isn't a 1st-degree connection.
@@ -20,14 +23,26 @@ import { prisma } from "../db";
 import { logActivity } from "../crm";
 import { charge, keepCredits, returnCredits } from "../billing/meter";
 import { billingEnforced } from "../billing/limits";
-import { enrichmentCharge } from "../billing/plans";
+import { enrichmentCharge, hasFeature } from "../billing/plans";
 import { startOfOrgDay } from "../org-day";
+import { workspacePlan } from "../billing/subscription";
 
 const STALE_MS = 20 * 60 * 1000; // a browser closed mid-lookup
 const MAX_ATTEMPTS = 3;
 
 const CREDIT_REF = "linkedin_enrichment";
-const creditRef = (id: string) => ({ type: CREDIT_REF, id });
+/**
+ * One ref per attempt, not per row.
+ *
+ * `reserve` is idempotent per ref and stays so after the ref has been
+ * released, so all three attempts sharing one ref meant attempts 2 and 3
+ * reserved nothing and settled as no-ops — a lead that succeeded on its second
+ * try was charged nothing at all. CLAUDE.md states the rule this broke:
+ * anything that can be retried after it finished needs a ref per attempt.
+ * Attempt 0 keeps the bare id so rows reserved before this change still settle
+ * against the ref they were reserved with.
+ */
+const creditRef = (id: string, attempt = 0) => ({ type: CREDIT_REF, id: attempt > 0 ? `${id}:${attempt}` : id });
 
 export type EnrichSource = "manual" | "bulk" | "campaign" | "auto_accept";
 
@@ -48,6 +63,10 @@ export async function enqueueEnrichment(input: {
   enrollmentId?: string | null;
   nodeId?: string | null;
 }) {
+  if (billingEnforced()) {
+    const plan = await workspacePlan(input.organizationId);
+    if (!plan.plan || !hasFeature(plan.plan, "linkedin_enrichment")) return null;
+  }
   const open = await prisma.linkedInEnrichment.findFirst({
     where: { organizationId: input.organizationId, leadId: input.leadId, status: { in: ["pending", "in_progress"] } },
   });
@@ -80,13 +99,60 @@ export interface ClaimEnrichAccount {
 }
 
 /**
+ * Read the enrichment queue without claiming work or reserving credits.
+ * Kept separate from the invitation peek so a problem in one workflow cannot
+ * blank or disable the other one in the desktop app.
+ */
+export async function peekEnrichments(account: ClaimEnrichAccount, limit = 50) {
+  const startOfToday = await startOfOrgDay(account.organizationId);
+  const [used, queued, people] = await Promise.all([
+    prisma.linkedInEnrichment.count({
+      where: {
+        organizationId: account.organizationId,
+        status: { in: ["in_progress", "done", "skipped", "failed"] },
+        updatedAt: { gte: startOfToday },
+      },
+    }),
+    prisma.linkedInEnrichment.count({
+      where: { organizationId: account.organizationId, status: "pending" },
+    }),
+    prisma.linkedInEnrichment.findMany({
+      where: { organizationId: account.organizationId, status: "pending" },
+      orderBy: { createdAt: "asc" },
+      take: Math.min(Math.max(limit, 1), 50),
+      include: {
+        lead: { select: { firstName: true, lastName: true, optedOut: true } },
+      },
+    }),
+  ]);
+
+  return {
+    queued,
+    daily: {
+      used,
+      cap: account.dailyEnrichCap,
+      remaining: Math.max(0, account.dailyEnrichCap - used),
+    },
+    people: people
+      .filter((row) => !row.lead?.optedOut)
+      .map((row) => ({
+        id: row.id,
+        leadId: row.leadId,
+        linkedinUrl: row.linkedinUrl,
+        leadName: [row.lead?.firstName, row.lead?.lastName].filter(Boolean).join(" ") || null,
+        source: row.source,
+        attempts: row.attempts,
+      })),
+  };
+}
+
+/**
  * Hand the desktop app its next batch of lookups: paid for as they're handed
  * out, capped per account per day, at most `limit` at a time.
  *
- * Runs after the invite lane in `runner.js` — the daily cap here is
- * deliberately much smaller than the invite cap, because opening a profile's
- * Contact info all day is exactly the pattern LinkedIn's abuse detection
- * watches for.
+ * Claimed only by the desktop app's independent Profile enrichment lane. Its
+ * own daily cap prevents a long lookup run from being mistaken for unlimited
+ * profile scraping; invitation capacity never affects this queue.
  */
 export async function claimEnrichments(account: ClaimEnrichAccount, limit: number) {
   await reclaimStale(account.organizationId);
@@ -98,9 +164,13 @@ export async function claimEnrichments(account: ClaimEnrichAccount, limit: numbe
   const room = Math.max(0, Math.min(account.dailyEnrichCap - usedToday, limit));
   if (room <= 0) return [];
 
+  // Fresh lookups before retries, then oldest first. Ordering on createdAt
+  // alone sent a row that had just failed straight back to the head of the
+  // queue — so the same lead was re-run one pacing gap later, inside the same
+  // batch, and read in the Activity log as a duplicate rather than a retry.
   const candidates = await prisma.linkedInEnrichment.findMany({
     where: { organizationId: account.organizationId, status: "pending" },
-    orderBy: { createdAt: "asc" },
+    orderBy: [{ attempts: "asc" }, { createdAt: "asc" }],
     take: room,
     include: { lead: { select: { id: true, firstName: true, lastName: true, optedOut: true } } },
   });
@@ -115,16 +185,32 @@ export async function claimEnrichments(account: ClaimEnrichAccount, limit: numbe
       continue;
     }
     if (billingEnforced()) {
-      const paid = await charge(account.organizationId, "enrich", { ref: creditRef(c.id), meta: { leadId: c.leadId } });
+      const paid = await charge(account.organizationId, "enrich", { ref: creditRef(c.id, c.attempts), meta: { leadId: c.leadId } });
       if (!paid.ok) break; // no plan, or the day's credits are gone — stop handing out more
     }
     picked.push(c);
   }
   if (!picked.length) return [];
 
-  await prisma.linkedInEnrichment.updateMany({ where: { id: { in: picked.map((p) => p.id) } }, data: { status: "in_progress" } });
+  // Claim with the status still in the WHERE clause and keep only the rows
+  // this call actually won. The read-then-write this replaces would hand the
+  // same pending row to two clients, each of which would then open the same
+  // profile — exactly the race lib/linkedin/queue.ts guards against, in the
+  // file whose own header already claimed to guard against it.
+  const claimed: typeof picked = [];
+  for (const row of picked) {
+    const { count } = await prisma.linkedInEnrichment.updateMany({
+      where: { id: row.id, status: "pending" },
+      data: { status: "in_progress" },
+    });
+    if (count > 0) claimed.push(row);
+    else if (billingEnforced()) {
+      await returnCredits(account.organizationId, creditRef(row.id, row.attempts), "claimed by another client");
+    }
+  }
+  if (!claimed.length) return [];
 
-  return picked.map((c) => ({
+  return claimed.map((c) => ({
     id: c.id,
     leadId: c.leadId,
     linkedinUrl: c.linkedinUrl,
@@ -188,7 +274,7 @@ export async function completeEnrichment(organizationId: string, report: EnrichR
       where: { id: row.id },
       data: { status: "pending", attempts: row.attempts + 1, result: report.result?.slice(0, 300) },
     });
-    if (billingEnforced()) await returnCredits(organizationId, creditRef(row.id), "will retry");
+    if (billingEnforced()) await returnCredits(organizationId, creditRef(row.id, row.attempts), "will retry");
     return { retrying: true };
   }
 
@@ -212,8 +298,8 @@ export async function completeEnrichment(organizationId: string, report: EnrichR
   });
 
   if (billingEnforced()) {
-    if (charged > 0) await keepCredits(organizationId, creditRef(row.id), charged);
-    else await returnCredits(organizationId, creditRef(row.id), failed ? "lookup failed" : "not a 1st-degree connection");
+    if (charged > 0) await keepCredits(organizationId, creditRef(row.id, row.attempts), charged);
+    else await returnCredits(organizationId, creditRef(row.id, row.attempts), failed ? "lookup failed" : "not a 1st-degree connection");
   }
 
   if (connected && (report.email || report.phone)) {

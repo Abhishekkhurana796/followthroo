@@ -23,6 +23,20 @@
 smoothly — never ship "Hi ," or "Hello {{firstName}}". Every template must define
 fallbacks for any non-guaranteed field.
 
+## Email template attachments
+
+Email templates may carry up to five private attachments, 10MB each: PDF, Office files,
+ZIP, CSV, text, or JPEG/PNG/WebP images. Add them in **Templates → New template** or
+while editing an email template. A campaign step sends the file set of its selected
+template; LinkedIn, WhatsApp, and social templates do not accept files.
+
+Attachments are stored as private Blob objects, retrieved only while the server sends
+the message, and included in the template-version snapshot. That means an active campaign
+keeps the original attachment set unless you explicitly choose to update that campaign.
+SMTP and Gmail OAuth mailboxes support attachments. Zoho OAuth templates with files are
+blocked with a clear error until its attachment API path is implemented; no email is sent
+without the requested file.
+
 ## Authoring & safety
 - **Preview** with sample data before send; render each variable substituted.
 - **Test send** to yourself to catch broken merges.

@@ -257,19 +257,24 @@ export async function sweepDailyDigests(): Promise<{ sent: number; orgs: number 
       const user = await recipient(m.userId);
       if (!user?.email || !readPrefs(user.notificationPrefs).dailyDigest) continue;
 
-      // One a day, whatever happens — the hourly cadence would otherwise send
-      // one an hour for the whole hour the local clock reads 8.
-      const alreadyToday = await prisma.user.count({
-        where: { id: user.id, lastDigestAt: { gte: startOfToday() } },
-      });
-      if (alreadyToday > 0) continue;
-
       const digest = await buildDigest(org.id, m.userId);
       if (!digest) continue;
 
-      await prisma.user.update({ where: { id: user.id }, data: { lastDigestAt: new Date() } });
+      // Claim the once-daily slot before sending so overlapping hourly runs do
+      // not double-send. Release it when SMTP fails: recording the digest before
+      // sending used to silently consume the only retry for that day.
+      const claimedAt = new Date();
+      const claim = await prisma.user.updateMany({
+        where: { id: user.id, OR: [{ lastDigestAt: null }, { lastDigestAt: { lt: startOfToday() } }] },
+        data: { lastDigestAt: claimedAt },
+      });
+      if (claim.count === 0) continue;
+
       const ok = await sendSystemEmail(user.email, digest.subject, digest.body).catch(() => false);
       if (ok) sent++;
+      else {
+        await prisma.user.updateMany({ where: { id: user.id, lastDigestAt: claimedAt }, data: { lastDigestAt: null } });
+      }
     }
   }
 

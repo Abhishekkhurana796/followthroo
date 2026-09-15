@@ -14,7 +14,7 @@ export default async function Page() {
     ? await Promise.all([
         // Only leads with an address — this screen sends email.
         getLeadsPage(tenant.orgId, 1, LEAD_PICKER_PAGE_SIZE, undefined, "email").catch(() => EMPTY_LEADS),
-        getSendingAccounts(tenant.orgId).catch(() => []),
+        getSendingAccounts(tenant).catch(() => []),
       ])
     : [EMPTY_LEADS, []];
 

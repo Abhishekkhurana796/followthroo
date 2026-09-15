@@ -1,10 +1,50 @@
 # Followthroo for LinkedIn — desktop app
 
-Sends a customer's queued LinkedIn invitations from their own computer, on their
-own IP, using their own logged-in LinkedIn session.
+Sends queued LinkedIn invitations and looks up eligible profiles' Contact info
+from the customer's own computer, own IP, and logged-in LinkedIn session.
 
-**Last updated:** 2026-09-09
-**Status:** draft
+**Last updated:** 2026-09-15
+**Status:** active — desktop 1.15.4
+
+## 1.15.4 current LinkedIn modal parser
+
+- The Contact info reader now treats the visible **Contact info** heading plus
+  its **Email**, **IM**, **Phone**, **Website**, or **Connected since** rows as
+  the overlay contract. It does not depend on legacy LinkedIn CSS classes.
+- Email extraction reads the displayed email text as well as a `mailto:` link,
+  covering the current overlay shown by LinkedIn profiles.
+
+## 1.15.3 Contact info overlay fix
+
+- The Profile enrichment lane now clicks this profile's **Contact info** link
+  through Playwright, the same browser action path used for Connect and Send.
+- LinkedIn's current accessible Contact info dialog (`role="dialog"` /
+  `aria-modal`) is detected and read after the click. The former AI fallback is
+  not used after a visible overlay opens, so it cannot turn a real overlay into
+  a misleading “unsafe selector” failure.
+
+## 1.15.2 lookup reliability changes
+
+- Current LinkedIn profile headers can show a bare **1st** beside pronouns
+  (for example, `She/Her  1st`) rather than the historical badge class. The
+  deterministic reader now treats that text inside the owner's profile card as
+  positive 1st-degree evidence; a badge on a recommendation remains ignored.
+- Profile enrichment now drives the profile, Contact info link, and fallback
+  route in the same persistent Playwright Chrome session used for invitations.
+- **Activity** logs every lookup decision in the desktop window and local
+  `enrich-run-*.jsonl` file: profile opened, exact degree evidence, Contact
+  info route, extraction result, and whether the result reached Followthroo.
+
+## 1.15.1 reliability changes
+
+- Invitation usage, the 20/day account ceiling, remaining capacity, and note
+  allowance now come from the server. The desktop never treats its local
+  counters as authority.
+- Profile enrichment is independently plan-gated by the API (Grow and Scale)
+  and shows an upgrade state rather than claiming a lookup on a lower plan.
+- Contact-info eligibility reports a concrete connection degree and evidence;
+  current profile badges, accessible labels, and Remove Connection are all
+  recognized before the deterministic Playwright path proceeds.
 
 ---
 
@@ -39,6 +79,8 @@ Chrome extension already used:
 | Claim work | `GET /api/linkedin/queue?limit=1` |
 | Report outcome | `POST /api/linkedin/queue` with `{ actionId, status, result, code }`. `code: NOTE_LIMIT_REACHED` is the one the server acts on: LinkedIn showed its Premium upsell where the note box should be, so the invitation goes back to the queue with its note and no more notes are handed out that day. |
 | Who is next | `GET /api/linkedin/queue?peek=1` — `people` (goes out, in order), `held` (waiting on a pick or on tomorrow's notes) and `notes` (today's allowance). Claims nothing. |
+| Who is next for enrichment | `GET /api/linkedin/enrich/peek` — independent read of queued contact lookups and the lookup cap. Claims nothing. |
+| Claim contact lookup | `GET /api/linkedin/enrich/claim?limit=1` — used only by the Profile enrichment lane. |
 | Note on or off, or reworded | `PATCH /api/linkedin/invitations/:id` with `{ noteChoice?, note? }` from the Up next list. Refused once the invitation is in a browser. |
 | Whether an invitation carries its note | Decided on the server: the choice made for the person and today's allowance (`noteAllowance` in `lib/linkedin/queue.ts`). An invitation marked "no" is handed out with `note: null`. |
 | Accepted invitations | `POST /api/linkedin/connections/seen` with `{ profileUrls }` — your connections list, read at the start of a run at most every six hours (`readRecentConnections` in `page-actions.js`, rationed by `connectionsCheckDue` in `store.js`). Never in a test run. LinkedIn announces acceptances nowhere else. |
@@ -56,11 +98,13 @@ be recalled.
 
 | File | What it does |
 |---|---|
-| `main.js` | Electron main process. Owns the window, the run, and the day's tally. |
+| `main.js` | Electron main process. Owns the window, the mutually exclusive lane lock, and the day's tally. |
 | `preload.js` | The only bridge to the renderer. `contextIsolation` on, `nodeIntegration` off. |
-| `renderer/` | The control panel — progress, the do-not-touch warning, settings, activity. |
-| `runner.js` | The run itself: claim → navigate → act → report, with the stop conditions. |
+| `renderer/` | The full-page Automation workspace: two queues, two buttons, progress, settings, and activity. |
+| `runner.js` | Invitation lane only: claim → navigate → act → report, with invitation stop conditions. |
 | `page-actions.js` | What happens on the LinkedIn page. Shared with the verification scripts. |
+| `enrich-flow.js` | Profile-enrichment lane only: claim → navigate → read → report, with independent stop conditions. |
+| `api-client.js` | Credential-safe HTTP diagnostics and the retry policy shared by both lanes. |
 | `store.js` | Settings and today's count, as JSON in the OS app-data folder. |
 | `navigation.js` | Which URLs the web view may load, and which are a Google/Zoho sign-in that has to go through the browser. Plain Node, so it can be checked without Electron. |
 
@@ -72,13 +116,14 @@ selector fix lands once and the tests exercise the code that ships.
 
 ## What is in the window
 
-One app window, split in two. The left 400px is the sending panel: local HTML,
-our preload, and the only place `ft.*` exists. Everything right of it is a
-`WebContentsView` showing the real hosted web app — leads, campaigns, inbox —
-because the dashboard is 18 server components talking to Prisma and there is no
-version of it to bundle.
+One app window with two switchable full-page views. **Automation** is local HTML
+and is the only place `ft.*` exists. It opens by default and gives invitation
+sending and profile enrichment their own queue, progress, stop state, and Start
+button. **Web app** is the real hosted Followthroo dashboard in a
+`WebContentsView`. The Web app button, Hide this panel, and the 44px trusted rail
+switch between them without reloading either view.
 
-That split is a security boundary, not a layout choice. The panel's preload can
+That separation is a security boundary, not a layout choice. The Automation view's preload can
 launch browser automation against the user's LinkedIn; attaching it to remote
 content would hand that reach to anything the page loads. **The web view gets no
 preload at all.** If you ever find yourself adding one, stop.

@@ -67,6 +67,7 @@ export async function GET(req: NextRequest) {
   };
   res.cookies.set("z_oauth_state", state, cookieOpts);
   res.cookies.set("z_oauth_org", ctx.orgId, cookieOpts);
+  res.cookies.set("z_oauth_user", ctx.userId, cookieOpts);
   if (ownedDomainId) res.cookies.set("z_oauth_domain", ownedDomainId, cookieOpts);
   return res;
 }

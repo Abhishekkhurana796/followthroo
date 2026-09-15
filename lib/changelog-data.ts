@@ -33,6 +33,82 @@ export interface ChangelogEntry {
 export const CHANGELOG: ChangelogEntry[] = [
   {
     product: "desktop",
+    version: "1.15.5",
+    date: "Sep 2026",
+    items: [
+      "Contact info lookups now find the overlay the way connection invitations find the Connect button — through several independent signals, shadow roots included, and by looking again while LinkedIn finishes rendering instead of deciding from a single glance 0.9 seconds after the click",
+      "A row whose label and value shared one element used to be read as the address \"Emailsomeone@example.com\" and reported as a success; values are now taken from the row itself, so that lands as a real address or not at all",
+      "Phone, IM and Connected since are read from the labelled rows LinkedIn actually renders, rather than from class names it stopped using",
+      "When a lookup still can't read the overlay, the app now saves that overlay's markup and a screenshot beside its run log so the cause can be found instead of guessed at. Both stay on your machine",
+      "A lookup Followthroo is going to retry now says so, instead of appearing in the Activity log as a second, separate failure",
+    ],
+  },
+  {
+    product: "desktop",
+    version: "1.15.4",
+    date: "Sep 2026",
+    items: [
+      "Profile enrichment now reads LinkedIn's plain labeled Contact info rows (Email, IM, Connected since) even when nested markup concatenates their text",
+      "The current overlay parser extracts an email from its displayed text as well as a mailto link, fixing current profiles whose modal exposes no legacy Contact-info classes",
+    ],
+  },
+  {
+    product: "desktop",
+    version: "1.15.3",
+    date: "Sep 2026",
+    items: [
+      "Profile enrichment now clicks Contact info with the same Playwright action path as invitations and reads LinkedIn's current accessible dialog overlay",
+      "Removed the lookup AI fallback after a confirmed Playwright click; a visible Contact info overlay is now parsed directly instead of being falsely reported as an unsafe selector failure",
+      "Activity now distinguishes the Playwright click, overlay wait, overlay route fallback, and extraction result",
+    ],
+  },
+  {
+    product: "desktop",
+    version: "1.15.2",
+    date: "Sep 2026",
+    items: [
+      "Profile enrichment now recognises LinkedIn's current plain-text 1st-degree header badge beside pronouns, so verified connections no longer stop before Contact info opens",
+      "The desktop Activity panel now records each enrichment Playwright step: profile opened, degree evidence, Contact info route used, extraction outcome, and server report",
+      "Contact-info lookups use the same persistent Playwright Chrome session and guarded profile ownership checks as connection invitations",
+    ],
+  },
+  {
+    product: "desktop",
+    version: "1.15.1",
+    date: "Sep 2026",
+    items: [
+      "Invitation limits and note allowance now come from the server for the linked account; the desktop shows the same used, remaining and 20/day safe cap as queue claiming",
+      "Profile enrichment recognizes current LinkedIn degree badges, accessible labels and Remove Connection evidence, and records clear skipped or selector-failure diagnostics",
+      "Profile enrichment is available on Grow and Scale only, with the desktop showing an upgrade state instead of claiming lower-tier lookups",
+    ],
+  },
+  {
+    product: "webapp",
+    version: "0.29.0",
+    date: "Sep 2026",
+    items: [
+      "LinkedIn now opens with Chrome extension setup; import history and readable page-reading errors moved to Your LinkedIn → Logs",
+      "Public pricing and in-app upgrades now show LinkedIn profile enrichment on Grow and Scale, including its up-to-three-credit refund policy",
+      "Lead source settings now distinguish configured providers, missing credentials, pending real test deliveries, and latest authenticated delivery outcomes",
+      "Leads now have stage, owner and source filters plus an owner/admin CSV export that preserves custom import fields; imports accept CSV or Excel (.xlsx) with the same headers",
+      "Email templates can carry private attachments that campaigns send with the selected template",
+      "Task reminder and daily digest scheduling now has a read-only health check; a failed digest email releases its daily claim so it can retry instead of being silently lost",
+      "A successful lead import now clears prior table filters so the new rows appear immediately; team members can only use the mailbox they connected, never a colleague's identity",
+    ],
+  },
+  {
+    product: "desktop",
+    version: "1.15.0",
+    date: "Sep 2026",
+    items: [
+      "Fixed the desktop run failing with an unhelpful fetch failed error after profile enrichment was added; requests now identify the operation and network cause, with retries limited by whether replay is safe",
+      "Connection invitations and Profile enrichment are now independent lanes with separate queues and Start buttons, so one can never claim or fail the other",
+      "The narrow side panel is now a full-page Automation workspace. The hosted web app remains available as-is, with Web app, Hide this panel, and the left-arrow rail switching between them",
+      "Profile enrichment now tries deterministic selectors, LinkedIn's direct Contact info route, and a guarded AI fallback that can only open the profile owner's Contact info control",
+    ],
+  },
+  {
+    product: "desktop",
     version: "1.14.1",
     date: "Sep 2026",
     items: [

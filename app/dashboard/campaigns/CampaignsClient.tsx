@@ -243,7 +243,9 @@ export default function CampaignsPage() {
   // so while the sequence is being written, rather than letting steps queue up
   // against an account that was never connected.
   const { data: linkedinConn } = useSWR<{ account?: { state?: string } }>("/api/linkedin/connect");
+  const { data: billing } = useSWR<Summary>(SUMMARY_KEY);
   const linkedinReady = linkedinConn ? linkedinConn.account?.state !== "disconnected" : undefined;
+  const enrichmentLocked = !!billing?.enforced && !billing.plan?.features.includes("linkedin_enrichment");
   const confirm = useConfirm();
 
   const [mode, setMode] = useState<"list" | "choose" | "build">("list");
@@ -673,9 +675,15 @@ export default function CampaignsPage() {
                     <button type="button" onClick={() => setNodes((ns) => [...ns, newCond()])} className="flex items-center gap-1 rounded-full border-2 border-dashed border-warning/40 bg-surface px-3 py-2 text-xs font-medium text-warning-strong transition hover:border-warning/40">
                       <GitBranch className="h-4 w-4" /> Condition
                     </button>
+                    {enrichmentLocked ? (
+                      <Link href="/dashboard/settings/billing" className="flex items-center gap-1 rounded-full border-2 border-dashed border-accent/40 bg-surface px-3 py-2 text-xs font-medium text-accent-strong transition hover:border-accent/40">
+                        <IdCard className="h-4 w-4" /> Upgrade for profile lookup
+                      </Link>
+                    ) : (
                     <button type="button" onClick={() => setNodes((ns) => [...ns, newEnrich()])} className="flex items-center gap-1 rounded-full border-2 border-dashed border-accent/40 bg-surface px-3 py-2 text-xs font-medium text-accent-strong transition hover:border-accent/40">
                       <IdCard className="h-4 w-4" /> Find email &amp; phone
                     </button>
+                    )}
                   </div>
                 </div>
               </div>

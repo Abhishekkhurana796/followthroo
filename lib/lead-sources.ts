@@ -9,6 +9,7 @@
 import { prisma } from "./db";
 import { ingestKeyFor } from "./ingest-key";
 import { env, configured } from "./env";
+import { ensureSource } from "./identity";
 
 /** Sources whose adapter needs env-level credentials before the webhook will accept
  *  anything — checked against `configured` rather than assumed always-ready. */
@@ -130,6 +131,39 @@ export async function listSources(organizationId: string) {
       // Most sources need only the URL; Meta and Google Ads additionally need env-level
       // credentials (signature/verify-token, or a shared webhook key) before they'll work.
       needsEnvSetup: s.key in ENV_GATED_SOURCES && !configured[ENV_GATED_SOURCES[s.key]],
+      health: {
+        status:
+          s.key in ENV_GATED_SOURCES && !configured[ENV_GATED_SOURCES[s.key]]
+            ? "awaiting_provider_credentials"
+            : s.lastSuccessAt
+              ? "configured"
+              : "awaiting_provider_sample",
+        lastIngressAt: s.lastIngressAt,
+        lastSuccessAt: s.lastSuccessAt,
+        lastFailureAt: s.lastFailureAt,
+        lastFailureReason: s.lastFailureReason,
+      },
     };
+  });
+}
+
+/**
+ * Keep source-level operational state separate from individual lead records.
+ * The route records only a compact reason code, never an inbound body or a
+ * provider credential. A source is created on first authenticated delivery so
+ * Settings can show a real result even when nobody opened the page beforehand.
+ */
+export async function recordSourceHealth(
+  organizationId: string,
+  key: string,
+  result: { ok: boolean; reason?: string },
+) {
+  await ensureSource(organizationId, key);
+  const now = new Date();
+  await prisma.leadSource.updateMany({
+    where: { organizationId, key },
+    data: result.ok
+      ? { lastIngressAt: now, lastSuccessAt: now, lastFailureReason: null }
+      : { lastIngressAt: now, lastFailureAt: now, lastFailureReason: result.reason?.slice(0, 180) ?? "delivery_failed" },
   });
 }

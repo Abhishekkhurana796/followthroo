@@ -57,7 +57,7 @@ export const PilotElementSchema = z.object({
 });
 
 export const PilotObservationSchema = z.object({
-  goal: z.enum(["invite", "message"]),
+  goal: z.enum(["invite", "message", "enrich"]),
   /** The profile owner, from the page's <h1> or its URL slug. */
   personName: z.string().max(200),
   /** The note or message to send, already truncated by the caller. */
@@ -215,6 +215,19 @@ Only ever use an index that appears in the list. Do not answer -1 or any other
 number that is not listed — if what you need is not there, answer give_up and say
 so, and you will be shown a screenshot of the page instead.`;
 
+const ENRICH_SYSTEM = `You are helping open the Contact info overlay on one LinkedIn profile page.
+
+Choose exactly one control from the numbered element list. Reply with only one of:
+  {"action":"click","index":<n>,"reason":"<short>"}
+  {"action":"give_up","reason":"<short>"}
+
+The only permitted click is the profile owner's own Contact info link, normally
+labelled "Contact info" or pointing to /overlay/contact-info/. It must be marked
+IN-PROFILE-ACTION-ROW. Never use coordinates or a text label, never type, never
+send, connect, follow, message, endorse, remove, report, block, or open a control
+belonging to another profile. If that exact numbered control is not present,
+answer give_up. A wrong click is worse than stopping.`;
+
 /**
  * Exported so a test can assert the markers survive validation. The prompt is
  * where IN-PROFILE-ACTION-ROW is actually rendered, so it is the only honest
@@ -229,10 +242,13 @@ export function userPrompt(o: PilotObservation): string {
       (e.section ? `   [under: ${e.section}]` : ""),
   );
 
+  const enrich = o.goal === "enrich";
   return [
-    `Goal: ${o.goal === "invite" ? "send a connection request" : "send a direct message"}`,
+    `Goal: ${o.goal === "invite" ? "send a connection request" : o.goal === "message" ? "send a direct message" : "open this profile owner's Contact info overlay"}`,
     `Profile owner: ${o.personName || "(unknown)"}`,
     `URL: ${o.url}`,
+    enrich ? "Read-only lookup: choose only the numbered Contact info control in the profile action row." : "",
+    enrich ? "Coordinates, label-only answers, typing, and every outreach action are forbidden." : "",
     `Note to include: ${o.note ? JSON.stringify(o.note) : "(none)"}`,
     `Allowed to actually send: ${o.autoSend ? "yes" : "no — stop once the text is entered"}`,
     `Add a note: ${o.useNote ? "yes" : 'no — click "Send without a note"'}`,
@@ -340,7 +356,7 @@ export async function decideNextAction(o: PilotObservation): Promise<PilotDecisi
       // The decision is a handful of tokens; the cost here is the page, not the
       // reply, so there is no reason to let it ramble.
       temperature: 0,
-      system: SYSTEM,
+      system: o.goal === "enrich" ? ENRICH_SYSTEM : SYSTEM,
       messages: [{ role: "user", content }],
       ...(p.fallbackModels.length ? ({ models: [p.model, ...p.fallbackModels] } as object) : {}),
     },

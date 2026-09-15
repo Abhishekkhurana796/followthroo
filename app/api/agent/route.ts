@@ -5,6 +5,7 @@ import { requireOrg } from "@/lib/tenant";
 import { prisma } from "@/lib/db";
 import { runAgent } from "@/lib/agent";
 import { configured } from "@/lib/env";
+import { canUseSendingAccountWhere } from "@/lib/sending-account-access";
 
 export const runtime = "nodejs";
 export const maxDuration = 300; // Vercel Fluid Compute default
@@ -36,10 +37,10 @@ export async function POST(req: NextRequest) {
 
     if (parsed.data.sendingAccountId) {
       const owned = await prisma.sendingAccount.findFirst({
-        where: { id: parsed.data.sendingAccountId, organizationId: ctx.orgId },
+        where: canUseSendingAccountWhere(ctx, parsed.data.sendingAccountId),
         select: { id: true },
       });
-      if (!owned) return fail("Sending account not found", 404);
+      if (!owned) return fail("You can only send from a mailbox you connected.", 403);
     }
 
     const result = await runAgent({ orgId: ctx.orgId, userId: ctx.userId, ...parsed.data });

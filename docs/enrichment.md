@@ -1,8 +1,10 @@
 # enrichment.md — Email and phone from LinkedIn Contact info (P2)
 
-**Last updated:** 2026-09-13
-**Status:** draft — backend and desktop DOM logic built; the desktop selectors
-are unverified against a live LinkedIn account (see "What's unverified" below).
+**Last updated:** 2026-09-15
+**Status:** desktop 1.15.4. The current plain-text `1st` header badge and
+LinkedIn's visible labeled Contact info rows are covered by the desktop
+fixtures. A successful live extraction remains the final confirmation (see
+"What's unverified" below).
 
 > Where it fits: [CLAUDE.md](../CLAUDE.md)'s doc index, alongside
 > [channels.md](channels.md) and [pricing.md](pricing.md). Credits are the same
@@ -25,13 +27,23 @@ and merges anything found into the CRM.
 4. "Look up contact info when an invitation is accepted" (off by default),
    under LinkedIn → Limits.
 
+## Plan access
+
+Profile enrichment is a **Grow ($20/month) and Scale ($50/month)** feature.
+When `BILLING_ENFORCED=1`, lower plans see an upgrade state in Leads and the
+campaign builder; the individual and bulk enqueue route, campaign validation,
+desktop peek/claim endpoints, and campaign completion path also reject or
+skip it server-side. That keeps an old desktop client or a saved campaign from
+bypassing the plan boundary.
+
 ## The engine (`lib/linkedin/enrich.ts`)
 
 Structurally identical to the invite queue (`lib/linkedin/queue.ts`), because
 it is the same kind of thing:
 
-- **One claimer.** `claimEnrichments` is desktop-only, marks a row
-  `in_progress` with a single atomic `UPDATE`, and stops handing out lookups
+- **One claimer.** `claimEnrichments` is desktop-only, marks each row
+  `in_progress` with `status` still in the `WHERE` clause and keeps only the
+  rows whose update matched, and stops handing out lookups
   once the account's `dailyEnrichCap` (150/day default — small on purpose,
   see "Why the cap is so much lower than invites" below) or the workspace's
   credits are exhausted.
@@ -88,13 +100,35 @@ nobody asked to look up.
   report, at 6–15 seconds apart — gentler pacing than invites, because the
   cap here is so much higher. It stops on 3 consecutive failures or a login
   wall, the same discipline `runner.js` holds invites to.
-- `desktop/runner.js` runs this lane **after** the invite lane, and only if
-  the invite lane stopped because it ran out of capacity (empty queue, cap
-  reached) — never after a fatal stop (login wall, LinkedIn's own limit,
-  the user pressing Stop, "automatic sending is off"). See
-  `inviteLaneHealthy` in `runBatch`.
+- The desktop UI exposes this as its own **Profile enrichment** lane. It has a
+  separate peek endpoint and Start button; invitation sending never claims or
+  starts enrichment work, and enrichment never claims an invitation.
+- Overlay detection is **signal-based, not selector-based**. Four independent
+  routes lead to the panel — a visible dialog container, a `Contact info`
+  heading, a `mailto:`/`tel:` link, and the `/overlay/contact-info` URL — and
+  all of them pierce shadow roots, as `observe()` in `pilot-page.js` has always
+  done for invitations. Playwright clicks the profile's own Contact info link
+  first; the documented `/overlay/contact-info/` route is a second fallback.
+  Each route polls (~8 looks, 400ms apart) rather than deciding from one look,
+  because LinkedIn renders a dialog's shell before its rows. The Contact-info
+  step does not use an AI click decision, so a visible dialog cannot be
+  mistaken for an assistant-selector failure.
+- The **Activity** panel writes the same useful run trace as connection sends:
+  it records the profile opening in Playwright, the exact degree evidence,
+  which Contact info route was tried, the extraction result, and confirmation
+  that Followthroo received the outcome. The identical records remain local in
+  the desktop app-data `logs/enrich-run-*.jsonl` file for debugging. They never
+  include the pairing token or LinkedIn session cookie.
 
 ### Why the cap is so much lower than invites
+
+Degree detection now reads current profile badges, the current plain-text
+`1st` header text beside pronouns, accessible labels, then the explicit
+**Remove Connection** action. It returns the detected degree and
+diagnostic evidence. With no positive 1st-degree evidence it records a safe
+`degree_unverified` skip; known 2nd/3rd degrees record `degree_not_first`.
+Only the deterministic Playwright Contact info path runs after an eligibility
+decision, so an eligibility skip cannot be reinterpreted as a selector miss.
 
 `dailyInviteCap` defaults to 20; `dailyEnrichCap` defaults to **150**. That
 looks backwards until you notice what each action actually is: an invitation
@@ -105,18 +139,36 @@ of profiles fast" is the signature of a scraper, sent or not. 150 is meant to
 sit well below the point that gets noticed, not to be the largest number that
 technically still works.
 
+### When a lookup cannot read the overlay
+
+A failed lookup writes the evidence needed to fix it, beside the run's own log
+in the desktop app-data `logs/` folder:
+
+- `enrichment-<timestamp>-<leadId>-contact-info-failure.html` — up to 20KB of
+  the panel's **real markup**
+- `enrichment-<timestamp>-<leadId>-contact-info-failure.png` — the screen at
+  the moment it was declared absent
+- a `CONTACT_INFO_FAILURE` line in the JSONL log: the URL, the overlay state,
+  which strategy was chosen, how many dialogs and shadow roots were seen, and
+  the row labels that were found
+
+These exist because five releases (1.15.0-1.15.4) each replaced one guessed
+selector with another and each still reported a visibly-open overlay as
+absent — there was no way to see what LinkedIn had actually rendered. They
+contain a real person's contact details, so they stay on the machine that read
+them: local only, never uploaded, and carrying no cookies, tokens or storage.
+
 ### What's unverified
 
-`readContactInfo`'s selectors (`.pv-contact-info`, `.ci-email`, `.ci-phone`,
-`.ci-websites`, `.ci-connected`) are written from LinkedIn's documented
-Contact info overlay markup, the same starting point every other selector in
-`page-actions.js` began from — **not yet run against a live profile.** If the
-overlay never opens, check the "Contact info" trigger-link selector first.
-The plan's fallback — navigating `/overlay/contact-info/` directly when no
-trigger link is found — is **not implemented**; see the comment in
-`readContactInfo` for exactly what's missing and why (it needs
-`enrich-flow.js` to wait for a full page navigation rather than this
-function's return value).
+A first successful **live** extraction is still required. The fixtures in
+`scripts/verify-linkedin-enrichment-selectors.ts` are modelled on LinkedIn's
+rendered overlay rather than on the reader, and they now cover the four shapes
+that demonstrably broke the previous version — a shadow-root-hosted dialog, a
+shell that renders before its rows, a label worded `Email address` rather than
+`Email`, and a row whose label and value share one element (which the old
+reader "read" as the address `Emaila@example.com` and reported as a success).
+But fixtures are still a model of the page, not the page. Phone, IM and
+`Connected since` have never been observed in real markup at all.
 
 ## Verification
 
@@ -126,7 +178,6 @@ what each outcome costs, technical-failure retries, the CRM merge (both
 resuming an enrollment, and the 7-day timeout, simulated by fast-forwarding
 `nextRunAt`. Run with `npx tsx --env-file=.env scripts/verify-linkedin-enrichment.ts`.
 
-No script yet drives `readContactInfo` against a real or fixture LinkedIn
-page, the way `scripts/verify-desktop-runner.ts` does for invitations — that
-has to wait for the first real run to confirm the selectors, then a fixture
-can be built from what was actually seen.
+`scripts/verify-linkedin-enrichment-selectors.ts` drives the current degree
+header and accessible Contact info dialog fixtures. It does not use a real
+LinkedIn account; a successful live extraction remains the final check.

@@ -6,8 +6,24 @@ import { INBOUND_ADAPTERS, metaLeadAdsAdapter, googleAdsAdapter, type InboundAda
 import { ingestKeyFor } from "@/lib/ingest-key";
 import { safeEqual } from "@/lib/webhook-auth";
 import { LIMITS, tooMany } from "@/lib/api-ratelimit";
+import { recordSourceHealth } from "@/lib/lead-sources";
 
 export const runtime = "nodejs";
+
+/** Record delivery health without allowing observability to alter ingestion. */
+async function ingestAndRecord(organizationId: string, source: string, events: Parameters<typeof ingestMany>[1]) {
+  try {
+    const result = await ingestMany(organizationId, events);
+    await recordSourceHealth(organizationId, source, { ok: true });
+    return result;
+  } catch (error) {
+    await recordSourceHealth(organizationId, source, {
+      ok: false,
+      reason: error instanceof Error ? "ingest_failed" : "ingest_unknown_failure",
+    });
+    throw error;
+  }
+}
 
 /**
  * One webhook endpoint for every inbound lead source:
@@ -69,7 +85,10 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ sou
   }
 
   if (source === "meta_lead_ads") {
-    if (!metaLeadAdsAdapter.verify(raw, req.headers)) return fail("Bad signature.", 401);
+    if (!metaLeadAdsAdapter.verify(raw, req.headers)) {
+      await recordSourceHealth(auth.orgId, source, { ok: false, reason: "signature_invalid" });
+      return fail("Bad signature.", 401);
+    }
     const ids = metaLeadAdsAdapter.leadgenIds(payload);
     const events = [];
     for (const id of ids) {
@@ -77,12 +96,17 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ sou
       const e = lead ? metaLeadAdsAdapter.fromGraphLead(lead) : null;
       if (e) events.push(e);
     }
-    return ok(await ingestMany(auth.orgId, events));
+    const result = await ingestAndRecord(auth.orgId, source, events);
+    return ok(result);
   }
 
   if (source === "google_ads") {
-    if (!googleAdsAdapter.verify(payload)) return fail("Bad google_key.", 401);
-    return ok(await ingestMany(auth.orgId, await googleAdsAdapter.receive(payload)));
+    if (!googleAdsAdapter.verify(payload)) {
+      await recordSourceHealth(auth.orgId, source, { ok: false, reason: "google_key_invalid" });
+      return fail("Bad google_key.", 401);
+    }
+    const result = await ingestAndRecord(auth.orgId, source, await googleAdsAdapter.receive(payload));
+    return ok(result);
   }
 
   const adapter = INBOUND_ADAPTERS[source as InboundAdapterKey];
@@ -92,9 +116,11 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ sou
   if (events.length === 0) {
     // Acknowledge rather than error: a 4xx makes providers retry a payload that
     // will never map, and some disable the webhook after repeated failures.
+    await recordSourceHealth(auth.orgId, source, { ok: true });
     return ok({ received: 0, created: 0, merged: 0, duplicates: 0, suppressed: 0, note: "No usable identifiers." });
   }
-  return ok(await ingestMany(auth.orgId, events));
+  const result = await ingestAndRecord(auth.orgId, source, events);
+  return ok(result);
 }
 
 /** The webhook carries only an id; the field values need a Graph API call. */

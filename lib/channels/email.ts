@@ -1,7 +1,8 @@
 import { env, configured } from "../env";
-import type { Channel, Lead, SendResult } from "./types";
+import type { Channel, Lead, SendContext, SendResult } from "./types";
 import type { RenderedMessage } from "../templates";
 import { formatEmailBody } from "../templates";
+import { loadEmailAttachments } from "../email-attachments";
 
 // --- Gmail OAuth sending via the Gmail API (messages.send) ---
 // We use the Gmail API (not SMTP) because the connected accounts hold the
@@ -40,10 +41,11 @@ async function sendViaGmailApi(
   to: string,
   subject: string,
   html: string,
-  messageId?: string
+  messageId?: string,
+  attachments: { filename: string; contentType: string; content: Buffer }[] = [],
 ): Promise<string> {
   const token = await gmailAccessToken(refreshToken);
-  const mime = [
+  const headers = [
     `From: ${from}`,
     `To: ${to}`,
     `Subject: ${encodeHeader(subject)}`,
@@ -52,10 +54,31 @@ async function sendViaGmailApi(
     // not the header the recipient's client will quote back at us.
     ...(messageId ? [`Message-ID: ${messageId}`] : []),
     "MIME-Version: 1.0",
-    'Content-Type: text/html; charset="UTF-8"',
-    "",
-    html,
-  ].join("\r\n");
+  ];
+  const mime = attachments.length
+    ? (() => {
+        const boundary = `followthroo-${crypto.randomUUID()}`;
+        return [
+          ...headers,
+          `Content-Type: multipart/mixed; boundary="${boundary}"`,
+          "",
+          `--${boundary}`,
+          'Content-Type: text/html; charset="UTF-8"',
+          "",
+          html,
+          ...attachments.flatMap((attachment) => [
+            `--${boundary}`,
+            `Content-Type: ${attachment.contentType}; name="${encodeHeader(attachment.filename)}"`,
+            "Content-Transfer-Encoding: base64",
+            `Content-Disposition: attachment; filename="${encodeHeader(attachment.filename)}"`,
+            "",
+            attachment.content.toString("base64").replace(/.{1,76}/g, "$&\r\n"),
+          ]),
+          `--${boundary}--`,
+          "",
+        ].join("\r\n");
+      })()
+    : [...headers, 'Content-Type: text/html; charset="UTF-8"', "", html].join("\r\n");
   const raw = Buffer.from(mime, "utf8").toString("base64url");
 
   const res = await fetch("https://gmail.googleapis.com/gmail/v1/users/me/messages/send", {
@@ -125,11 +148,11 @@ export async function sendSystemEmail(to: string, subject: string, body: string)
  * active account. Returns null when the org has connected none, which is a hard stop:
  * there is deliberately no platform-wide fallback mailbox (see the note on `send`).
  */
-export async function defaultSendingAccountId(orgId: string): Promise<string | null> {
+export async function defaultSendingAccountId(orgId: string, createdById?: string): Promise<string | null> {
   if (!orgId || orgId === "global") return null;
   const { prisma } = await import("../db");
   const acc = await prisma.sendingAccount.findFirst({
-    where: { organizationId: orgId, active: true },
+    where: { organizationId: orgId, active: true, ...(createdById ? { createdById } : {}) },
     orderBy: { createdAt: "asc" },
     select: { id: true },
   });
@@ -153,7 +176,7 @@ export const emailChannel: Channel = {
    * tenant got its own quota against one physical mailbox. A send with no connected
    * account now fails loudly instead of quietly doing the wrong thing.
    */
-  async send(lead: Lead, rendered: RenderedMessage, account?: string, orgId?: string, rfcMessageId?: string): Promise<SendResult> {
+  async send(lead: Lead, rendered: RenderedMessage, account?: string, orgId?: string, rfcMessageId?: string, ctx?: SendContext): Promise<SendResult> {
     if (!lead.email) return { ok: false, skipped: true, reason: "lead has no email" };
     if (!account || account === "default") return { ok: false, skipped: true, reason: NO_ACCOUNT };
     // The account id is a bare uuid; without the owning org in the lookup, one tenant
@@ -165,6 +188,7 @@ export const emailChannel: Channel = {
     // Plain-text template bodies → readable HTML paragraphs (idempotent for HTML bodies).
     const htmlBody = formatEmailBody(rendered.body);
     try {
+      const attachments = await loadEmailAttachments(ctx?.attachments ?? []);
       const { prisma } = await import("../db");
       const sendingAccount = await prisma.sendingAccount.findFirst({
         where: { id: account, organizationId: orgId },
@@ -181,6 +205,9 @@ export const emailChannel: Channel = {
       // and Zoho account id were resolved at connect time and stored on the row
       // (see app/api/auth/zoho/callback), so nothing is re-derived per send.
       if (sendingAccount.provider === "zoho_oauth") {
+        if (attachments.length) {
+          return { ok: false, skipped: true, reason: "Email template attachments are not supported for Zoho mailboxes yet." };
+        }
         if (!sendingAccount.refreshToken) {
           return { ok: false, skipped: true, reason: `Zoho account ${account} needs re-connect (no refresh token)` };
         }
@@ -215,7 +242,8 @@ export const emailChannel: Channel = {
           lead.email,
           rendered.subject ?? "",
           htmlBody,
-          rfcMessageId
+          rfcMessageId,
+          attachments,
         );
         return { ok: true, providerId: id, rfcMessageId };
       }
@@ -248,6 +276,7 @@ export const emailChannel: Channel = {
         subject: rendered.subject ?? "",
         html: htmlBody,
         text: rendered.body.replace(/<[^>]+>/g, " "),
+        attachments,
         // nodemailer generates one if we do not; we supply ours so the value is
         // known before the send and can be stored against the Message row.
         ...(rfcMessageId ? { messageId: rfcMessageId } : {}),

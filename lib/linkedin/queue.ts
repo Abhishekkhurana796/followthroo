@@ -37,6 +37,8 @@ const creditRef = (id: string) => ({ type: CREDIT_REF, id });
  * shows its upsell sooner, `notesExhaustedOn` closes it early.
  */
 export const FREE_NOTES_PER_DAY = 3;
+/** Hard safety ceiling, including for legacy account rows with a higher cap. */
+export const MAX_DAILY_INVITES = 20;
 
 export type NoteChoice = "yes" | "no" | "undecided";
 
@@ -110,6 +112,24 @@ export interface ClaimAccount {
   notesExhaustedOn?: Date | null;
 }
 
+/** One effective cap for claiming, notes, and every surface that displays it. */
+export const effectiveInviteCap = (account: Pick<ClaimAccount, "dailyInviteCap">) =>
+  Math.min(MAX_DAILY_INVITES, Math.max(1, account.dailyInviteCap));
+
+/** Server-owned invitation usage. This mirrors the count used while claiming. */
+export async function inviteUsage(account: ClaimAccount) {
+  const startOfToday = await startOfOrgDay(account.organizationId);
+  const used = await prisma.linkedInAction.count({
+    where: {
+      organizationId: account.organizationId,
+      status: { in: ["sent", "in_progress", "drafted"] },
+      updatedAt: { gte: startOfToday },
+    },
+  });
+  const cap = effectiveInviteCap(account);
+  return { used, cap, remaining: Math.max(0, cap - used) };
+}
+
 /**
  * Which lead columns travel with an action.
  *
@@ -146,7 +166,7 @@ export type HoldReason = "needs_pick" | "no_notes_left" | "no_credits";
  * the setting says.
  */
 export async function noteAllowance(account: ClaimAccount, startOfToday: Date) {
-  const cap = (account.accountType ?? "free") === "free" ? FREE_NOTES_PER_DAY : account.dailyInviteCap;
+  const cap = (account.accountType ?? "free") === "free" ? FREE_NOTES_PER_DAY : effectiveInviteCap(account);
   if (account.notesExhaustedOn && account.notesExhaustedOn >= startOfToday) {
     return { cap, left: 0, exhaustedByLinkedIn: true };
   }
@@ -215,7 +235,7 @@ async function selectClaimable(account: ClaimAccount, limit: number, opts: { who
   // The whole queue is for showing somebody what is waiting beyond today — the
   // LinkedIn screen, where notes are decided ahead of time. Claiming never asks
   // for it: today's cap is what keeps the account in good standing.
-  const take = opts.wholeQueue ? limit : Math.min(Math.max(0, account.dailyInviteCap - usedGlobal), limit);
+  const take = opts.wholeQueue ? limit : Math.min(Math.max(0, effectiveInviteCap(account) - usedGlobal), limit);
   if (take <= 0) return { picked: [], held: [], notes, credits };
 
   // Pull a small candidate window and filter in JS (handles campaign selection, per-campaign
@@ -336,16 +356,13 @@ type Candidate = Awaited<ReturnType<typeof selectClaimable>>["picked"][number];
  * happens.
  */
 export async function peekActions(account: ClaimAccount, limit: number, opts: { wholeQueue?: boolean } = {}) {
-  const [{ picked, held, notes, credits }, waitingForPick, enrichmentsQueued] = await Promise.all([
+  const [{ picked, held, notes, credits }, waitingForPick] = await Promise.all([
     selectClaimable(account, limit, opts),
     prisma.linkedInAction.findMany({
       where: { organizationId: account.organizationId, status: "pending", noteChoice: "undecided" },
       orderBy: { createdAt: "asc" },
       take: 50,
       include: { lead: { select: LEAD_FOR_ACTION } },
-    }),
-    prisma.linkedInEnrichment.count({
-      where: { organizationId: account.organizationId, status: "pending" },
     }),
   ]);
   const shape = (a: Candidate, hold: HoldReason | null) => ({
@@ -371,7 +388,6 @@ export async function peekActions(account: ClaimAccount, limit: number, opts: { 
     notes: { cap: notes.cap, left: notes.left, exhaustedByLinkedIn: notes.exhaustedByLinkedIn },
     /** Null while billing isn't enforced. */
     credits: credits ? { available: credits.total } : null,
-    enrichmentsQueued,
   };
 }
 

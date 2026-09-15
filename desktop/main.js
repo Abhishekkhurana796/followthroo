@@ -3,10 +3,9 @@
  *
  * One window, two very different things inside it.
  *
- * The LEFT strip is the sending panel: local HTML, our preload, and the only
- * place `ft.*` exists. The REST is a WebContentsView showing the real hosted web
- * app — leads, campaigns, inbox, all of it — because that app is 18 server
- * components talking to Prisma and there is no version of it to bundle.
+ * The local Automation page and the hosted web app take turns using the window.
+ * A 44px local rail remains when the web app is visible so there is always a
+ * trusted way back. Only the local page has `ft.*`.
  *
  * The separation is a security boundary, not a layout choice. The panel's
  * preload can start browser automation against the user's LinkedIn; attaching it
@@ -24,22 +23,18 @@ const { autoUpdater } = require("electron-updater");
 const store = require("./store");
 const { isAppUrl, isProviderSignIn } = require("./navigation");
 const { runBatch, MAX_PER_DAY } = require("./runner");
+const { runEnrichmentBatch } = require("./enrich-flow");
+const { requestJson } = require("./api-client");
 
 let win = null;
 /** The hosted web app. Null until the window exists. */
 let webView = null;
-/**
- * Panel width in px. Collapsing narrows it to a strip rather than to nothing.
- *
- * Zero looked tidier and was a trap: the only control that brings the panel back
- * lives inside the panel, so hiding it hid the way to unhide it and the app had
- * to be restarted. A strip keeps the toggle on screen.
- */
-const PANEL_WIDTH = 400;
-const PANEL_COLLAPSED = 44;
-let panelWidth = PANEL_WIDTH;
+/** The trusted local rail left visible beside the hosted web app. */
+const AUTOMATION_RAIL = 44;
+let showingWebApp = false;
 /** True while a batch is in flight. Guards against two runs on one queue. */
 let running = false;
+let runningMode = null;
 let stopRequested = false;
 /** Keeps the machine awake for the ~30 minutes a full run takes. */
 let sleepBlocker = null;
@@ -54,9 +49,9 @@ function layout() {
   if (!win || win.isDestroyed() || !webView) return;
   const { width, height } = win.getContentBounds();
   webView.setBounds({
-    x: panelWidth,
+    x: showingWebApp ? AUTOMATION_RAIL : width,
     y: 0,
-    width: Math.max(0, width - panelWidth),
+    width: showingWebApp ? Math.max(0, width - AUTOMATION_RAIL) : 0,
     height,
   });
 }
@@ -367,6 +362,7 @@ ipcMain.handle("settings:get", () => ({
   ...store.read(app.getPath("userData")),
   maxPerDay: MAX_PER_DAY,
   running,
+  runningMode,
   version: app.getVersion(),
 }));
 
@@ -394,17 +390,34 @@ ipcMain.handle("queue:peek", async () => {
   const check = store.normaliseApiBase(settings.apiBase);
   if (!check.ok) return { ok: false, error: check.error };
 
-  const remaining = Math.max(0, MAX_PER_DAY - settings.sentToday);
   try {
-    const res = await fetch(`${check.value}/api/linkedin/queue?peek=1&limit=${Math.max(1, remaining)}`, {
-      headers: { Authorization: `Bearer ${settings.token}` },
+    const data = await requestJson(check.value, "/api/linkedin/queue?peek=1&limit=50", {
+      token: settings.token,
+      operation: "Read invitation queue",
+      retry: "read",
     });
-    const json = await res.json().catch(() => ({}));
-    if (res.status === 401) return { ok: false, error: "Your pairing token was rejected." };
-    if (!res.ok || json.ok === false) return { ok: false, error: json.error || `Server returned ${res.status}` };
-    return { ok: true, ...json.data, remaining };
+    return { ok: true, ...data };
   } catch (e) {
-    return { ok: false, error: `Can't reach ${check.value} (${String((e && e.message) || e)})` };
+    return { ok: false, error: String((e && e.message) || e) };
+  }
+});
+
+/** Read contact lookups independently from the invitation queue. */
+ipcMain.handle("enrich:peek", async () => {
+  const settings = store.read(app.getPath("userData"));
+  if (!settings.token) return { ok: false, error: "No pairing token yet." };
+  const check = store.normaliseApiBase(settings.apiBase);
+  if (!check.ok) return { ok: false, error: check.error };
+
+  try {
+    const data = await requestJson(check.value, "/api/linkedin/enrich/peek?limit=50", {
+      token: settings.token,
+      operation: "Read contact lookup queue",
+      retry: "read",
+    });
+    return { ok: true, ...data };
+  } catch (e) {
+    return { ok: false, error: String((e && e.message) || e) };
   }
 });
 
@@ -426,16 +439,15 @@ ipcMain.handle("queue:setNote", async (_e, { id, noteChoice, note } = {}) => {
   if (noteChoice === "yes" || noteChoice === "no") body.noteChoice = noteChoice;
   if (typeof note === "string") body.note = note;
   try {
-    const res = await fetch(`${check.value}/api/linkedin/invitations/${encodeURIComponent(id)}`, {
+    const data = await requestJson(check.value, `/api/linkedin/invitations/${encodeURIComponent(id)}`, {
       method: "PATCH",
-      headers: { Authorization: `Bearer ${settings.token}`, "Content-Type": "application/json" },
-      body: JSON.stringify(body),
+      token: settings.token,
+      body,
+      operation: "Update invitation note",
     });
-    const json = await res.json().catch(() => ({}));
-    if (!res.ok || json.ok === false) return { ok: false, error: json.error || `Server returned ${res.status}` };
-    return { ok: true, ...json.data };
+    return { ok: true, ...data };
   } catch (e) {
-    return { ok: false, error: `Can't reach ${check.value} (${String((e && e.message) || e)})` };
+    return { ok: false, error: String((e && e.message) || e) };
   }
 });
 
@@ -444,8 +456,10 @@ ipcMain.handle("run:stop", () => {
   return { ok: true };
 });
 
-ipcMain.handle("run:start", async (_e, { dryRun = false } = {}) => {
+ipcMain.handle("run:start", async (_e, { mode = "invite", dryRun = false } = {}) => {
   if (running) return { ok: false, error: "A run is already going." };
+  if (mode !== "invite" && mode !== "enrich") return { ok: false, error: "Choose invitations or contact lookups." };
+  if (mode === "enrich" && dryRun) return { ok: false, error: "Contact lookups do not have a test mode." };
 
   const userDataPath = app.getPath("userData");
   const settings = store.read(userDataPath);
@@ -453,69 +467,70 @@ ipcMain.handle("run:start", async (_e, { dryRun = false } = {}) => {
   const check = store.normaliseApiBase(settings.apiBase);
   if (!check.ok) return { ok: false, error: check.error };
 
-  // Today's remaining allowance, not a fresh twenty per press. Without this,
-  // pressing Start twice in an afternoon would send forty.
-  const remaining = Math.max(0, MAX_PER_DAY - settings.sentToday);
-  let hasEnrichmentsQueued = false;
-  try {
-    const peekRes = await fetch(`${check.value}/api/linkedin/queue?peek=1`, {
-      headers: { Authorization: `Bearer ${settings.token}` },
-    });
-    const peekJson = await peekRes.json().catch(() => ({}));
-    if (peekJson.ok && peekJson.data && peekJson.data.enrichmentsQueued > 0) {
-      hasEnrichmentsQueued = true;
+  let invitationUsage = null;
+  if (mode === "invite") {
+    try {
+      const peek = await requestJson(check.value, "/api/linkedin/queue?peek=1&limit=1", {
+        token: settings.token,
+        operation: "Read invitation limit",
+        retry: "read",
+      });
+      invitationUsage = peek.usage;
+    } catch (e) {
+      return { ok: false, error: `Could not read today's invitation limit: ${String((e && e.message) || e)}` };
     }
-  } catch (_) {}
-
-  if (remaining === 0 && !dryRun && !hasEnrichmentsQueued) {
-    return { ok: false, error: `Today's ${MAX_PER_DAY} invitations have already gone out. Try again tomorrow.` };
+    if (!dryRun && (!invitationUsage || invitationUsage.remaining <= 0)) {
+      const cap = invitationUsage?.cap ?? MAX_PER_DAY;
+      return { ok: false, error: `Today's ${cap} invitations have already gone out. Try again tomorrow.` };
+    }
   }
 
   running = true;
+  runningMode = mode;
   stopRequested = false;
   // Half an hour of paced waiting is exactly the window in which a laptop
   // decides to sleep and takes the run down with it.
   sleepBlocker = powerSaveBlocker.start("prevent-display-sleep");
 
   try {
-    const summary = await runBatch({
+    const common = {
       apiBase: check.value,
       token: settings.token,
       userDataPath,
-      limit: dryRun ? MAX_PER_DAY : remaining,
-      dryRun,
-      noteAllowed: () => store.noteAllowed(userDataPath),
-      onNoteUsed: () => store.countNote(userDataPath),
-      // At most one look at the connections list every few hours, to spot accepted invitations.
-      connectionsCheckDue: () => store.connectionsCheckDue(userDataPath),
-      onConnectionsChecked: () => store.markConnectionsChecked(userDataPath),
+      version: app.getVersion(),
       shouldStop: () => stopRequested,
-      // A per-run ceiling, the same relationship MAX_PER_DAY has to the
-      // server's dailyInviteCap: claimEnrichments in lib/linkedin/enrich.ts
-      // is the real enforcement, stopping at the account's own
-      // dailyEnrichCap (150 by default) regardless of what's asked for here.
-      // 0 for a dry run — a test run must leave no trace, and every
-      // enrichment claim is a real credit charge and a real page opened.
-      enrichCap: dryRun ? 0 : 30,
-      onEvent: (evt) => {
-        if (evt.type === "action-done" && evt.status === "sent" && !dryRun) {
-          store.countSend(userDataPath);
-        }
-        send("run:event", evt);
-      },
-    });
+      onEvent: (evt) => send("run:event", { lane: mode, ...evt }),
+    };
+    const summary = mode === "enrich"
+      ? await runEnrichmentBatch({ ...common, limit: 30 })
+      : await runBatch({
+          ...common,
+          limit: dryRun ? invitationUsage?.cap ?? MAX_PER_DAY : invitationUsage.remaining,
+          dryRun,
+          // The API has already decided which claimed actions may carry a note.
+          // Local disk state is never an authority for LinkedIn limits.
+          noteAllowed: () => true,
+          onNoteUsed: () => {},
+          connectionsCheckDue: () => store.connectionsCheckDue(userDataPath),
+          onConnectionsChecked: () => store.markConnectionsChecked(userDataPath),
+          onEvent: (evt) => {
+            const total = typeof evt.sent === "number" && invitationUsage ? invitationUsage.used + evt.sent : evt.sent;
+            send("run:event", { lane: mode, ...evt, sent: total, cap: invitationUsage?.cap });
+          },
+        });
     return { ok: true, summary };
   } catch (e) {
     const message = String((e && e.message) || e);
-    send("run:event", { type: "fatal", message });
+    send("run:event", { type: "fatal", lane: mode, message });
     return { ok: false, error: message };
   } finally {
     running = false;
+    runningMode = null;
     if (sleepBlocker !== null && powerSaveBlocker.isStarted(sleepBlocker)) {
       powerSaveBlocker.stop(sleepBlocker);
     }
     sleepBlocker = null;
-    send("run:event", { type: "idle" });
+    send("run:event", { type: "idle", lane: mode });
   }
 });
 
@@ -546,11 +561,11 @@ ipcMain.handle("auth:status", async () => {
   return { signedIn: cookies.some((c) => /better-auth\.session_token$/.test(c.name)), origin };
 });
 
-/** Collapse the panel to give the web app the whole window, and back. */
+/** Switch between the trusted local Automation page and hosted web app. */
 ipcMain.handle("panel:toggle", (_e, collapsed) => {
-  panelWidth = collapsed ? PANEL_COLLAPSED : PANEL_WIDTH;
+  showingWebApp = !!collapsed;
   layout();
-  return { collapsed: panelWidth === PANEL_COLLAPSED };
+  return { collapsed: showingWebApp };
 });
 
 ipcMain.handle("open:external", (_e, url) => {

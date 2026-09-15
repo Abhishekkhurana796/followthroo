@@ -6,6 +6,7 @@ import { ok, fail } from "@/lib/http";
 import { requireOrg, requireRole } from "@/lib/tenant";
 import { CampaignSequence, validateSequence } from "@/lib/campaign-engine";
 import { CAMPAIGN_INCLUDE } from "@/lib/queries";
+import { canUseSendingAccountWhere } from "@/lib/sending-account-access";
 
 export const runtime = "nodejs";
 
@@ -64,10 +65,10 @@ export async function PATCH(req: NextRequest, { params }: Ctx) {
     // another tenant's mailbox and send their customers' mail through it.
     if (parsed.data.sendingAccountId) {
       const owned = await prisma.sendingAccount.findFirst({
-        where: { id: parsed.data.sendingAccountId, organizationId: ctx.orgId },
+        where: canUseSendingAccountWhere(ctx, parsed.data.sendingAccountId),
         select: { id: true },
       });
-      if (!owned) return fail("Sending account not found", 404);
+      if (!owned) return fail("You can only send from a mailbox you connected.", 403);
       data.sendingAccount = { connect: { id: owned.id } };
     } else {
       data.sendingAccount = { disconnect: true };

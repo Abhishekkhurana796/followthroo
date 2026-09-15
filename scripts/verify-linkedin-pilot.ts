@@ -540,6 +540,43 @@ async function main() {
         ok(/IN-SIDEBAR-DO-NOT-USE/.test(prompt), "and still marks the sidebar");
       }
     }
+
+    console.log("\n7. profile enrichment is a one-click, read-only pilot");
+    {
+      const page = await openPage(RIGHT + "?cardconnect");
+      await page.evaluate(() => {
+        const safe = document.createElement("a");
+        safe.textContent = "Contact info";
+        safe.href = "/in/anirudh-bisht/overlay/contact-info/";
+        safe.setAttribute("data-ft-idx", "900");
+        safe.setAttribute("data-ft-top", "1");
+        safe.addEventListener("click", (event) => { event.preventDefault(); (window as unknown as { __contactClicks: number }).__contactClicks = ((window as unknown as { __contactClicks?: number }).__contactClicks || 0) + 1; });
+        document.body.appendChild(safe);
+
+        const unsafe = document.createElement("a");
+        unsafe.textContent = "Contact info";
+        unsafe.href = "/in/wrong-person/overlay/contact-info/";
+        unsafe.setAttribute("data-ft-idx", "901");
+        document.body.appendChild(unsafe);
+      });
+      const run = (decision: Decision) => page.evaluate(act, { decision, expectedName: "anirudh bisht", forbiddenSource: FORBIDDEN.source, goal: "enrich", autoSend: false });
+
+      const safe = await run({ action: "click", index: 900 });
+      ok(safe.ok === true, `the owner's Contact info control is allowed (${safe.error ?? safe.did})`);
+      const wrongKind = await run({ action: "click", label: "Connect" });
+      ok(wrongKind.ok === false, `outreach is refused (${wrongKind.error})`);
+      const wrongCard = await run({ action: "click", index: 901 });
+      ok(wrongCard.ok === false && /not in this profile/i.test(wrongCard.error || ""), `another card is refused (${wrongCard.error})`);
+      const point = await run({ action: "click", x: 10, y: 10 });
+      ok(point.ok === false && /coordinate/i.test(point.error || ""), `coordinates are refused (${point.error})`);
+
+      const parsed = PilotObservationSchema.safeParse({
+        goal: "enrich", personName: "Anirudh Bisht", note: null, autoSend: false, useNote: false,
+        url: RIGHT, step: 0, history: [], elements: [{ i: 900, tag: "a", label: "Contact info", inTopCard: true }],
+      });
+      ok(parsed.success && /Read-only lookup/.test(userPrompt(parsed.data)), "the enrichment wire contract and safety prompt validate");
+      await page.close();
+    }
   } finally {
     await browser.close();
   }

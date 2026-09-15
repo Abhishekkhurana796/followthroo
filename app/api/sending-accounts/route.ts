@@ -2,9 +2,11 @@ import { NextRequest } from "next/server";
 import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { ok, fail } from "@/lib/http";
-import { requireOrg, requireRole } from "@/lib/tenant";
+import { requireOrg } from "@/lib/tenant";
 import { requireLimit } from "@/lib/billing/limits";
 import nodemailer from "nodemailer";
+import { canUseSendingAccountWhere, sendingAccountWhere } from "@/lib/sending-account-access";
+import { seesEverything } from "@/lib/roles";
 
 export const runtime = "nodejs";
 
@@ -33,7 +35,7 @@ export async function GET(req: NextRequest) {
   if (ctx instanceof Response) return ctx;
   // Never expose secrets (pass / refreshToken) to the client.
   const accounts = await prisma.sendingAccount.findMany({
-    where: { organizationId: ctx.orgId },
+    where: sendingAccountWhere(ctx),
     orderBy: { createdAt: "desc" },
     select: {
       id: true,
@@ -55,12 +57,6 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   const ctx = await requireOrg(req);
   if (ctx instanceof Response) return ctx;
-  // A mailbox is workspace infrastructure, not a rep's own setting: connecting
-  // one binds the org's sending reputation to a credential. Reading the list
-  // stays open (the campaign UI needs it); creating and deleting do not.
-  const gate = requireRole(ctx, ["owner", "admin"]);
-  if (gate) return gate;
-
   try {
     const body = await req.json().catch(() => null);
     const isTestOnly = req.nextUrl.searchParams.get("test") === "true";
@@ -124,6 +120,7 @@ export async function POST(req: NextRequest) {
     const account = await prisma.sendingAccount.create({
       data: {
         organizationId: ctx.orgId,
+        createdById: ctx.userId,
         name: data.name,
         email: data.email,
         // A mailbox on a domain bought through us is "managed" — same row, same
@@ -179,13 +176,13 @@ export async function POST(req: NextRequest) {
 export async function DELETE(req: NextRequest) {
   const ctx = await requireOrg(req);
   if (ctx instanceof Response) return ctx;
-  const gate = requireRole(ctx, ["owner", "admin"]);
-  if (gate) return gate;
 
   const id = req.nextUrl.searchParams.get("id");
   if (!id) return fail("Missing account 'id' parameter");
 
-  const res = await prisma.sendingAccount.deleteMany({ where: { id, organizationId: ctx.orgId } });
+  const res = await prisma.sendingAccount.deleteMany({
+    where: seesEverything(ctx.role) ? { id, organizationId: ctx.orgId } : canUseSendingAccountWhere(ctx, id),
+  });
   if (res.count === 0) return fail("Account not found or could not be deleted", 404);
   return ok({ deleted: id });
 }

@@ -33,8 +33,20 @@ async function fillLinkedInAction(action) {
    */
   const scope = () => {
     const h1 = document.querySelector("main h1, h1");
-    const card = h1 && (h1.closest("section") || h1.closest("div.ph5") || h1.parentElement);
-    return card || document.querySelector("main") || document.body;
+    if (!h1) return document.querySelector("main") || document.body;
+
+    // Current LinkedIn profiles use a div data-view-name top card. The old
+    // selector stopped at the heading's wrapper while the visible "1st" badge
+    // sits beside pronouns higher in that same card.
+    const main = document.querySelector("main") || document.body;
+    let node = h1.parentElement;
+    while (node && node !== main && node !== document.body) {
+      const view = node.getAttribute("data-view-name") || "";
+      const classes = typeof node.className === "string" ? node.className : "";
+      if (/profile.*top.*card|top.*card.*profile/i.test(`${view} ${classes}`)) return node;
+      node = node.parentElement;
+    }
+    return h1.closest("section") || h1.closest("div.ph5") || h1.parentElement || main;
   };
   const inScope = (el) => {
     if (!el) return false;
@@ -107,6 +119,15 @@ async function fillLinkedInAction(action) {
   const isFirstDegree = () => {
     const badge = scope().querySelector(".dist-value, .distance-badge, .pv-member-badge");
     if (badge && /1st/i.test(badge.textContent || "")) return true;
+    // The current profile header may be a plain "1st" span beside pronouns.
+    // This stays inside the owner's top card; a recommendation cannot turn an
+    // invitation into a message or a lookup into an eligible profile.
+    const headerDegree = Array.from(scope().querySelectorAll("[aria-label*='degree' i], [data-test-id*='degree' i], span, p, div"))
+      .some((el) => {
+        const text = `${el.getAttribute("aria-label") || ""} ${el.textContent || ""}`.replace(/\s+/g, " ").trim();
+        return text.length <= 160 && /\b1st\b|1st[- ]degree|first[- ]degree/i.test(text);
+      });
+    if (headerDegree) return true;
     // "Remove Connection" only ever appears for someone you are connected to.
     return all(CLICKABLE).some((b) => /remove connection/i.test(label(b)));
   };
@@ -476,20 +497,27 @@ function readRecentConnections() {
  * inside fillLinkedInAction, and connect-flow.js's observe()-based check,
  * which enrich-flow.js uses the same way before calling this).
  *
- * UNVERIFIED AGAINST A LIVE ACCOUNT. Written from LinkedIn's documented
- * Contact info overlay markup (the `.pv-contact-info` modal, `.ci-email` /
- * `.ci-phone` / `.ci-websites` / `.ci-connected` rows) the same way every
- * other selector in this file started — as a best guess to be corrected here,
- * in one place, the first time it's run against a real profile. If the
- * overlay never opens, the likely cause is the trigger link's selector below
- * having changed; check that first.
+ * Detection is deliberately signal-based rather than selector-based. Five
+ * builds in a row (desktop 1.15.0-1.15.4) each swapped one guessed selector
+ * for another and each still reported LinkedIn's visibly-open overlay as
+ * absent, because a single missed class or a renamed label was enough to
+ * fail the whole check. So: four independent routes to the panel, shadow
+ * roots included, and `waiting` rather than `failed` whenever the answer is
+ * only "not yet". Whatever LinkedIn changes next should cost one route, not
+ * the lookup.
+ *
+ * `status: "waiting"` means look again — polling belongs to the caller, which
+ * re-evaluates this function and so survives a re-render between looks. A
+ * failure carries `diagnostics`, including up to 20KB of the panel's real
+ * markup, so the next selector fix is written from the page rather than from
+ * a guess about it.
  *
  * Runs INSIDE the page: no imports, no closure over anything in this module.
  * Never throws — every path returns a stated outcome, and the overlay is
  * always closed again before returning, so a failed lookup does not leave a
  * modal open over the next thing this run does.
  */
-async function readContactInfo() {
+async function readContactInfo(options = {}) {
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
   if (/\/(login|checkpoint|authwall)/.test(location.pathname) || document.querySelector('input[name="session_key"]')) {
@@ -498,80 +526,373 @@ async function readContactInfo() {
 
   const scope = () => {
     const h1 = document.querySelector("main h1, h1");
-    const card = h1 && (h1.closest("section") || h1.closest("div.ph5") || h1.parentElement);
-    return card || document.querySelector("main") || document.body;
+    if (!h1) return document.querySelector("main") || document.body;
+
+    // Current LinkedIn profiles use a div data-view-name top card. The old
+    // selector stopped at the heading's wrapper while the visible "1st" badge
+    // sits beside pronouns higher in that same card.
+    const main = document.querySelector("main") || document.body;
+    let node = h1.parentElement;
+    while (node && node !== main && node !== document.body) {
+      const view = node.getAttribute("data-view-name") || "";
+      const classes = typeof node.className === "string" ? node.className : "";
+      if (/profile.*top.*card|top.*card.*profile/i.test(`${view} ${classes}`)) return node;
+      node = node.parentElement;
+    }
+    return h1.closest("section") || h1.closest("div.ph5") || h1.parentElement || main;
   };
   const label = (el) => ((el && (el.getAttribute("aria-label") || el.textContent)) || "").trim();
 
   // Positive evidence only — the same rule fillLinkedInAction uses for
   // isFirstDegree, repeated here rather than shared because this file has no
   // internal imports to share it through.
-  const firstDegree = () => {
-    const badge = scope().querySelector(".dist-value, .distance-badge, .pv-member-badge");
-    if (badge && /1st/i.test(badge.textContent || "")) return true;
-    return Array.from(scope().querySelectorAll('button, a[role="button"], div[role="button"]')).some((b) =>
-      /remove connection/i.test(label(b)),
+  const connectionDegree = () => {
+    const card = scope();
+    const degreeText = (el) => `${el.getAttribute("aria-label") || ""} ${el.textContent || ""}`.replace(/\s+/g, " ").trim();
+    const degreeFromText = (text) => {
+      if (/\b1st\b|1st[- ]degree|first[- ]degree/i.test(text)) return "1st";
+      if (/\b2nd\b|2nd[- ]degree|second[- ]degree/i.test(text)) return "2nd";
+      if (/\b3rd\b|3rd[- ]degree|third[- ]degree/i.test(text)) return "3rd";
+      return null;
+    };
+    // LinkedIn's current header can render a plain <span> beside pronouns
+    // ("She/Her  1st") without a class or aria label. Only inspect the profile
+    // top card so a recommended profile can never authorise this lookup.
+    const badges = Array.from(card.querySelectorAll(
+      ".dist-value, .distance-badge, .pv-member-badge, [aria-label*='degree' i], [data-test-id*='degree' i], span, p, div",
+    )).filter((el) => {
+      if (el.closest("aside")) return false;
+      const text = degreeText(el);
+      return !!degreeFromText(text) && (text.length <= 160 || /degree/i.test(text));
+    });
+    // Prefer the smallest matching node. A top-card wrapper can include a
+    // suggested person's 2nd badge in its text; the actual header's own span
+    // is the short, precise evidence we want to record.
+    badges.sort((a, b) => degreeText(a).length - degreeText(b).length);
+    for (const badge of badges) {
+      const degree = degreeFromText(degreeText(badge));
+      if (degree) return { degree, evidence: `profile header badge: ${degreeText(badge).slice(0, 80)}` };
+    }
+    const remove = Array.from(document.querySelectorAll('button, a[role="button"], div[role="button"], [role="menuitem"]')).find(
+      (el) => !el.closest("aside") && !el.closest("[data-followthroo-overlay]") && /remove connection/i.test(label(el)),
     );
+    if (remove) return { degree: "1st", evidence: "profile action: Remove Connection" };
+    return { degree: "unknown", evidence: "no current profile degree badge or Remove Connection action found" };
   };
+  const firstDegree = () => connectionDegree().degree === "1st";
+  const detected = options.confirmedFirstDegree
+    ? { degree: "1st", evidence: "confirmed by the deterministic profile check" }
+    : connectionDegree();
 
-  if (!firstDegree()) {
+  if (options.eligibilityOnly) {
+    return detected.degree === "1st"
+      ? { status: "eligible", ...detected }
+      : { status: "skipped", ...detected, reasonCode: detected.degree === "unknown" ? "degree_unverified" : "degree_not_first" };
+  }
+  if (detected.degree !== "1st") {
+    return {
+      status: "skipped",
+      ...detected,
+      reasonCode: detected.degree === "unknown" ? "degree_unverified" : "degree_not_first",
+      result: detected.degree === "unknown"
+        ? "could not verify a 1st-degree connection safely; Contact info was not opened"
+        : `detected ${detected.degree}-degree connection; Contact info is only shown for 1st-degree connections`,
+    };
+  }
+
+  if (!options.confirmedFirstDegree && !firstDegree()) {
     return { status: "skipped", degree: "not_1st", result: "not a 1st-degree connection — Contact info is not shown" };
   }
 
-  // LinkedIn's usual trigger is a link reading "Contact info" inside the
-  // profile's top card, pointing at /overlay/contact-info/.
+  // --- Shadow-piercing queries -------------------------------------------
   //
-  // KNOWN GAP: the plan also calls for falling back to navigating that URL
-  // directly when no such link is found on the page. Not implemented here —
-  // doing that from inside this function would mean returning mid-navigation,
-  // which needs enrich-flow.js to wait for the new page rather than this
-  // function's return value. Left for whoever verifies this against a real
-  // profile first; until then, a profile with no visible "Contact info" link
-  // reports failed rather than trying the direct URL.
-  const trigger = Array.from(scope().querySelectorAll('a[href*="overlay/contact-info"], a')).find(
-    (a) => /contact info/i.test(label(a)) || /overlay\/contact-info/.test(a.getAttribute("href") || ""),
-  );
-  if (!trigger) return { status: "failed", result: "no Contact info link found on this profile" };
-  trigger.click();
+  // Copied from pilot-page.js's observe(), which is the reader the invitation
+  // lane uses and the reason it can see LinkedIn's modals when this one could
+  // not. It cannot be imported: Playwright serializes this function by source,
+  // so it has no access to anything outside its own body — the same reason
+  // observe() and act() carry their own copies of these three.
+  const querySelectorAllDeep = (selector, root = document) => {
+    const results = [];
+    const queue = [root];
+    const seenRoots = new Set();
+    while (queue.length > 0) {
+      const curr = queue.shift();
+      if (!curr || seenRoots.has(curr)) continue;
+      seenRoots.add(curr);
+      try {
+        if (curr.querySelectorAll) {
+          const matched = curr.querySelectorAll(selector);
+          for (let i = 0; i < matched.length; i++) results.push(matched[i]);
+          const all = curr.querySelectorAll("*");
+          for (let i = 0; i < all.length; i++) {
+            const el = all[i];
+            if (el && el.shadowRoot && !seenRoots.has(el.shadowRoot)) queue.push(el.shadowRoot);
+          }
+        }
+      } catch (_) {}
+    }
+    return results;
+  };
+  const querySelectorDeep = (selector, root = document) => {
+    const found = querySelectorAllDeep(selector, root);
+    return found.length ? found[0] : null;
+  };
+  const closestDeep = (el, selector) => {
+    let curr = el;
+    while (curr && curr !== document && curr !== document.body) {
+      if (curr.matches && curr.matches(selector)) return curr;
+      const root = curr.getRootNode ? curr.getRootNode() : null;
+      if (root && typeof ShadowRoot !== "undefined" && root instanceof ShadowRoot && (curr === root || !curr.parentElement)) {
+        curr = root.host;
+      } else if (curr.parentElement) {
+        curr = curr.parentElement;
+      } else if (curr.parentNode) {
+        curr = curr.parentNode;
+        if (typeof ShadowRoot !== "undefined" && curr instanceof ShadowRoot) curr = curr.host;
+      } else {
+        break;
+      }
+    }
+    return null;
+  };
 
-  await sleep(900);
-  const modal = () => document.querySelector('.pv-contact-info, [aria-label="Contact info"], .artdeco-modal[role="dialog"]');
-  let dlg = null;
-  for (let i = 0; i < 10 && !dlg; i++) {
-    dlg = modal();
-    if (!dlg) await sleep(300);
+  const DIALOG = '[role="dialog"], [aria-modal="true"], .artdeco-modal, .artdeco-modal-overlay, #artdeco-modal-outlet > *, [data-view-name*="contact-info" i], .pv-contact-info';
+  // Prefixes, not whole-string equality. "Websites", "Connected since" and
+  // "Phone (Mobile)" all have to count, and the exact-equality version of this
+  // test is what reported the open overlay as absent.
+  const ROW_LABEL = /^(e-?mail|phone|im\b|instant message|website|address|birthday|connected|twitter|profile)/i;
+  const EMAIL_RE = /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/i;
+
+  const textOf = (el) => ((el && el.textContent) || "").replace(/\s+/g, " ").trim();
+  const visible = (el) => {
+    if (!el || !el.getBoundingClientRect) return false;
+    try {
+      const style = getComputedStyle(el);
+      if (style.display === "none" || style.visibility === "hidden" || style.opacity === "0") return false;
+      const r = el.getBoundingClientRect();
+      return r.width > 0 && r.height > 0;
+    } catch (_) {
+      return false;
+    }
+  };
+  const rowLabelsIn = (container) =>
+    querySelectorAllDeep('h1, h2, h3, h4, [role="heading"], dt, dd, strong, span, p, li', container)
+      .map(textOf)
+      .filter((t) => t && t.length <= 40 && ROW_LABEL.test(t));
+
+  /**
+   * Where the Contact info panel is, resolved from whichever signal survived.
+   *
+   * Four independent routes, because any one of them is what LinkedIn changes
+   * next: a dialog container, the heading, a mailto:/tel: link, and the URL.
+   *
+   * The version this replaces had one route, gated on a descendant whose
+   * entire text was exactly "Contact info" AND another whose entire text was
+   * exactly one of "email|phone|im|connected since|website". Held against
+   * fixtures, that gate passes on a plain dialog and fails on: a label worded
+   * "Email address", a dialog inside a shadow root (it used
+   * document.querySelectorAll, which does not cross one), and a shell whose
+   * rows have not rendered yet. Any single one of those is enough to lose
+   * every lookup, which is what happened.
+   */
+  const findPanel = () => {
+    const dialogs = querySelectorAllDeep(DIALOG).filter(visible);
+    for (const d of dialogs) {
+      if (/contact\s*info/i.test(textOf(d))) return { panel: d, strategy: "dialog-container", dialogs };
+    }
+    const heading = querySelectorAllDeep('h1, h2, h3, h4, [role="heading"], dt, strong, span, p')
+      .find((el) => /^contact\s*info$/i.test(textOf(el)) && visible(el));
+    if (heading) {
+      const dlg = closestDeep(heading, DIALOG);
+      if (dlg && visible(dlg)) return { panel: dlg, strategy: "heading-in-dialog", dialogs };
+      let node = heading.parentElement;
+      for (let i = 0; i < 6 && node && node !== document.body; i++) {
+        if (rowLabelsIn(node).length) return { panel: node, strategy: "heading-ancestor", dialogs };
+        node = node.parentElement;
+      }
+    }
+    const contactLink = querySelectorAllDeep('a[href^="mailto:"], a[href^="tel:"]').find(visible);
+    if (contactLink) {
+      const dlg = closestDeep(contactLink, DIALOG);
+      if (dlg && visible(dlg)) return { panel: dlg, strategy: "contact-link-in-dialog", dialogs };
+    }
+    return { panel: null, strategy: null, dialogs };
+  };
+
+  const onOverlayUrl = () => /\/overlay\/contact-info/.test(location.pathname);
+  const challenged = () =>
+    /\/(checkpoint|authwall)/.test(location.pathname) ||
+    !!querySelectorDeep('iframe[src*="captcha" i], [data-test-id*="captcha" i], [id*="captcha" i]');
+
+  /**
+   * Which state the overlay is in — never a bare boolean, because "not open"
+   * and "open but its rows have not rendered yet" need opposite handling and
+   * the old code could not tell them apart.
+   */
+  const detect = () => {
+    if (challenged()) return { state: "SECURITY_CHALLENGE", panel: null, strategy: null, dialogs: [], labels: [] };
+    const { panel, strategy, dialogs } = findPanel();
+    if (!panel) {
+      return { state: onOverlayUrl() || dialogs.length ? "OPEN_LOADING" : "CLOSED", panel: null, strategy: null, dialogs, labels: [] };
+    }
+    const labels = rowLabelsIn(panel);
+    const hasValue = !!querySelectorDeep('a[href^="mailto:"], a[href^="tel:"]', panel) || labels.length > 0;
+    return { state: hasValue ? "OPEN_READABLE" : "OPEN_LOADING", panel, strategy, dialogs, labels };
+  };
+
+  /**
+   * What the run needs to see when this fails: enough of the real page to fix
+   * the selector without guessing, and nothing that identifies the session.
+   * No cookies, no tokens, no storage — markup and visible text only.
+   */
+  const diagnose = (found) => {
+    let dump = found.panel || null;
+    if (!dump) {
+      const dialog = found.dialogs.find((d) => textOf(d).length > 20);
+      if (dialog) dump = dialog;
+    }
+    if (!dump) {
+      // Last resort: whatever element says "Contact info" and is small enough
+      // to be the panel rather than the whole page.
+      const mentions = querySelectorAllDeep("h1, h2, h3, h4, [role='heading'], section, div, span, p")
+        .filter((el) => {
+          const t = textOf(el);
+          return t.length > 20 && t.length < 3000 && /contact\s*info/i.test(t);
+        })
+        .sort((a, b) => textOf(a).length - textOf(b).length);
+      dump = mentions[0] || null;
+    }
+    return {
+      currentUrl: location.href,
+      onOverlayUrl: onOverlayUrl(),
+      overlayState: found.state,
+      chosenStrategy: found.strategy,
+      dialogCount: querySelectorAllDeep(DIALOG).length,
+      visibleDialogCount: found.dialogs.length,
+      headingFound: !!querySelectorAllDeep("h1, h2, h3, h4, [role='heading'], span, p").find((el) => /^contact\s*info$/i.test(textOf(el))),
+      shadowRootsSeen: querySelectorAllDeep("*").filter((el) => el.shadowRoot).length,
+      rowLabelsSeen: found.labels.slice(0, 20),
+      mailtoCount: querySelectorAllDeep('a[href^="mailto:"]').length,
+      visibleTextSample: dump ? textOf(dump).slice(0, 600) : textOf(document.querySelector("main") || document.body).slice(0, 600),
+      html: dump && dump.outerHTML ? dump.outerHTML.slice(0, 20000) : null,
+    };
+  };
+
+  // Asked for once, by a caller that has given up — never on the way there.
+  // diagnose() walks every element on the page looking for shadow roots, which
+  // is far too expensive to repeat on each of the eight looks a lookup takes.
+  if (options.diagnoseOnly) {
+    return { status: "diagnostics", diagnostics: diagnose(detect()) };
   }
-  if (!dlg) return { status: "failed", result: "Contact info overlay did not open" };
 
+  // LinkedIn's usual trigger is a link reading "Contact info" inside the
+  // profile's top card, pointing at /overlay/contact-info/. Navigation to that
+  // URL, and the polling between looks, live in enrich-flow.js — a page
+  // navigation cannot be completed from inside this serialized function, and
+  // re-evaluating it is what survives a re-render between looks.
+  let found = detect();
+  if (found.state === "CLOSED" && options.clickTrigger) {
+    const trigger = Array.from(scope().querySelectorAll('a[href*="overlay/contact-info"], a')).find(
+      (a) => /contact info/i.test(label(a)) || /overlay\/contact-info/.test(a.getAttribute("href") || ""),
+    );
+    if (!trigger) {
+      return { status: "failed", reasonCode: "no_contact_link", result: "no Contact info link found on this profile", diagnostics: diagnose(found) };
+    }
+    trigger.click();
+    await sleep(900);
+    found = detect();
+  }
+
+  if (found.state === "SECURITY_CHALLENGE") {
+    return { status: "failed", reasonCode: "security_challenge", fatal: true, result: "LinkedIn is showing a checkpoint or verification prompt — stopping rather than retrying", diagnostics: diagnose(found) };
+  }
+  // Not readable yet is not the same as not open. The caller polls; only it
+  // knows whether the budget is spent. Deliberately cheap — this is the
+  // return that happens eight times, so it carries counts rather than a full
+  // page walk; the caller asks for diagnoseOnly once it gives up.
+  if (found.state !== "OPEN_READABLE") {
+    return {
+      status: "waiting",
+      state: found.state,
+      visibleDialogCount: found.dialogs.length,
+      result: found.state === "OPEN_LOADING" ? "Contact info is opening" : "Contact info overlay is not open yet",
+    };
+  }
+
+  const panel = found.panel;
   const closeOverlay = () => {
-    const closeBtn = dlg.querySelector('button[aria-label="Dismiss"], .artdeco-modal__dismiss');
+    const closeBtn = querySelectorDeep('button[aria-label="Dismiss"], button[aria-label*="close" i], .artdeco-modal__dismiss', panel);
     if (closeBtn) closeBtn.click();
     else document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
   };
 
   try {
-    const emailEl = dlg.querySelector('.ci-email a[href^="mailto:"], a[href^="mailto:"]');
-    const email = emailEl ? emailEl.getAttribute("href").replace(/^mailto:/i, "").split("?")[0] : null;
+    /**
+     * The value beside a label. LinkedIn nests each row's label and value in
+     * their own spans, so the row's combined text reads "Emailsomeone@x.com" —
+     * which is why the value has to be found by locating the label node first
+     * and subtracting its own text, never by matching the row's text.
+     */
+    const valueFor = (re) => {
+      const nodes = querySelectorAllDeep('h1, h2, h3, h4, [role="heading"], dt, dd, strong, span, p, div, li', panel);
+      for (const labelNode of nodes) {
+        const labelText = textOf(labelNode);
+        if (!labelText || labelText.length > 40 || !re.test(labelText)) continue;
+        let row = labelNode.parentElement;
+        for (let i = 0; i < 4 && row && row !== panel; i++) {
+          const rest = textOf(row).replace(labelText, "").trim();
+          if (rest) return rest.slice(0, 200);
+          row = row.parentElement;
+        }
+      }
+      return null;
+    };
+    // Leaves only: an ancestor's text is every row concatenated, and a regex
+    // over that happily matches "Emailsomeone@x.com" as an address.
+    const leafTexts = querySelectorAllDeep("*", panel)
+      .filter((el) => el.children && el.children.length === 0)
+      .map(textOf)
+      .filter(Boolean);
 
-    const phoneEl = dlg.querySelector(".ci-phone .t-14, .ci-phone span");
-    const phone = phoneEl ? (phoneEl.textContent || "").trim() : null;
+    const mailto = querySelectorDeep('a[href^="mailto:"]', panel);
+    const emailFromRow = valueFor(/^e-?mail/i);
+    const emailFromText = leafTexts.map((t) => (t.match(EMAIL_RE) || [])[0]).find(Boolean) || null;
+    const email = mailto
+      ? decodeURIComponent((mailto.getAttribute("href") || "").replace(/^mailto:/i, "").split("?")[0]).trim()
+      : (emailFromRow && EMAIL_RE.test(emailFromRow) ? (emailFromRow.match(EMAIL_RE) || [])[0] : null) || emailFromText;
 
-    const websites = Array.from(dlg.querySelectorAll('.ci-websites a[href^="http"], a[href^="http"]'))
+    const tel = querySelectorDeep('a[href^="tel:"]', panel);
+    const phone = tel
+      ? decodeURIComponent((tel.getAttribute("href") || "").replace(/^tel:/i, "")).trim()
+      : valueFor(/^phone/i);
+
+    // The person's own profile row is a linkedin.com link and is not a website
+    // they listed; the old version reported it as one.
+    const websites = querySelectorAllDeep('a[href^="http"]', panel)
       .map((a) => a.getAttribute("href"))
-      .filter(Boolean)
+      .filter((href) => href && !/^https?:\/\/([a-z0-9-]+\.)*linkedin\.com\//i.test(href))
+      .filter((href, i, all) => all.indexOf(href) === i)
       .slice(0, 5);
 
-    const connectedEl = dlg.querySelector(".ci-connected .t-14, .ci-connected span");
-    const connectedSince = connectedEl ? (connectedEl.textContent || "").trim() : null;
-
-    const im = Array.from(dlg.querySelectorAll(".ci-im .t-14, .ci-im span")).map((el) => (el.textContent || "").trim());
+    const connectedSince = valueFor(/^connected/i);
+    const imValue = valueFor(/^(im\b|instant message)/i);
+    const address = valueFor(/^address/i);
+    const birthday = valueFor(/^birthday/i);
 
     return {
       status: "done",
       degree: "1st",
-      email,
-      phone,
-      extra: { websites, connectedSince, im },
+      evidence: detected.evidence,
+      email: email || null,
+      phone: phone || null,
+      extra: {
+        websites,
+        connectedSince,
+        im: imValue ? [imValue] : [],
+        address,
+        birthday,
+        strategy: found.strategy,
+      },
       result: email || phone ? "found" : "no email or phone shown",
     };
   } finally {

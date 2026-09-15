@@ -353,6 +353,35 @@ function observe() {
     return null;
   })();
 
+  const connectionDegree = (() => {
+    const root = topCard || nameEl?.closest("section") || nameEl?.parentElement || document.querySelector("main");
+    const text = (el) => `${el.getAttribute("aria-label") || ""} ${el.textContent || ""}`.replace(/\s+/g, " ").trim();
+    const degree = (value) => {
+      if (/\b1st\b|1st[- ]degree|first[- ]degree/i.test(value)) return "1st";
+      if (/\b2nd\b|2nd[- ]degree|second[- ]degree/i.test(value)) return "2nd";
+      if (/\b3rd\b|3rd[- ]degree|third[- ]degree/i.test(value)) return "3rd";
+      return null;
+    };
+    // LinkedIn now often uses a bare "1st" span beside pronouns in the profile
+    // header. It has neither the old badge class nor an aria label, so inspect
+    // that text within the established top card only.
+    const badges = querySelectorAllDeep(".dist-value, .distance-badge, .pv-member-badge, [aria-label*='degree' i], [data-test-id*='degree' i], span, p, div")
+      .filter((el) => {
+        if (closestDeep(el, "aside") || (root && !root.contains(el))) return false;
+        const value = text(el);
+        return !!degree(value) && (value.length <= 160 || /degree/i.test(value));
+      });
+    badges.sort((a, b) => text(a).length - text(b).length);
+    for (const badge of badges) {
+      const found = degree(text(badge));
+      if (found) return { degree: found, evidence: `profile header badge: ${text(badge).slice(0, 80)}` };
+    }
+    const remove = querySelectorAllDeep('button, a[role="button"], div[role="button"], [role="menuitem"]')
+      .find((el) => !closestDeep(el, "aside") && !closestDeep(el, "[data-followthroo-overlay]") && /remove connection/i.test(text(el)));
+    if (remove) return { degree: "1st", evidence: "profile action: Remove Connection" };
+    return { degree: "unknown", evidence: "no current profile degree badge or Remove Connection action found" };
+  })();
+
   /**
    * The profile's own controls, established from evidence rather than structure.
    *
@@ -511,11 +540,8 @@ function observe() {
       ),
     // Read from the page rather than inferred, so "already connected" is a fact
     // and not a guess made from the absence of a button.
-    firstDegree:
-      /1st/i.test(document.querySelector(".dist-value, .distance-badge")?.textContent || "") ||
-      querySelectorAllDeep('button, div[role="button"], [role="menuitem"]').some((b) =>
-        /remove connection/i.test((b.getAttribute("aria-label") || b.textContent || "")),
-      ),
+    firstDegree: connectionDegree.degree === "1st",
+    connectionDegree,
     limitWall: (() => {
       const dlg = querySelectorDeep(
         '[role="dialog"], [aria-modal="true"], .artdeco-modal, .artdeco-modal-overlay, #artdeco-modal-outlet, .send-invite, [data-view-name*="modal"]',
@@ -555,6 +581,17 @@ function observe() {
  */
 function act({ decision, expectedName, forbiddenSource, goal, autoSend }) {
   const FORBIDDEN_RE = new RegExp(forbiddenSource, "i");
+
+  // Contact lookup is deliberately a one-click, read-only pilot. It may only
+  // open the profile owner's Contact info control from the numbered element
+  // list. Coordinates and typing are never necessary for this job and create
+  // far too much room for an assistant to touch an adjacent outreach control.
+  if (goal === "enrich") {
+    if (decision.action !== "click") return { ok: false, error: "refused: contact lookup only permits a click" };
+    if (decision.x !== undefined || decision.y !== undefined) {
+      return { ok: false, error: "refused: contact lookup does not permit coordinate clicks" };
+    }
+  }
 
   const querySelectorAllDeep = (selector, root = document) => {
     const results = [];
@@ -899,6 +936,16 @@ function act({ decision, expectedName, forbiddenSource, goal, autoSend }) {
     return { ok: false, error: `refused: "${label}" is on somebody else's card, not this profile's` };
   }
   const href = el.getAttribute("href") || closestDeep(el, "a")?.getAttribute("href") || "";
+  if (goal === "enrich") {
+    const ownsProfile = !!closestDeep(el, '[data-ft-top="1"]');
+    const isContactInfo = /contact info/i.test(label) || /overlay\/contact-info/i.test(href);
+    if (!ownsProfile) {
+      return { ok: false, error: `refused: "${label}" is not in this profile's top card` };
+    }
+    if (!isContactInfo) {
+      return { ok: false, error: `refused: "${label}" is not the Contact info control` };
+    }
+  }
   if (href.includes("/feed/update/") || href.includes("/posts/") || href.includes("/recent-activity/")) {
     return { ok: false, error: `refused: "${label}" is an activity post link` };
   }

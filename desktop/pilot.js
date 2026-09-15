@@ -18,6 +18,7 @@
  */
 const { observe, act, FORBIDDEN } = require("./pilot-page");
 const { CODES } = require("./outcome-codes");
+const { requestJson } = require("./api-client");
 
 const MAX_STEPS = 8;
 /**
@@ -64,31 +65,15 @@ function describe(seen) {
  * network blip read as a LinkedIn layout change. A home connection drops
  * packets; a run lasting half an hour will meet that.
  */
-async function askServer(apiBase, token, observation, attempts = 3) {
-  let last;
-  for (let i = 1; i <= attempts; i++) {
-    try {
-      const res = await fetch(`${apiBase}/api/linkedin/assist`, {
-        method: "POST",
-        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-        body: JSON.stringify(observation),
-      });
-      const json = await res.json().catch(() => ({}));
-      if (!res.ok || json.ok === false) {
-        // A rejected token or a missing model will not fix itself; only retry
-        // what might.
-        const retryable = res.status >= 500 || res.status === 429;
-        last = new Error(json.error || `assist returned ${res.status}`);
-        if (!retryable) throw last;
-      } else {
-        return json.data.decision;
-      }
-    } catch (e) {
-      last = e;
-    }
-    if (i < attempts) await sleep(1200 * i);
-  }
-  throw last;
+async function askServer(apiBase, token, observation) {
+  const data = await requestJson(apiBase, "/api/linkedin/assist", {
+    method: "POST",
+    token,
+    body: observation,
+    operation: "Ask the LinkedIn assistant",
+    retry: "idempotent",
+  });
+  return data.decision;
 }
 
 /**
@@ -377,4 +362,4 @@ async function pilotAction({ page, action, apiBase, token, onStep = () => {}, us
   };
 }
 
-module.exports = { pilotAction, MAX_STEPS };
+module.exports = { pilotAction, askServer, MAX_STEPS };

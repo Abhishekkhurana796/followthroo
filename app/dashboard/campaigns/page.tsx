@@ -11,7 +11,7 @@ export default async function Page() {
     ? await Promise.all([
         getCampaigns(tenant.orgId).catch(() => []),
         getTemplates(tenant.orgId).catch(() => []),
-        getSendingAccounts(tenant.orgId).catch(() => []),
+        getSendingAccounts(tenant).catch(() => []),
         getSegments(tenant.orgId).catch(() => []),
       ])
     : [[], [], [], []];

@@ -158,8 +158,8 @@ The UI never needs to know which table an entry came from — that is the entire
 of the unified record. It paginates separately from the lead bundle so opening a
 contact with years of history stays cheap.
 
-## CSV import
-Leads → Add Lead → **Import CSV**. The tab lists the columns it understands and offers a
+## CSV / Excel import
+Leads → Add Lead → **Import CSV or Excel**. The tab lists the columns it understands and offers a
 sample file, both from `IMPORT_COLUMNS` / `SAMPLE_CSV` in
 `app/dashboard/leads/LeadsClient.tsx`, which mirror `normalizeRow` in
 `app/api/leads/import/route.ts` — change them together.
@@ -172,7 +172,7 @@ sample file, both from `IMPORT_COLUMNS` / `SAMPLE_CSV` in
 | `company`, `title`, `phone` | | |
 | `tags` | | comma-separated |
 
-- Parse with **PapaParse**; headers match case- and space-insensitively.
+- CSV is parsed with **PapaParse**; `.xlsx` reads the first worksheet. Headers match case- and space-insensitively, and both formats use the exact same columns.
 - Unknown columns land in `custom` jsonb and become `{{Column name}}` template
   variables ([templates-and-variables.md](templates-and-variables.md)).
 - A row with neither email nor LinkedIn URL is skipped with its reason; the dialog shows
@@ -181,8 +181,21 @@ sample file, both from `IMPORT_COLUMNS` / `SAMPLE_CSV` in
   import`), and an owner from that source's assignment rule.
 
 ## CSV / report export
-- Export lead lists and campaign results (contacted, responses, engagement rates).
-- Respect RBAC — raw PII export is admin-only ([security.md](security.md)).
+- In **Leads**, combine search, tag, group, stage, owner, source, and LinkedIn filters, then choose **Export CSV**. The export uses the exact same authorized scope and filters as the table; it is never a workspace-wide bypass.
+- The CSV includes standard contact fields, tags, source, created date, and every custom CSV-import column found in the selected result. It opens correctly in Excel because it includes a UTF-8 BOM and quotes every cell.
+- Respect RBAC — raw PII export is owner/admin-only ([security.md](security.md)).
+
+### Import-ready CSV / Excel format
+
+Use a header row and one person per following row. Each person needs an `email` **or** a `linkedin url`; the other fields are optional. Header capitalization and spaces do not matter, and unknown columns are retained as variables you can use in templates.
+
+For `.xlsx`, put this header row on the first worksheet; extra worksheets are ignored.
+
+```csv
+first name,last name,email,linkedin url,company,title,phone,tags,city
+Priya,Shah,priya@acme.com,https://www.linkedin.com/in/priyashah,Acme,Head of HR,+91 98765 43210,"warm,hr",Mumbai
+Arjun,Mehta,,https://www.linkedin.com/in/arjun-mehta,Globex,Talent Lead,,linkedin,Pune
+```
 
 ## External CRM sync (optional)
 - Push new leads + log outreach as activities to HubSpot/Salesforce via their API or
@@ -203,6 +216,11 @@ and a third `provider` value, `"managed"`, for a mailbox bought through us.
 Nothing downstream branches on either — a managed mailbox is an ordinary sending
 account, which is why warm-up, the reply poller, deliverability scoring and
 `safeSend` all kept working untouched.
+
+`createdById` records the teammate who connected a mailbox. Members can use only
+their own account for campaigns, agent sends, template tests, inbox replies, and
+warm-up; owners/admins retain mailbox administration. This prevents one rep from
+sending as another rep just because both accounts share a workspace.
 
 There is deliberately **no order or payment table**: the storefront takes the
 money and credits us the margin.
@@ -227,6 +245,17 @@ nullable and `taskId` was added; exactly one is set, enforced by the two callers
 since Prisma cannot express it. This reuses the whole `/dashboard/escalations`
 screen — including its "actually delivered" counter — rather than building a
 second one.
+
+### Notification delivery checks
+
+Task assignment emails send immediately; due reminders run every 15 minutes and the
+daily digest runs hourly (delivering at 8am in each workspace's local time). Run
+`npm run check:task-notifications` to confirm the two QStash jobs target
+`https://app.followthroo.com`; it is read-only and never prints credentials. A digest
+is claimed before it sends to prevent duplicates, but its claim is released if SMTP
+fails so a later sweep can retry. Platform SMTP (`SMTP_HOST`, `SMTP_USER`, and
+`SMTP_PASS`) must be configured in the deployed environment for email delivery;
+in-app notifications remain available independently.
 
 **`User` gained** `notificationPrefs Json?` and `lastDigestAt DateTime?`. Both
 nullable with no default, for the same reason as the other app-owned user fields:

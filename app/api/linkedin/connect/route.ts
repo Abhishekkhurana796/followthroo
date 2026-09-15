@@ -4,7 +4,7 @@ import { prisma } from "@/lib/db";
 import { ok, fail } from "@/lib/http";
 import { requireOrg } from "@/lib/tenant";
 import { getOrCreateAccount, genToken } from "@/lib/linkedin/auth";
-import { queueStats } from "@/lib/linkedin/queue";
+import { effectiveInviteCap, queueStats } from "@/lib/linkedin/queue";
 import { connectionState, linkedinOAuthConfigured, LINKEDIN_SCOPES } from "@/lib/linkedin/oauth";
 
 export const runtime = "nodejs";
@@ -35,7 +35,7 @@ export async function GET(req: NextRequest) {
     },
     autoSend: account.autoSend,
     lastSeenAt: account.lastSeenAt,
-    dailyInviteCap: account.dailyInviteCap,
+    dailyInviteCap: effectiveInviteCap(account),
     minDelaySec: account.minDelaySec,
     maxDelaySec: account.maxDelaySec,
     accountType: account.accountType,
@@ -49,7 +49,7 @@ const Body = z.object({
   action: z.enum(["rotate", "update", "disconnect", "stop_all"]),
   /** Whether the extension clicks Send itself. See LinkedInAccount.autoSend. */
   autoSend: z.boolean().optional(),
-  dailyInviteCap: z.number().int().min(1).max(50).optional(),
+  dailyInviteCap: z.number().int().min(1).max(20).optional(),
   minDelaySec: z.number().int().min(10).max(600).optional(),
   maxDelaySec: z.number().int().min(15).max(900).optional(),
   /** Decides the daily note allowance. See LinkedInAccount.accountType. */
@@ -122,7 +122,7 @@ export async function POST(req: NextRequest) {
   return ok({
     extToken: updated.extToken,
     status: updated.status,
-    dailyInviteCap: updated.dailyInviteCap,
+    dailyInviteCap: effectiveInviteCap(updated),
     dailyEnrichCap: updated.dailyEnrichCap,
     autoEnrichOnAccept: updated.autoEnrichOnAccept,
     minDelaySec: updated.minDelaySec,

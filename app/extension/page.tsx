@@ -108,11 +108,11 @@ export default function ExtensionPage() {
                 .
               </li>
               <li>
-                <span className="font-medium text-ink">2.</span> Open Followthroo → Settings → LinkedIn and copy your
-                connection token.
+                <span className="font-medium text-ink">2.</span> Open the extension&apos;s Settings, set App URL to{" "}
+                <code>https://app.followthroo.com</code>, then paste the pairing token from Followthroo&apos;s LinkedIn page.
               </li>
               <li>
-                <span className="font-medium text-ink">3.</span> Click the extension icon, paste it, press Connect.
+                <span className="font-medium text-ink">3.</span> Press Connect and stay signed in to LinkedIn in that same browser.
               </li>
             </ol>
             <p className="mt-4 text-xs text-ink-faint">

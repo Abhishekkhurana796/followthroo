@@ -5,6 +5,7 @@ import { ok, fail } from "@/lib/http";
 import { requireOrg } from "@/lib/tenant";
 import { SEED_TEMPLATES } from "@/lib/templates-seed";
 import { requireLimit, roomFor } from "@/lib/billing/limits";
+import { EmailAttachmentsSchema } from "@/lib/email-attachments";
 
 export const runtime = "nodejs";
 
@@ -13,6 +14,7 @@ const CreateTemplate = z.object({
   name: z.string().min(1),
   subject: z.string().optional(),
   body: z.string().min(1),
+  attachments: EmailAttachmentsSchema.optional(),
 });
 
 export async function GET(req: NextRequest) {
@@ -54,6 +56,9 @@ export async function POST(req: NextRequest) {
   if (ctx instanceof Response) return ctx;
   const parsed = CreateTemplate.safeParse(await req.json().catch(() => null));
   if (!parsed.success) return fail(parsed.error.issues[0]?.message ?? "invalid body");
+  if (parsed.data.attachments?.length && parsed.data.channel !== "email") {
+    return fail("Attachments are available on email templates only.", 422);
+  }
   const full = await requireLimit(ctx.orgId, "templates");
   if (full) return full;
   const tpl = await prisma.template.create({ data: { ...parsed.data, organizationId: ctx.orgId } });
