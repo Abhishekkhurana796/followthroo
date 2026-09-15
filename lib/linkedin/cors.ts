@@ -4,7 +4,7 @@ import { NextResponse } from "next/server";
 // token — not cookies — so permissive CORS is safe.
 export const LINKEDIN_CORS: Record<string, string> = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Methods": "GET, POST, PUT, OPTIONS",
+  "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, OPTIONS",
   // x-followthroo-client is how the queue tells the desktop app apart from an
   // old extension still polling with the same token. The desktop app uses Node
   // fetch and never preflights, but anything browser-based would be blocked

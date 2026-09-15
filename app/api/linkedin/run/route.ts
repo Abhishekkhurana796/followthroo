@@ -9,7 +9,6 @@ import { corsPreflight, withCors } from "@/lib/linkedin/cors";
 import { INVITE_NOTE_MAX } from "@/lib/linkedin/note";
 
 export const runtime = "nodejs";
-
 export function OPTIONS() {
   return corsPreflight();
 }

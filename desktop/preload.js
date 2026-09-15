@@ -13,6 +13,8 @@ contextBridge.exposeInMainWorld("ft", {
   getSettings: () => ipcRenderer.invoke("settings:get"),
   peekQueue: () => ipcRenderer.invoke("queue:peek"),
   peekEnrichment: () => ipcRenderer.invoke("enrich:peek"),
+  listCampaigns: () => ipcRenderer.invoke("campaign:list"),
+  controlCampaign: (opts) => ipcRenderer.invoke("campaign:control", opts),
   /** { id, noteChoice?: "yes" | "no", note?: string } — only while the invitation is still pending. */
   setNote: (patch) => ipcRenderer.invoke("queue:setNote", patch),
   signIn: () => ipcRenderer.invoke("auth:signin"),
@@ -27,6 +29,11 @@ contextBridge.exposeInMainWorld("ft", {
     const listener = (_e, payload) => handler(payload);
     ipcRenderer.on("run:event", listener);
     return () => ipcRenderer.removeListener("run:event", listener);
+  },
+  onCampaignSelect: (handler) => {
+    const listener = (_e, payload) => handler(payload);
+    ipcRenderer.on("campaign:select", listener);
+    return () => ipcRenderer.removeListener("campaign:select", listener);
   },
   installUpdate: () => ipcRenderer.invoke("update:install"),
   /** Same pattern as onEvent, on its own channel — an update is not a run. */

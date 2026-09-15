@@ -33,6 +33,32 @@ export interface ChangelogEntry {
 export const CHANGELOG: ChangelogEntry[] = [
   {
     product: "webapp",
+    version: "0.31.0",
+    date: "Sep 2026",
+    items: [
+      "LinkedIn campaign cards now hand execution to the installed desktop app and select the exact campaign through a secure custom-protocol link",
+      "Desktop presence is only shown as connected after a recent authenticated check-in; campaign creation, enrollment, messages, CRM results, and analytics remain in the web app",
+      "Queue claims are campaign-scoped and atomically reserved before delivery, preventing two clients from receiving the same irreversible LinkedIn action",
+      "\"Open in desktop\" now shows whether the desktop app is connected, and offers a download when this computer doesn't have it — instead of a link that silently did nothing",
+      "Adds the server side that desktop 1.16 needs to start invitation runs; 1.16.0 briefly reached some computers ahead of it and could not start a run until this update",
+    ],
+  },
+  {
+    product: "desktop",
+    version: "1.16.1",
+    date: "Sep 2026",
+    items: [
+      "Added a LinkedIn Campaigns workspace with lead counts, queued work, message readiness, live processed/sent/failed progress, and Start, Pause, Resume, and Stop controls",
+      "Campaign runs reuse the existing persistent Playwright Chrome profile, deterministic profile verification, pacing, structured errors, and server-side outcome sync",
+      "A heartbeat-backed Redis lease prevents the same LinkedIn account from running on two desktops; an expired lease and the existing stale-action recovery make interrupted campaigns resumable",
+      "Web-to-desktop links open and select the requested campaign while keeping hosted content isolated from the local automation bridge",
+      "Resuming after a crash or a closed window works straight away on the same computer, instead of reporting that the account is already running on another desktop",
+      "A single dropped connection no longer stops a campaign mid-run; it stops only once this computer has actually lost the run",
+      "Campaign cards show who is being contacted now, Sent / Failed / Remaining counts, a Completed state, and a shortcut to fix missing messages",
+    ],
+  },
+  {
+    product: "webapp",
     version: "0.30.0",
     date: "Sep 2026",
     items: [

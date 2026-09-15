@@ -4,7 +4,26 @@ Sends queued LinkedIn invitations and looks up eligible profiles' Contact info
 from the customer's own computer, own IP, and logged-in LinkedIn session.
 
 **Last updated:** 2026-09-15
-**Status:** active — desktop 1.15.4
+**Status:** active — desktop 1.16.1
+
+## 1.16.1 campaign execution
+
+- The web campaign list hands LinkedIn campaigns to the installed app through
+  `followthroo://linkedin/campaign/:id`; the local Automation view selects the
+  matching campaign without exposing its Playwright bridge to hosted content.
+- The desktop lists each LinkedIn campaign with enrolled leads, queued work,
+  processed/sent/failed progress, message readiness, and Start/Pause/Resume/Stop
+  controls. Claims carry `campaignId`, so one run cannot drain another campaign.
+- A Redis lease (`/api/linkedin/desktop-run`) allows one desktop browser session
+  per paired member. It is renewed every 30s and expires 120s after a crash.
+  The same `deviceId` may take over its own stale lease, so Resume works at once
+  after a crash; a different computer never can. The heartbeat retries, and a
+  run stops only on a 409 (another run owns it) or after 90s without a renewal —
+  never on one dropped request. `scripts/verify-desktop-run-lease.ts` covers it.
+- The web campaign card's **Open in desktop** shows connected/offline (a desktop
+  check-in within 150s) and offers the installer download beside the deep link.
+  Queue rows are also claimed with a conditional `pending → in_progress` update,
+  so even an older or racing client cannot receive the same action twice.
 
 ## 1.15.4 current LinkedIn modal parser
 
@@ -76,7 +95,8 @@ Chrome extension already used:
 | | |
 |---|---|
 | Auth | `Bearer <extToken>` — the pairing token on `LinkedInAccount`, shown under LinkedIn → Browser helper |
-| Claim work | `GET /api/linkedin/queue?limit=1` |
+| Claim work | `GET /api/linkedin/queue?limit=1&campaignId=…&runId=…` for a selected campaign; omit `campaignId` for the aggregate lane |
+| Desktop run ownership | `POST /api/linkedin/desktop-run` to acquire, heartbeat, and release the short Redis lease |
 | Report outcome | `POST /api/linkedin/queue` with `{ actionId, status, result, code }`. `code: NOTE_LIMIT_REACHED` is the one the server acts on: LinkedIn showed its Premium upsell where the note box should be, so the invitation goes back to the queue with its note and no more notes are handed out that day. |
 | Who is next | `GET /api/linkedin/queue?peek=1` — `people` (goes out, in order), `held` (waiting on a pick or on tomorrow's notes) and `notes` (today's allowance). Claims nothing. |
 | Who is next for enrichment | `GET /api/linkedin/enrich/peek` — independent read of queued contact lookups and the lookup cap. Claims nothing. |
@@ -89,10 +109,10 @@ Chrome extension already used:
 
 The extension is still installed and still does **lead sourcing**. It no longer
 claims invite actions at all — see the comment in `extension/background.js`'s
-`pollOnce`. That is not a preference: `claimActions` marks a row `in_progress`
-with a read followed by a write, so two clients polling the same queue can each
-come away holding the same action and each send it. A duplicate invitation cannot
-be recalled.
+`pollOnce`. The backend enforces that split as well: an active desktop lease
+blocks every other claimer, and `claimActions` conditionally updates each row
+from `pending` to `in_progress` before handing it out. A duplicate invitation
+cannot be recalled, so both protections are intentional.
 
 ## Files
 
@@ -100,7 +120,7 @@ be recalled.
 |---|---|
 | `main.js` | Electron main process. Owns the window, the mutually exclusive lane lock, and the day's tally. |
 | `preload.js` | The only bridge to the renderer. `contextIsolation` on, `nodeIntegration` off. |
-| `renderer/` | The full-page Automation workspace: two queues, two buttons, progress, settings, and activity. |
+| `renderer/` | The full-page Automation workspace: campaign controls, two queues, progress, settings, and activity. |
 | `runner.js` | Invitation lane only: claim → navigate → act → report, with invitation stop conditions. |
 | `page-actions.js` | What happens on the LinkedIn page. Shared with the verification scripts. |
 | `enrich-flow.js` | Profile-enrichment lane only: claim → navigate → read → report, with independent stop conditions. |

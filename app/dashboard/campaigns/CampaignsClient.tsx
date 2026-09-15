@@ -4,7 +4,7 @@ import { useState } from "react";
 import useSWR from "swr";
 import {
   Plus, X, Rocket, Mail, Link as LinkIcon, MessageSquare, Clock, ArrowDown,
-  Sparkles, Server, GitBranch, LayoutTemplate, PenLine, Trash2, Users, StopCircle, Pencil, Square, IdCard,
+  Sparkles, Server, GitBranch, LayoutTemplate, PenLine, Trash2, Users, StopCircle, Pencil, Square, IdCard, MonitorPlay,
 } from "lucide-react";
 import { api } from "@/lib/client";
 import { Banner, DashHeader, Dialog, Input, Label, Panel, Select, useConfirm } from "@/components/ui";
@@ -13,6 +13,7 @@ import Link from "next/link";
 import { INVITE_NOTE_MAX, INVITE_NOTE_WARN, worstCaseNoteLength } from "@/lib/linkedin/note";
 import { creditsPerLead } from "@/lib/billing/estimate";
 import { CREDIT_COSTS } from "@/lib/billing/plans";
+import { DESKTOP_APP_URL } from "@/lib/constants";
 import { SUMMARY_KEY, type Summary } from "@/components/dashboard/billing/types";
 
 type Template = { id: string; channel: string; name: string; body?: string };
@@ -242,9 +243,10 @@ export default function CampaignsPage() {
   // Whether LinkedIn steps will actually run. Fetched here so the builder can say
   // so while the sequence is being written, rather than letting steps queue up
   // against an account that was never connected.
-  const { data: linkedinConn } = useSWR<{ account?: { state?: string } }>("/api/linkedin/connect");
+  const { data: linkedinConn } = useSWR<{ account?: { state?: string }; desktopConnected?: boolean }>("/api/linkedin/connect");
   const { data: billing } = useSWR<Summary>(SUMMARY_KEY);
   const linkedinReady = linkedinConn ? linkedinConn.account?.state !== "disconnected" : undefined;
+  const desktopConnected = linkedinConn?.desktopConnected === true;
   const enrichmentLocked = !!billing?.enforced && !billing.plan?.features.includes("linkedin_enrichment");
   const confirm = useConfirm();
 
@@ -256,6 +258,9 @@ export default function CampaignsPage() {
   const [msg, setMsg] = useState<{ kind: "error" | "success" | "info"; text: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [launchFor, setLaunchFor] = useState<Campaign | null>(null);
+  // LinkedIn campaigns run on the desktop; this is the handoff, with a
+  // download path for a computer that doesn't have the app yet.
+  const [desktopFor, setDesktopFor] = useState<Campaign | null>(null);
 
   function patchNode(i: number, patch: Partial<SendNode> & Partial<CondNode>) {
     setNodes((ns) => ns.map((n, idx) => (idx === i ? ({ ...n, ...patch } as BuilderNode) : n)));
@@ -329,6 +334,10 @@ export default function CampaignsPage() {
       setMsg({ kind: "error", text: (e as Error).message });
       setLaunchFor(null);
     }
+  }
+
+  function openLinkedInCampaign(campaignId: string) {
+    window.location.href = `followthroo://linkedin/campaign/${encodeURIComponent(campaignId)}`;
   }
 
   async function stopCampaign(c: Campaign) {
@@ -744,6 +753,7 @@ export default function CampaignsPage() {
             <div className="grid gap-6 md:grid-cols-2">
               {campaigns.map((c) => {
                 const dn = displayNodes(c.sequence);
+                const hasLinkedIn = dn.some((node) => node.stepType === "linkedin_invite" || node.stepType === "linkedin_message");
                 return (
                   <Panel key={c.id} className="flex flex-col justify-between border-line/70 transition hover:border-ink/50">
                     <div>
@@ -771,6 +781,12 @@ export default function CampaignsPage() {
                     <div className="mt-6 flex items-center justify-between border-t border-line pt-4">
                       <span className="text-xs text-ink-soft">{c._count?.enrollments ?? 0} enrolled · {dn.length} node(s)</span>
                       <div className="flex items-center gap-2">
+                        {hasLinkedIn && (
+                          <button onClick={() => setDesktopFor(c)} title={desktopConnected ? "Desktop connected — open this campaign there" : "Desktop offline — LinkedIn steps run in the desktop app"} className="flex items-center gap-1.5 rounded-xl border border-info/30 bg-info-soft px-3 py-2 text-xs font-semibold text-info transition hover:border-info/50">
+                            <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${desktopConnected ? "bg-success" : "bg-ink-faint"}`} aria-hidden />
+                            <MonitorPlay className="h-3.5 w-3.5" /> Open in desktop
+                          </button>
+                        )}
                         <button onClick={() => deleteCampaign(c)} aria-label={`Delete ${c.name}`} title="Delete campaign" className="rounded-xl border border-line bg-surface p-2 text-ink-soft transition hover:border-danger/30 hover:bg-danger-soft hover:text-danger"><Trash2 className="h-3.5 w-3.5" /></button>
                         <button onClick={() => startEdit(c)} className="flex items-center gap-1 rounded-xl border border-line bg-surface px-3 py-2 text-xs font-semibold transition hover:bg-tint"><Pencil className="h-3.5 w-3.5" /> Edit</button>
                         {c.status === "done" ? (
@@ -795,6 +811,46 @@ export default function CampaignsPage() {
 
       {/* ---- Launch / enroll modal ---- */}
       <Dialog
+        open={!!desktopFor}
+        onClose={() => setDesktopFor(null)}
+        title="LinkedIn campaigns run in the desktop app"
+        description="Followthroo Desktop runs this campaign's LinkedIn steps on your computer, with the LinkedIn account you're signed in to there. Results sync back here."
+        size="sm"
+      >
+        {desktopFor && (
+          <div className="space-y-4">
+            <div className="flex items-center gap-2 rounded-xl border border-line bg-surface-sunken px-3 py-2.5 text-sm">
+              <span className={`h-2 w-2 shrink-0 rounded-full ${desktopConnected ? "bg-success" : "bg-ink-faint"}`} aria-hidden />
+              <span className="font-semibold">{desktopConnected ? "Desktop connected" : "Desktop offline"}</span>
+              <span className="text-ink-soft">
+                {desktopConnected ? "— checked in within the last few minutes" : "— hasn't checked in recently"}
+              </span>
+            </div>
+            <p className="text-sm text-ink-soft">
+              Opening <span className="font-semibold text-ink">{desktopFor.name}</span> selects it in the app, where you review it
+              and press Start. Nothing is sent until you do.
+            </p>
+            <div className="flex flex-wrap gap-2">
+              <button type="button" onClick={() => openLinkedInCampaign(desktopFor.id)} className="btn btn-primary !py-2 !text-sm">
+                Open Desktop App
+              </button>
+              {DESKTOP_APP_URL && (
+                <a href={DESKTOP_APP_URL} className="btn btn-ghost !py-2 !text-sm">
+                  Download Desktop App
+                </a>
+              )}
+            </div>
+            {!desktopConnected && (
+              <p className="text-xs text-ink-soft">
+                If nothing opens, the app isn&apos;t installed on this computer yet. Download it, open it once and sign in, then come
+                back here.
+              </p>
+            )}
+          </div>
+        )}
+      </Dialog>
+
+      <Dialog
         open={!!launchFor}
         onClose={() => setLaunchFor(null)}
         title={launchFor ? `Launch “${launchFor.name}”` : ""}
@@ -808,6 +864,12 @@ export default function CampaignsPage() {
         {launchFor && (
           <div className="space-y-2">
               <CreditEstimate sequence={launchFor.sequence} />
+              {displayNodes(launchFor.sequence).some((node) => node.stepType === "linkedin_invite" || node.stepType === "linkedin_message") && (
+                <p className="rounded-xl bg-info-soft px-3 py-2 text-xs text-info">
+                  Launching enrolls these leads. Its LinkedIn steps then wait for the desktop app — use{" "}
+                  <span className="font-semibold">Open in desktop</span> on this campaign to review and start them.
+                </p>
+              )}
               {/* Groups first — safer, explicit targeting */}
               {segments.length > 0 ? (
                 <>

@@ -35,6 +35,7 @@ export async function GET(req: NextRequest) {
     },
     autoSend: account.autoSend,
     lastSeenAt: account.lastSeenAt,
+    desktopConnected: !!account.lastSeenAt && Date.now() - account.lastSeenAt.getTime() < 150_000,
     dailyInviteCap: effectiveInviteCap(account),
     minDelaySec: account.minDelaySec,
     maxDelaySec: account.maxDelaySec,

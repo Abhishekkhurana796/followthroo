@@ -11,11 +11,19 @@ const el = {
   apiBase: $("apiBase"), token: $("token"), save: $("save"), settings: $("settings"), settingsErr: $("settingsErr"),
   signin: $("signin"), signinBtn: $("signinBtn"), collapse: $("collapse"), reopen: $("reopen"), webSwitch: $("webSwitch"),
   update: $("update"), updateText: $("updateText"), updateBtn: $("updateBtn"),
+  campaignPanel: $("campaignPanel"), campaignList: $("campaignList"), campaignConnection: $("campaignConnection"),
 };
 
 let inviteCap = 20;
 let activeLane = null;
 let logged = false;
+let selectedCampaignId = null;
+let activeCampaignRunId = null;
+let campaigns = [];
+/** The campaign this computer was running when it last closed without finishing, per main.js. */
+let interruptedCampaignId = null;
+/** Who the running campaign is contacting now, from the runner's action-start event. */
+let currentWho = null;
 const ended = { invite: false, enrich: false };
 const NOTE_MAX = 300;
 
@@ -49,6 +57,113 @@ function setRunning(lane) {
   el.enrichStop.hidden = lane !== "enrich";
   el.inviteStatus.textContent = lane === "invite" ? "Running" : "Ready";
   el.enrichStatus.textContent = lane === "enrich" ? "Running" : "Ready";
+  renderCampaigns();
+}
+
+function campaignButton(label, className, handler, disabled = false) {
+  const button = document.createElement("button");
+  button.className = className; button.textContent = label; button.disabled = disabled;
+  button.addEventListener("click", handler);
+  return button;
+}
+
+const STATE_LABEL = { ready: "Ready", running: "Running", paused: "Paused", stopped: "Stopped", completed: "Completed" };
+
+function campaignLine(text) {
+  const line = document.createElement("p"); line.className = "campaign-meta"; line.textContent = text;
+  return line;
+}
+
+/**
+ * One card per LinkedIn campaign, in product words only: people, progress, who
+ * is being contacted right now, and just the controls that make sense in this
+ * state. Every individual profile and outcome stays in Activity below.
+ */
+function renderCampaigns() {
+  el.campaignList.innerHTML = "";
+  if (!campaigns.length) {
+    const empty = document.createElement("p"); empty.className = "empty";
+    empty.textContent = "No LinkedIn campaigns yet. Create one with a LinkedIn step in the web app and enroll leads.";
+    el.campaignList.append(empty); return;
+  }
+  for (const campaign of campaigns) {
+    const mine = campaign.id === activeCampaignRunId;
+    const executionState = mine ? "running" : campaign.executionState;
+    const interrupted = !mine && executionState !== "running" && executionState !== "completed" && interruptedCampaignId === campaign.id;
+    const card = document.createElement("article");
+    card.className = `campaign-card${campaign.id === selectedCampaignId ? " selected" : ""}`;
+    card.dataset.campaignId = campaign.id;
+
+    const top = document.createElement("div"); top.className = "campaign-card-top";
+    const name = document.createElement("h4"); name.textContent = campaign.name;
+    const status = document.createElement("span"); status.className = "status";
+    status.textContent = interrupted ? "Interrupted" : STATE_LABEL[executionState] || "Ready";
+    top.append(name, status);
+
+    const leads = `${campaign.leads} lead${campaign.leads === 1 ? "" : "s"}`;
+    const progressLine = campaignLine(campaign.total ? `${leads} · ${campaign.completed} / ${campaign.total} completed` : leads);
+    const bar = document.createElement("div"); bar.className = "campaign-progress";
+    const fill = document.createElement("i"); fill.style.width = `${campaign.total ? Math.min(100, campaign.completed / campaign.total * 100) : 0}%`; bar.append(fill);
+
+    const details = [];
+    if (executionState === "running") {
+      if (mine) details.push(campaignLine(`Current: ${currentWho || "starting…"}`));
+      details.push(campaignLine(`Sent: ${campaign.sent} · Failed: ${campaign.failed} · Remaining: ${campaign.queued}`));
+    } else if (interrupted) {
+      details.push(campaignLine(`Interrupted with ${campaign.queued} still to go. Resume carries on with the people not yet contacted.`));
+    } else if (campaign.missingMessages) {
+      details.push(campaignLine(`${campaign.missingMessages} lead${campaign.missingMessages === 1 ? " needs" : "s need"} a message before this can start.`));
+    } else if (executionState === "completed") {
+      details.push(campaignLine(`Sent: ${campaign.sent} · Failed: ${campaign.failed}`));
+    } else if (campaign.queued) {
+      details.push(campaignLine(`Messages ready · ${campaign.queued} to send`));
+    } else {
+      details.push(campaignLine("Waiting for its next LinkedIn step."));
+    }
+
+    const foot = document.createElement("div"); foot.className = "campaign-card-foot";
+    const actions = document.createElement("div"); actions.className = "actions";
+    if (executionState === "running") {
+      actions.append(campaignButton("Pause", "ghost small", () => controlCampaign(campaign.id, "pause")));
+      actions.append(campaignButton("Stop", "danger small", () => controlCampaign(campaign.id, "stop")));
+    } else if (executionState !== "completed") {
+      if (campaign.missingMessages) actions.append(campaignButton("Fix messages in web app", "ghost small", () => switchView(true)));
+      const cannotStart = !campaign.ready || !!campaign.missingMessages || !!activeLane;
+      const resume = executionState === "paused" || interrupted;
+      actions.append(campaignButton(resume ? "Resume" : "Start", "primary small", () => begin("invite", false, campaign.id), cannotStart));
+      if (executionState !== "stopped") actions.append(campaignButton("Stop", "ghost small", () => controlCampaign(campaign.id, "stop"), !!activeLane));
+    }
+    foot.append(actions);
+    card.append(top, progressLine, bar, ...details, foot);
+    el.campaignList.append(card);
+  }
+}
+
+async function loadCampaigns() {
+  if (!window.ft.listCampaigns) return;
+  const res = await window.ft.listCampaigns();
+  if (!res.ok) {
+    el.campaignConnection.textContent = "Unavailable"; el.campaignConnection.className = "status disconnected";
+    el.campaignList.innerHTML = "";
+    const empty = document.createElement("p"); empty.className = "empty"; empty.textContent = res.error;
+    el.campaignList.append(empty);
+    return;
+  }
+  campaigns = res.campaigns || [];
+  interruptedCampaignId = res.interruptedCampaignId || null;
+  el.campaignConnection.textContent = res.connected ? "Desktop connected" : "Desktop checking in";
+  el.campaignConnection.className = `status ${res.connected ? "connected" : ""}`;
+  renderCampaigns();
+}
+
+async function controlCampaign(campaignId, action) {
+  const res = await window.ft.controlCampaign({ campaignId, action });
+  if (!res.ok) log(res.error, "failed", "invite");
+  else {
+    if (action === "pause" || action === "stop") activeCampaignRunId = null;
+    log(`${action[0].toUpperCase()}${action.slice(1)} requested for campaign.`, null, "invite");
+  }
+  await loadCampaigns();
 }
 
 function emptyRow(list, message) {
@@ -172,7 +287,7 @@ async function loadEnrichment() {
   setRunning(activeLane);
 }
 
-async function loadQueues() { await Promise.all([loadInvites(), loadEnrichment()]); }
+async function loadQueues() { await Promise.all([loadInvites(), loadEnrichment(), loadCampaigns()]); }
 async function refreshAuth() { const { signedIn } = await window.ft.authStatus(); el.signin.classList.toggle("show", !signedIn); return signedIn; }
 
 async function switchView(showWeb) {
@@ -184,13 +299,13 @@ el.collapse.addEventListener("click", () => switchView(true)); el.webSwitch.addE
 el.signinBtn.addEventListener("click", async () => { el.signinBtn.disabled = true; el.signinBtn.textContent = "Opening browser..."; await window.ft.signIn(); setTimeout(() => { el.signinBtn.disabled = false; el.signinBtn.textContent = "Sign in"; }, 4000); });
 el.save.addEventListener("click", async () => { el.settingsErr.textContent = ""; const res = await window.ft.saveSettings({ apiBase: el.apiBase.value, token: el.token.value }); if (!res.ok) { el.settingsErr.textContent = res.error; return; } el.apiBase.value = res.settings.apiBase; log("Settings saved."); await loadQueues(); });
 
-async function begin(lane, dryRun = false) {
-  ended[lane] = false; el.settingsErr.textContent = ""; setRunning(lane);
+async function begin(lane, dryRun = false, campaignId = null) {
+  ended[lane] = false; el.settingsErr.textContent = ""; activeCampaignRunId = campaignId; setRunning(lane);
   const now = lane === "invite" ? el.inviteNow : el.enrichNow;
   now.textContent = dryRun ? "Test run — no invitation will be sent." : "Starting Chrome...";
   log(dryRun ? "Test run started — nothing will be sent." : "Run started.", null, lane);
-  const res = await window.ft.start({ mode: lane, dryRun });
-  if (!res.ok) { setRunning(null); now.textContent = res.error; el.dot.className = "dot err"; log(res.error, "failed", lane); }
+  const res = await window.ft.start({ mode: lane, dryRun, campaignId });
+  if (!res.ok) { activeCampaignRunId = null; setRunning(null); now.textContent = res.error; el.dot.className = "dot err"; log(res.error, "failed", lane); }
 }
 el.inviteStart.addEventListener("click", () => begin("invite")); el.inviteDry.addEventListener("click", () => begin("invite", true)); el.enrichStart.addEventListener("click", () => begin("enrich"));
 async function stop(lane) { const button = lane === "invite" ? el.inviteStop : el.enrichStop; const now = lane === "invite" ? el.inviteNow : el.enrichNow; button.disabled = true; now.textContent = "Stopping after this profile..."; await window.ft.stop(); button.disabled = false; }
@@ -203,8 +318,15 @@ window.ft.onEvent((event) => {
   switch (event.type) {
     case "status": now.textContent = event.message; break;
     case "needs-signin": now.textContent = event.message; log(event.message, null, lane); break;
-    case "action-start": now.textContent = `Opening ${event.who}...`; break;
-    case "action-done": if (event.sent !== undefined) { el.sent.textContent = String(event.sent); progress(el.inviteBar, event.sent, inviteCap); } log(`${event.who} — ${event.result}`, event.status, lane); break;
+    case "action-start":
+      now.textContent = `Opening ${event.who}...`;
+      if (activeCampaignRunId) { currentWho = event.who; renderCampaigns(); }
+      break;
+    case "action-done":
+      if (event.sent !== undefined) { el.sent.textContent = String(event.sent); progress(el.inviteBar, event.sent, inviteCap); }
+      log(`${event.who} — ${event.result}`, event.status, lane);
+      loadCampaigns();
+      break;
     case "waiting": if (event.sent !== undefined) { el.sent.textContent = String(event.sent); progress(el.inviteBar, event.sent, inviteCap); } break;
     case "tick": now.textContent = `Waiting ${event.remaining}s before the next invitation.`; break;
     case "enrich-start": now.textContent = `Looking up ${event.who}...`; break;
@@ -230,9 +352,18 @@ window.ft.onEvent((event) => {
     case "paired": log("Paired with your Followthroo account."); load(); break;
     case "signed-in": log("Signed in."); refreshAuth(); load(); break;
     case "signin-failed": el.dot.className = "dot err"; log(event.message, "failed"); break;
-    case "idle": if (!ended[lane]) now.textContent = "Done."; ended[lane] = false; setRunning(null); loadQueues(); break;
+    case "idle": if (!ended[lane]) now.textContent = "Done."; ended[lane] = false; activeCampaignRunId = null; currentWho = null; setRunning(null); loadQueues(); break;
   }
 });
+
+if (window.ft.onCampaignSelect) {
+  window.ft.onCampaignSelect(({ campaignId }) => {
+    selectedCampaignId = campaignId;
+    renderCampaigns();
+    const card = el.campaignList.querySelector(`[data-campaign-id="${CSS.escape(campaignId)}"]`);
+    if (card) card.scrollIntoView({ behavior: "smooth", block: "center" });
+  });
+}
 
 window.ft.onUpdate((event) => {
   if (event.type === "available" || event.type === "downloading" || event.type === "ready") el.update.classList.add("show"); else el.update.classList.remove("show");
@@ -254,3 +385,4 @@ async function load() {
 }
 
 load();
+setInterval(() => { if (!document.hidden) loadCampaigns(); }, 15_000);

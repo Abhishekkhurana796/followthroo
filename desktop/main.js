@@ -19,6 +19,7 @@ const {
   app, BrowserWindow, WebContentsView, ipcMain, dialog, shell, powerSaveBlocker, session,
 } = require("electron");
 const path = require("node:path");
+const { randomUUID } = require("node:crypto");
 const { autoUpdater } = require("electron-updater");
 const store = require("./store");
 const { isAppUrl, isProviderSignIn } = require("./navigation");
@@ -35,7 +36,9 @@ let showingWebApp = false;
 /** True while a batch is in flight. Guards against two runs on one queue. */
 let running = false;
 let runningMode = null;
+let runningCampaignId = null;
 let stopRequested = false;
+let pendingCampaignId = null;
 /** Keeps the machine awake for the ~30 minutes a full run takes. */
 let sleepBlocker = null;
 
@@ -72,6 +75,9 @@ function createWindow() {
     },
   });
   win.loadFile(path.join(__dirname, "renderer", "index.html"));
+  win.webContents.on("did-finish-load", () => {
+    if (pendingCampaignId) send("campaign:select", { campaignId: pendingCampaignId });
+  });
 
   // No preload, no node, and its own nothing. This is remote content we do not
   // control the moment-to-moment contents of, and it must not be able to reach
@@ -274,6 +280,27 @@ async function completeSignIn(rawUrl) {
   }
 }
 
+/** Route protocol links without letting a campaign handoff impersonate auth. */
+function handleDeepLink(rawUrl) {
+  try {
+    const url = new URL(rawUrl);
+    if (url.hostname === "linkedin") {
+      const match = url.pathname.match(/^\/campaign\/([^/]+)$/);
+      if (!match) return;
+      pendingCampaignId = decodeURIComponent(match[1]);
+      showingWebApp = false;
+      layout();
+      send("campaign:select", { campaignId: pendingCampaignId });
+      if (win && !win.isDestroyed()) {
+        if (win.isMinimized()) win.restore();
+        win.focus();
+      }
+      return;
+    }
+    completeSignIn(rawUrl);
+  } catch (_) {}
+}
+
 // Only one copy may hold the protocol, or a second launch steals the callback
 // from the window the person is actually looking at.
 const gotLock = app.requestSingleInstanceLock();
@@ -282,7 +309,7 @@ if (!gotLock) {
 } else {
   app.on("second-instance", (_e, argv) => {
     const deepLink = argv.find((a) => a.startsWith("followthroo://"));
-    if (deepLink) completeSignIn(deepLink);
+    if (deepLink) handleDeepLink(deepLink);
     if (win && !win.isDestroyed()) {
       if (win.isMinimized()) win.restore();
       win.focus();
@@ -291,7 +318,7 @@ if (!gotLock) {
   // macOS delivers it as an event rather than an argv entry.
   app.on("open-url", (e, url) => {
     e.preventDefault();
-    completeSignIn(url);
+    handleDeepLink(url);
   });
 }
 
@@ -319,7 +346,7 @@ app.whenReady().then(() => {
 
   // A cold start launched by the protocol carries the URL in argv.
   const deepLink = process.argv.find((a) => a.startsWith("followthroo://"));
-  if (deepLink) completeSignIn(deepLink);
+  if (deepLink) handleDeepLink(deepLink);
 
   // A few seconds after open, so an update check never competes with the
   // pairing and queue calls a fresh window already makes on load. After that,
@@ -363,6 +390,7 @@ ipcMain.handle("settings:get", () => ({
   maxPerDay: MAX_PER_DAY,
   running,
   runningMode,
+  runningCampaignId,
   version: app.getVersion(),
 }));
 
@@ -395,6 +423,53 @@ ipcMain.handle("queue:peek", async () => {
       token: settings.token,
       operation: "Read invitation queue",
       retry: "read",
+    });
+    return { ok: true, ...data };
+  } catch (e) {
+    return { ok: false, error: String((e && e.message) || e) };
+  }
+});
+
+function desktopIdentity(userDataPath) {
+  const current = store.read(userDataPath);
+  if (typeof current.deviceId === "string" && current.deviceId.length >= 8) return current.deviceId;
+  const deviceId = randomUUID();
+  store.write(userDataPath, { deviceId });
+  return deviceId;
+}
+
+/** Campaign summaries are server-owned; the renderer never receives a session token. */
+ipcMain.handle("campaign:list", async () => {
+  const settings = store.read(app.getPath("userData"));
+  if (!settings.token) return { ok: false, error: "No pairing token yet." };
+  const check = store.normaliseApiBase(settings.apiBase);
+  if (!check.ok) return { ok: false, error: check.error };
+  try {
+    const data = await requestJson(check.value, "/api/linkedin/campaigns", {
+      token: settings.token,
+      operation: "Read LinkedIn campaigns",
+      retry: "read",
+    });
+    return { ok: true, ...data, interruptedCampaignId: settings.activeCampaignId || null };
+  } catch (e) {
+    return { ok: false, error: String((e && e.message) || e) };
+  }
+});
+
+ipcMain.handle("campaign:control", async (_e, { campaignId, action } = {}) => {
+  if (typeof campaignId !== "string" || !campaignId) return { ok: false, error: "Choose a campaign." };
+  if (!["pause", "resume", "stop"].includes(action)) return { ok: false, error: "Choose pause, resume, or stop." };
+  const settings = store.read(app.getPath("userData"));
+  const check = store.normaliseApiBase(settings.apiBase);
+  if (!settings.token) return { ok: false, error: "No pairing token yet." };
+  if (!check.ok) return { ok: false, error: check.error };
+  if ((action === "pause" || action === "stop") && runningCampaignId === campaignId) stopRequested = true;
+  try {
+    const data = await requestJson(check.value, "/api/linkedin/campaigns", {
+      method: "PATCH",
+      token: settings.token,
+      body: { campaignId, action },
+      operation: `${action} LinkedIn campaign`,
     });
     return { ok: true, ...data };
   } catch (e) {
@@ -456,7 +531,7 @@ ipcMain.handle("run:stop", () => {
   return { ok: true };
 });
 
-ipcMain.handle("run:start", async (_e, { mode = "invite", dryRun = false } = {}) => {
+ipcMain.handle("run:start", async (_e, { mode = "invite", dryRun = false, campaignId = null } = {}) => {
   if (running) return { ok: false, error: "A run is already going." };
   if (mode !== "invite" && mode !== "enrich") return { ok: false, error: "Choose invitations or contact lookups." };
   if (mode === "enrich" && dryRun) return { ok: false, error: "Contact lookups do not have a test mode." };
@@ -467,10 +542,18 @@ ipcMain.handle("run:start", async (_e, { mode = "invite", dryRun = false } = {})
   const check = store.normaliseApiBase(settings.apiBase);
   if (!check.ok) return { ok: false, error: check.error };
 
+  if (campaignId !== null && (typeof campaignId !== "string" || !campaignId)) {
+    return { ok: false, error: "Choose a valid campaign." };
+  }
+
+  let runId = null;
+  let heartbeat = null;
+  let sessionFailure = false;
   let invitationUsage = null;
   if (mode === "invite") {
     try {
-      const peek = await requestJson(check.value, "/api/linkedin/queue?peek=1&limit=1", {
+      const campaignQuery = campaignId ? `&campaignId=${encodeURIComponent(campaignId)}` : "";
+      const peek = await requestJson(check.value, `/api/linkedin/queue?peek=1&limit=1${campaignQuery}`, {
         token: settings.token,
         operation: "Read invitation limit",
         retry: "read",
@@ -485,12 +568,67 @@ ipcMain.handle("run:start", async (_e, { mode = "invite", dryRun = false } = {})
     }
   }
 
+  if (mode === "invite" && !dryRun) {
+    if (campaignId) {
+      try {
+        await requestJson(check.value, "/api/linkedin/campaigns", {
+          method: "PATCH", token: settings.token, body: { campaignId, action: "resume" }, operation: "Resume LinkedIn campaign",
+        });
+      } catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
+    }
+    runId = randomUUID();
+    try {
+      await requestJson(check.value, "/api/linkedin/desktop-run", {
+        method: "POST",
+        token: settings.token,
+        body: { action: "acquire", runId, deviceId: desktopIdentity(userDataPath), campaignId },
+        operation: "Reserve LinkedIn desktop run",
+      });
+    } catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
+    store.write(userDataPath, { activeCampaignId: campaignId || null });
+  }
+
   running = true;
   runningMode = mode;
+  runningCampaignId = campaignId;
   stopRequested = false;
   // Half an hour of paced waiting is exactly the window in which a laptop
   // decides to sleep and takes the run down with it.
   sleepBlocker = powerSaveBlocker.start("prevent-display-sleep");
+
+  if (runId) {
+    // The lease lives 120s and renews every 30s. A 409 means the server has
+    // handed the run to someone else, so stop at once. Anything else is the
+    // network, and one dropped request used to stop the run and pause the
+    // campaign despite three more renewals of slack — so only give up once the
+    // lease could genuinely have lapsed, and well before another desktop could
+    // legitimately take it.
+    const LEASE_GIVE_UP_MS = 90_000;
+    let lastRenewedAt = Date.now();
+    heartbeat = setInterval(async () => {
+      try {
+        await requestJson(check.value, "/api/linkedin/desktop-run", {
+          method: "POST", token: settings.token, body: { action: "heartbeat", runId }, operation: "Keep LinkedIn run reserved", retry: "idempotent",
+        });
+        lastRenewedAt = Date.now();
+      } catch (e) {
+        const lost = !!e && e.httpStatus === 409;
+        if (!lost && Date.now() - lastRenewedAt < LEASE_GIVE_UP_MS) return;
+        stopRequested = true;
+        sessionFailure = true;
+        if (heartbeat) clearInterval(heartbeat);
+        heartbeat = null;
+        send("run:event", {
+          type: "fatal",
+          lane: mode,
+          campaignId,
+          message: lost
+            ? "Another computer took over this LinkedIn run. Stopping safely after the current profile."
+            : "Lost connection to Followthroo for over a minute. Stopping safely after the current profile.",
+        });
+      }
+    }, 30_000);
+  }
 
   try {
     const common = {
@@ -507,6 +645,8 @@ ipcMain.handle("run:start", async (_e, { mode = "invite", dryRun = false } = {})
           ...common,
           limit: dryRun ? invitationUsage?.cap ?? MAX_PER_DAY : invitationUsage.remaining,
           dryRun,
+          campaignId,
+          runId,
           // The API has already decided which claimed actions may carry a note.
           // Local disk state is never an authority for LinkedIn limits.
           noteAllowed: () => true,
@@ -514,10 +654,16 @@ ipcMain.handle("run:start", async (_e, { mode = "invite", dryRun = false } = {})
           connectionsCheckDue: () => store.connectionsCheckDue(userDataPath),
           onConnectionsChecked: () => store.markConnectionsChecked(userDataPath),
           onEvent: (evt) => {
+            if (evt.type === "fatal") sessionFailure = true;
             const total = typeof evt.sent === "number" && invitationUsage ? invitationUsage.used + evt.sent : evt.sent;
             send("run:event", { lane: mode, ...evt, sent: total, cap: invitationUsage?.cap });
           },
         });
+    if (campaignId && sessionFailure) {
+      await requestJson(check.value, "/api/linkedin/campaigns", {
+        method: "PATCH", token: settings.token, body: { campaignId, action: "pause" }, operation: "Pause LinkedIn campaign after a session failure",
+      }).catch(() => {});
+    }
     return { ok: true, summary };
   } catch (e) {
     const message = String((e && e.message) || e);
@@ -526,6 +672,14 @@ ipcMain.handle("run:start", async (_e, { mode = "invite", dryRun = false } = {})
   } finally {
     running = false;
     runningMode = null;
+    runningCampaignId = null;
+    if (heartbeat) clearInterval(heartbeat);
+    if (runId) {
+      await requestJson(check.value, "/api/linkedin/desktop-run", {
+        method: "POST", token: settings.token, body: { action: "release", runId }, operation: "Release LinkedIn desktop run",
+      }).catch(() => {});
+      store.write(userDataPath, { activeCampaignId: null });
+    }
     if (sleepBlocker !== null && powerSaveBlocker.isStarted(sleepBlocker)) {
       powerSaveBlocker.stop(sleepBlocker);
     }

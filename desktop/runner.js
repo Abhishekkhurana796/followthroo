@@ -262,6 +262,8 @@ async function runBatch({
   onNoteUsed = () => {},
   limit = MAX_PER_DAY,
   dryRun = false,
+  campaignId = null,
+  runId = null,
   version = null,
   onEvent = () => {},
   shouldStop = () => false,
@@ -426,7 +428,9 @@ async function runBatch({
 
       let data;
       try {
-        data = await api(apiBase, "/api/linkedin/queue?limit=1", {
+        const campaignQuery = campaignId ? `&campaignId=${encodeURIComponent(campaignId)}` : "";
+        const runQuery = runId ? `&runId=${encodeURIComponent(runId)}` : "";
+        data = await api(apiBase, `/api/linkedin/queue?limit=1${campaignQuery}${runQuery}`, {
           token,
           operation: "Claim the next invitation",
           retry: "claim-connect",

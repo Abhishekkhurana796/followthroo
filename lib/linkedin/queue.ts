@@ -216,7 +216,9 @@ function creditActionFor(
  * separate implementations of "which ones are eligible" would drift, and the
  * drift would only ever be discovered as invitations sent to the wrong people.
  */
-async function selectClaimable(account: ClaimAccount, limit: number, opts: { wholeQueue?: boolean } = {}) {
+type ClaimOptions = { wholeQueue?: boolean; campaignId?: string };
+
+async function selectClaimable(account: ClaimAccount, limit: number, opts: ClaimOptions = {}) {
   const organizationId = account.organizationId;
   const startOfToday = await startOfOrgDay(organizationId);
   const settings = (account.campaignSettings ?? {}) as Record<string, PerCampaign>;
@@ -248,6 +250,7 @@ async function selectClaimable(account: ClaimAccount, limit: number, opts: { who
     where: {
       organizationId,
       status: "pending",
+      ...(opts.campaignId ? { campaignId: opts.campaignId } : {}),
       OR: [{ noteChoice: null }, { noteChoice: { not: "undecided" } }],
     },
     orderBy: { createdAt: "asc" },
@@ -296,7 +299,7 @@ async function selectClaimable(account: ClaimAccount, limit: number, opts: { who
     const cid = a.campaignId;
     if (cid) {
       if (!liveCampaigns.has(cid)) continue;
-      if (selected.length && !selected.includes(cid)) continue;
+      if (!opts.campaignId && selected.length && !selected.includes(cid)) continue;
       const s = settings[cid];
       if (s?.enabled === false) continue;
       if (typeof s?.cap === "number" && (await usedFor(cid)) + picked.filter((p) => p.campaignId === cid).length >= s.cap) continue;
@@ -355,11 +358,16 @@ type Candidate = Awaited<ReturnType<typeof selectClaimable>>["picked"][number];
  * charge — because looking at the queue must never consume it or change what
  * happens.
  */
-export async function peekActions(account: ClaimAccount, limit: number, opts: { wholeQueue?: boolean } = {}) {
+export async function peekActions(account: ClaimAccount, limit: number, opts: ClaimOptions = {}) {
   const [{ picked, held, notes, credits }, waitingForPick] = await Promise.all([
     selectClaimable(account, limit, opts),
     prisma.linkedInAction.findMany({
-      where: { organizationId: account.organizationId, status: "pending", noteChoice: "undecided" },
+      where: {
+        organizationId: account.organizationId,
+        status: "pending",
+        noteChoice: "undecided",
+        ...(opts.campaignId ? { campaignId: opts.campaignId } : {}),
+      },
       orderBy: { createdAt: "asc" },
       take: 50,
       include: { lead: { select: LEAD_FOR_ACTION } },
@@ -399,10 +407,10 @@ export async function peekActions(account: ClaimAccount, limit: number, opts: { 
  * in-progress actions are reclaimed first so a closed browser doesn't strand the
  * queue.
  */
-export async function claimActions(account: ClaimAccount, limit: number) {
+export async function claimActions(account: ClaimAccount, limit: number, opts: Pick<ClaimOptions, "campaignId"> = {}) {
   await reclaimStale(account.organizationId);
 
-  const { picked: eligible } = await selectClaimable(account, limit);
+  const { picked: eligible } = await selectClaimable(account, limit, opts);
   if (eligible.length === 0) return [];
 
   // Paid for before it's handed out. selectClaimable already stopped where the
@@ -411,19 +419,25 @@ export async function claimActions(account: ClaimAccount, limit: number) {
   // time. One still holding credits from an earlier hand-out costs nothing more.
   const picked: typeof eligible = [];
   for (const a of eligible) {
+    const claimed = await prisma.linkedInAction.updateMany({
+      where: { id: a.id, organizationId: account.organizationId, status: "pending" },
+      data: { status: "in_progress" },
+    });
+    if (!claimed.count) continue;
     const paid = await charge(account.organizationId, creditActionFor(account, a), {
       ref: creditRef(a.id),
       meta: { leadId: a.leadId, campaignId: a.campaignId },
     });
     if (paid.ok) picked.push(a);
-    else if (paid.reason === "no_plan") break;
+    else {
+      await prisma.linkedInAction.updateMany({
+        where: { id: a.id, organizationId: account.organizationId, status: "in_progress" },
+        data: { status: "pending" },
+      });
+      if (paid.reason === "no_plan") break;
+    }
   }
   if (picked.length === 0) return [];
-
-  await prisma.linkedInAction.updateMany({
-    where: { id: { in: picked.map((p) => p.id) } },
-    data: { status: "in_progress" },
-  });
 
   // Settle what each one is now that the settings have decided it: an "auto"
   // action queued as an invitation can go out as a message under a campaign's

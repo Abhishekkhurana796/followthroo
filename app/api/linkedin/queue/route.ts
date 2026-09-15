@@ -5,6 +5,7 @@ import { ok, fail } from "@/lib/http";
 import { requireExtAuth } from "@/lib/linkedin/auth";
 import { claimActions, completeAction, effectiveInviteCap, inviteUsage, noteLimitReached, peekActions } from "@/lib/linkedin/queue";
 import { corsPreflight, withCors } from "@/lib/linkedin/cors";
+import { currentDesktopRun } from "@/lib/linkedin/desktop-run";
 
 export const runtime = "nodejs";
 
@@ -16,6 +17,7 @@ export function OPTIONS() {
 export async function GET(req: NextRequest) {
   const account = await requireExtAuth(req);
   if (account instanceof Response) return withCors(account);
+  const campaignId = req.nextUrl.searchParams.get("campaignId")?.trim() || undefined;
 
   await prisma.linkedInAccount.update({
     where: { id: account.id },
@@ -28,7 +30,7 @@ export async function GET(req: NextRequest) {
   // you were shown would be the list you could no longer choose not to send.
   if (req.nextUrl.searchParams.get("peek")) {
     const upto = Math.min(Math.max(Number(req.nextUrl.searchParams.get("limit") ?? 20), 1), 50);
-    const peek = await peekActions(account, upto);
+    const peek = await peekActions(account, upto, { campaignId });
     const usage = await inviteUsage(account);
     return withCors(
       ok({
@@ -71,7 +73,15 @@ export async function GET(req: NextRequest) {
   }
 
   const limit = Math.min(Math.max(Number(req.nextUrl.searchParams.get("limit") ?? 3), 1), 10);
-  const actions = await claimActions(account, limit);
+  const requestedRunId = req.nextUrl.searchParams.get("runId");
+  const activeRun = await currentDesktopRun(account.id);
+  if (activeRun && activeRun.runId !== requestedRunId) {
+    return withCors(ok({ pacing: { minDelaySec: account.minDelaySec, maxDelaySec: account.maxDelaySec }, mode: account.mode, actions: [], note: "Another desktop owns this LinkedIn run." }));
+  }
+  if (requestedRunId && (!activeRun || activeRun.runId !== requestedRunId)) {
+    return withCors(fail("This desktop no longer owns the LinkedIn run.", 409));
+  }
+  const actions = await claimActions(account, limit, { campaignId });
 
   return withCors(
     ok({
@@ -90,6 +100,7 @@ export async function GET(req: NextRequest) {
         note: a.note,
         noteChoice: a.noteChoice,
         leadName: a.leadName,
+        campaignId: a.campaignId,
         autoSend: a.autoSend,
       })),
     })

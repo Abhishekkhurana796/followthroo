@@ -224,7 +224,7 @@ that Expandi and HeyReach run.
 **Flow:**
 1. A campaign `send` node with `channel: "linkedin"` → `lib/channels/linkedin.ts` enqueues a
    `LinkedInAction`. Bulk enqueue from the Leads screen goes through `enqueueManyLinkedIn`.
-2. The desktop app polls `GET /api/linkedin/queue?limit=1` (auth: per-member
+2. The desktop app polls `GET /api/linkedin/queue?limit=1&campaignId=…&runId=…` (auth: per-member
    `LinkedInAccount.extToken` — the same pairing token the extension uses), claims one
    action, navigates to the profile, and runs `desktop/page-actions.js` in the page: find
    the profile's own Connect, add the note, click Send, and confirm the dialog closed.
@@ -233,10 +233,18 @@ that Expandi and HeyReach run.
    claims the next.
 
 **One claimer.** The extension (`extension/`, MV3) still does sourcing and no longer asks
-for invite actions at all. `claimActions` marks a row `in_progress` with a read followed by
-a write, so two clients polling one queue can each hold the same action and each send it —
-and an invitation cannot be recalled. Any third client replaces the desktop app rather than
-running beside it.
+for invite actions at all. A desktop acquires a short Redis lease before a real run and
+heartbeats it while Chrome is open; another computer is refused, while a crashed owner's
+lease expires so the campaign can resume. `claimActions` also conditionally changes each
+row from `pending` to `in_progress` before returning it. That second guard prevents the
+same irreversible invitation from reaching two clients even during a race or an upgrade.
+
+**Campaign control lives on the desktop.** The web app creates sequences, enrolls leads,
+prepares templates, and shows results. Its campaign card opens
+`followthroo://linkedin/campaign/:id`; the desktop selects that campaign, shows its live
+queued/sent/failed progress, and supplies Start, Pause, Resume, and Stop. Queue claims are
+filtered by that campaign id, while every outcome continues through `completeAction`, so
+CRM state and analytics remain server-owned and continuously synchronized.
 
 **Deleting a campaign never strands an invitation.** `LinkedInAction.campaignId` has no
 foreign key, so the old bare delete left a campaign's queued actions `pending` for the
