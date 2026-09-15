@@ -1,7 +1,7 @@
 {
   "name": "followthroo-linkedin-desktop",
   "productName": "Followthroo for LinkedIn",
-  "version": "1.15.5",
+  "version": "1.15.6",
   "private": true,
   "description": "Runs Followthroo LinkedIn invitations and profile enrichment from your own computer.",
   "main": "main.js",

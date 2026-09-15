@@ -32,6 +32,24 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    product: "webapp",
+    version: "0.30.0",
+    date: "Sep 2026",
+    items: [
+      "Task-assignment email now reuses a rate-limited SMTP connection and retries a transient socket close once — fixing the repeated Zoho connection drops seen in production — while a mail failure can never undo the task",
+      "Every assignment email now exposes the full delivery decision in structured server logs: recipient resolution, preference gating, SMTP attempt, success, and a safe failure reason",
+      "Notification verification now covers assignment, self-assignment, disabled preferences, missing recipients, reassignment, and failed mail delivery without ever sending test email through the production SMTP account",
+    ],
+  },
+  {
+    product: "desktop",
+    version: "1.15.6",
+    date: "Sep 2026",
+    items: [
+      "Maintenance release of the current LinkedIn automation app, published alongside the task-notification reliability update",
+    ],
+  },
+  {
     product: "desktop",
     version: "1.15.5",
     date: "Sep 2026",

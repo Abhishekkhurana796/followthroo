@@ -3,6 +3,7 @@ import type { Channel, Lead, SendContext, SendResult } from "./types";
 import type { RenderedMessage } from "../templates";
 import { formatEmailBody } from "../templates";
 import { loadEmailAttachments } from "../email-attachments";
+import type { Transporter } from "nodemailer";
 
 // --- Gmail OAuth sending via the Gmail API (messages.send) ---
 // We use the Gmail API (not SMTP) because the connected accounts hold the
@@ -96,6 +97,52 @@ const NO_ACCOUNT =
 
 /** Whether the missing-SMTP warning has been logged in this process. */
 let warnedUnconfigured = false;
+let systemTransporter: Transporter | null = null;
+
+async function getSystemTransporter(): Promise<Transporter> {
+  if (systemTransporter) return systemTransporter;
+  const nodemailer = await import("nodemailer");
+  systemTransporter = nodemailer.createTransport({
+    host: env.smtp.host,
+    port: env.smtp.port,
+    secure: env.smtp.secure,
+    auth: { user: env.smtp.user!, pass: env.smtp.pass! },
+    // Reminder sweeps can send several messages in one invocation. Reusing one
+    // connection avoids Zoho closing a burst of fresh TLS handshakes.
+    pool: true,
+    maxConnections: 1,
+    maxMessages: 50,
+    rateDelta: 1_000,
+    rateLimit: 2,
+    connectionTimeout: 15_000,
+    greetingTimeout: 15_000,
+    socketTimeout: 30_000,
+    ...(env.smtp.dkim.domainName && env.smtp.dkim.privateKey
+      ? {
+          dkim: {
+            domainName: env.smtp.dkim.domainName,
+            keySelector: env.smtp.dkim.keySelector,
+            privateKey: env.smtp.dkim.privateKey,
+          },
+        }
+      : {}),
+  });
+  return systemTransporter;
+}
+
+function discardSystemTransporter() {
+  systemTransporter?.close();
+  systemTransporter = null;
+}
+
+function transientSmtpFailure(error: unknown): boolean {
+  const code = String((error as { code?: unknown })?.code ?? "").toUpperCase();
+  const message = String((error as Error)?.message ?? error);
+  return (
+    ["ECONNECTION", "ECONNRESET", "EPIPE", "ESOCKET", "ETIMEDOUT"].includes(code) ||
+    /unexpected socket close|connection (?:closed|lost)|socket|timed?\s*out/i.test(message)
+  );
+}
 
 /**
  * Internal mail: Followthroo notifying its OWN users (new-lead alerts, SLA escalations).
@@ -106,7 +153,24 @@ let warnedUnconfigured = false;
  * connected, under their own domain and reputation. Nothing here is ever addressed to
  * a lead, so it bypasses suppression and the outbound rate limiter by design.
  */
-export async function sendSystemEmail(to: string, subject: string, body: string): Promise<boolean> {
+export type SystemEmailResult =
+  | { sent: true }
+  | { sent: false; reason: "dry_run" | "not_configured" | "no_recipient" | "send_failed"; error?: string };
+
+/**
+ * The same send, with the reason it didn't happen.
+ *
+ * `sendSystemEmail` answers true/false, which is all most callers can act on —
+ * but "false" covers "there is no SMTP configured on this deployment" and
+ * "Zoho rejected the credentials" and "the recipient has no address", and those
+ * are three completely different problems. Notification dispatch needs to say
+ * which one, or a missing email stays a mystery (see lib/notifications.ts).
+ */
+export async function sendSystemEmailDetailed(to: string, subject: string, body: string): Promise<SystemEmailResult> {
+  if (!to) return { sent: false, reason: "no_recipient" };
+  // Read at call time rather than through lib/env so verification can make an
+  // absolute no-network guarantee even if a loader repopulates process.env.
+  if (process.env.SYSTEM_EMAIL_DRY_RUN === "1") return { sent: false, reason: "dry_run" };
   if (!configured.email) {
     // Said once, loudly. Returning false in silence is how "I was never emailed
     // about my task" went undiagnosed — every caller treats email as best-effort.
@@ -116,31 +180,35 @@ export async function sendSystemEmail(to: string, subject: string, body: string)
         "[email] SMTP_HOST / SMTP_USER / SMTP_PASS are not set — task, lead and invitation emails are not being sent. In-app notifications still work.",
       );
     }
-    return false;
+    return { sent: false, reason: "not_configured" };
   }
-  try {
-    const nodemailer = await import("nodemailer");
-    const t = nodemailer.createTransport({
-      host: env.smtp.host,
-      port: env.smtp.port,
-      secure: env.smtp.secure,
-      auth: { user: env.smtp.user!, pass: env.smtp.pass! },
-      ...(env.smtp.dkim.domainName && env.smtp.dkim.privateKey
-        ? {
-            dkim: {
-              domainName: env.smtp.dkim.domainName,
-              keySelector: env.smtp.dkim.keySelector,
-              privateKey: env.smtp.dkim.privateKey,
-            },
-          }
-        : {}),
-    });
-    await t.sendMail({ from: env.smtp.from, to, subject, html: formatEmailBody(body), text: body });
-    return true;
-  } catch (e) {
-    console.error("[email] system notification failed:", e);
-    return false;
+  const message = { from: env.smtp.from, to, subject, html: formatEmailBody(body), text: body };
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      const transport = await getSystemTransporter();
+      await transport.sendMail(message);
+      return { sent: true };
+    } catch (e) {
+      const retry = attempt === 1 && transientSmtpFailure(e);
+      if (retry) {
+        discardSystemTransporter();
+        continue;
+      }
+
+      // The message, not the object: a nodemailer error carries the transport
+      // config, and that includes the password.
+      discardSystemTransporter();
+      const error = String((e as Error)?.message ?? e).slice(0, 300);
+      console.error("[email] system notification failed:", error);
+      return { sent: false, reason: "send_failed", error };
+    }
   }
+
+  return { sent: false, reason: "send_failed", error: "SMTP retry exhausted" };
+}
+
+export async function sendSystemEmail(to: string, subject: string, body: string): Promise<boolean> {
+  return (await sendSystemEmailDetailed(to, subject, body)).sent;
 }
 
 /**
