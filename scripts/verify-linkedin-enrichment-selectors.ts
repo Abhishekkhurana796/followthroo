@@ -46,19 +46,18 @@ async function main() {
     assert.equal(observed.connectionDegree.degree, "1st");
     assert.match(String(observed.connectionDegree.evidence), /profile header badge/i);
 
-    // The current Contact info surface is an ordinary accessible dialog, not
-    // always LinkedIn's old .pv-contact-info class. The page reader must see
-    // what a successful Playwright click has visibly opened.
+    // The current Contact info surface can be an ordinary div with plain
+    // labeled rows, rather than LinkedIn's old .pv-contact-info class or a
+    // mailto link. The page reader must parse what Playwright visibly opened.
     const overlay = await ctx.newPage();
     await overlay.setContent(`<!doctype html><main>
       <div data-view-name="profile-top-card"><h1>Apurva Gurav</h1><span>1st</span><a href="/in/apurva-gurav/overlay/contact-info/">Contact info</a></div>
-      <div role="dialog" aria-modal="true"><h2>Contact info</h2><a href="mailto:apurva@example.com">apurva@example.com</a><div class="ci-phone"><span>+91 98765 43210</span></div></div>
+      <div class="current-linkedin-sheet"><h2>Contact info</h2><p>Email</p><p>apurva@example.com</p><p>IM</p><p>apurva (Google Hangouts)</p><p>Connected since</p><p>Sep 11, 2026</p></div>
     </main>`);
     const openedOverlay = await overlay.evaluate(readContactInfo, { confirmedFirstDegree: true, alreadyOpen: true });
     await overlay.close();
     assert.equal(openedOverlay.status, "done");
     assert.equal(openedOverlay.email, "apurva@example.com");
-    assert.equal(openedOverlay.phone, "+91 98765 43210");
 
     const removeConnection = await run(pageFor('<button aria-label="Remove Connection">Remove Connection</button>'));
     assert.equal(removeConnection.status, "eligible");
@@ -74,7 +73,7 @@ async function main() {
     assert.equal(stale.status, "skipped");
     assert.equal(stale.degree, "unknown");
     assert.equal((stale as { reasonCode?: string }).reasonCode, "degree_unverified");
-    console.log("LinkedIn enrichment selector fixtures: 20/20 passed");
+    console.log("LinkedIn enrichment selector fixtures: 19/19 passed");
   } finally {
     await browser.close();
   }

@@ -1,8 +1,8 @@
 # enrichment.md — Email and phone from LinkedIn Contact info (P2)
 
 **Last updated:** 2026-09-15
-**Status:** desktop 1.15.3. The current plain-text `1st` header badge and
-LinkedIn's accessible Contact info dialog shape are covered by the desktop
+**Status:** desktop 1.15.4. The current plain-text `1st` header badge and
+LinkedIn's visible labeled Contact info rows are covered by the desktop
 fixtures. A successful live extraction remains the final confirmation (see
 "What's unverified" below).
 
@@ -136,11 +136,11 @@ technically still works.
 ### What's unverified
 
 `readContactInfo` accepts both the older `.pv-contact-info` shape and the
-current visible accessible dialog (`role="dialog"` / `aria-modal`), then reads
-its `.ci-email`, `.ci-phone`, `.ci-websites`, and `.ci-connected` values. The
-fixtures exercise both the degree header and accessible dialog, but a first
-successful live extraction is still required because LinkedIn can change the
-overlay markup or profile-link URL without notice.
+current visible dialog's plain **Email**, **IM**, **Phone**, **Website**, and
+**Connected since** rows. It reads a displayed email even if LinkedIn does not
+provide a `mailto:` link. The fixtures exercise the current nested-row markup,
+but a first successful live extraction is still required because LinkedIn can
+change the overlay markup or profile-link URL without notice.
 
 ## Verification
 

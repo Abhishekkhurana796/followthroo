@@ -33,6 +33,15 @@ export interface ChangelogEntry {
 export const CHANGELOG: ChangelogEntry[] = [
   {
     product: "desktop",
+    version: "1.15.4",
+    date: "Sep 2026",
+    items: [
+      "Profile enrichment now reads LinkedIn's plain labeled Contact info rows (Email, IM, Connected since) even when nested markup concatenates their text",
+      "The current overlay parser extracts an email from its displayed text as well as a mailto link, fixing current profiles whose modal exposes no legacy Contact-info classes",
+    ],
+  },
+  {
+    product: "desktop",
     version: "1.15.3",
     date: "Sep 2026",
     items: [

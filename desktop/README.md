@@ -4,7 +4,15 @@ Sends queued LinkedIn invitations and looks up eligible profiles' Contact info
 from the customer's own computer, own IP, and logged-in LinkedIn session.
 
 **Last updated:** 2026-09-15
-**Status:** active — desktop 1.15.3
+**Status:** active — desktop 1.15.4
+
+## 1.15.4 current LinkedIn modal parser
+
+- The Contact info reader now treats the visible **Contact info** heading plus
+  its **Email**, **IM**, **Phone**, **Website**, or **Connected since** rows as
+  the overlay contract. It does not depend on legacy LinkedIn CSS classes.
+- Email extraction reads the displayed email text as well as a `mailto:` link,
+  covering the current overlay shown by LinkedIn profiles.
 
 ## 1.15.3 Contact info overlay fix
 
