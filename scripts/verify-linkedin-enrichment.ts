@@ -21,6 +21,7 @@
 import { prisma } from "../lib/db";
 import { balance } from "../lib/billing/credits";
 import { claimEnrichments, completeEnrichment, enqueueEnrichment, estimateEnrichment } from "../lib/linkedin/enrich";
+import { PLANS } from "../lib/billing/plans";
 import { resumeAfterEnrich } from "../lib/campaign-engine";
 
 let pass = 0,
@@ -34,6 +35,13 @@ const ok = (c: boolean, m: string) => {
     console.log("  FAIL", m);
   }
 };
+
+/**
+ * The allowance a throwaway org actually gets. newOrg subscribes to Grow,
+ * because enrichment is a Grow-and-above feature — these assertions used to
+ * hardcode Start's 100, so they failed on every run whatever the code did.
+ */
+const DAILY = PLANS.grow.dailyCredits;
 
 const stamp = Date.now();
 const orgIds: string[] = [];
@@ -86,7 +94,7 @@ async function main() {
 
     const claimed = await claimEnrichments(account, 10);
     ok(claimed.length === 2, `dailyEnrichCap of 2 hands out exactly 2 (got ${claimed.length})`);
-    ok((await bal(org)).dailyRemaining === 100 - 6, "each claim reserves 3 credits");
+    ok((await bal(org)).dailyRemaining === DAILY - 6, "each claim reserves 3 credits");
 
     const third = await claimEnrichments(account, 10);
     ok(third.length === 0, "the daily cap holds the third back even though credits remain");
@@ -96,7 +104,7 @@ async function main() {
     ok(r1?.charged === 3, "found both: charged 3");
     const r2 = await completeEnrichment(org, { enrichmentId: claimed[1].id, status: "skipped", degree: "2nd" });
     ok(r2?.charged === 0, "not a 1st-degree connection: charged 0, refunded");
-    ok((await bal(org)).dailyRemaining === 100 - 3, "…so the balance reflects only the one that found something");
+    ok((await bal(org)).dailyRemaining === DAILY - 3, "…so the balance reflects only the one that found something");
 
     console.log("\n— technical failures retry before they cost anything —");
     const l4 = await lead(4);

@@ -8,6 +8,8 @@
  * selectors run first, then the documented overlay URL. Both are driven by
  * Playwright in the same persistent Chrome session as invitations.
  */
+const fs = require("node:fs");
+const path = require("node:path");
 const { readContactInfo } = require("./page-actions");
 const { observe } = require("./pilot-page");
 const { CODES } = require("./outcome-codes");
@@ -15,6 +17,84 @@ const { requestJson } = require("./api-client");
 const { openBrowser, waitForSignIn, bannerInitScript, makeLog } = require("./runner");
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/** How long to keep looking before calling an overlay absent: ~3.2s. */
+const OVERLAY_TRIES = 8;
+const OVERLAY_GAP_MS = 400;
+
+/**
+ * Look again until the overlay is readable, a terminal answer arrives, or the
+ * budget runs out.
+ *
+ * Shaped after connect-flow.js's observeUntil, and here for the same reason it
+ * exists there: LinkedIn renders a dialog's shell before its rows, so one look
+ * decides nothing. The version this replaces looked exactly once, 900ms after
+ * the click, and reported every slow render as "overlay did not open". Each
+ * try is a fresh page.evaluate, so a re-render between looks is picked up
+ * rather than missed.
+ */
+async function pollContactInfo(page, { clickTrigger = false } = {}) {
+  let last = { status: "waiting", state: "UNKNOWN", result: "Contact info overlay is not open yet" };
+  for (let i = 0; i < OVERLAY_TRIES; i++) {
+    last = await page.evaluate(readContactInfo, {
+      confirmedFirstDegree: true,
+      // Only the first look may click; the rest are pure observation.
+      clickTrigger: clickTrigger && i === 0,
+    });
+    if (last.status !== "waiting") return last;
+    await sleep(OVERLAY_GAP_MS);
+  }
+  return last;
+}
+
+/** The expensive full-page walk, asked for once, only after giving up. */
+async function collectDiagnostics(page) {
+  try {
+    const out = await page.evaluate(readContactInfo, { confirmedFirstDegree: true, diagnoseOnly: true });
+    return (out && out.diagnostics) || null;
+  } catch (error) {
+    return { diagnoseError: String((error && error.message) || error) };
+  }
+}
+
+/**
+ * What the next fix needs and no log line can supply: the panel's real markup,
+ * and a picture of the screen at the moment it was declared absent.
+ *
+ * Five builds in a row guessed at these selectors because nobody could see
+ * what LinkedIn actually rendered. Written beside the run's own JSONL log, on
+ * the machine that did the reading. Never uploaded — it holds a real person's
+ * contact details — and it carries no cookies, tokens or storage.
+ */
+async function captureFailure(page, { lookup, log, diagnostics }) {
+  const dir = path.dirname(log.file);
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const base = `enrichment-${stamp}-${String(lookup.leadId || "lead").slice(0, 8)}-contact-info-failure`;
+  const written = {};
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+    if (diagnostics && diagnostics.html) {
+      const htmlFile = path.join(dir, `${base}.html`);
+      fs.writeFileSync(htmlFile, diagnostics.html, "utf8");
+      written.htmlFile = htmlFile;
+    }
+    const shotFile = path.join(dir, `${base}.png`);
+    await page.screenshot({ path: shotFile, fullPage: false });
+    written.screenshotFile = shotFile;
+  } catch (error) {
+    written.captureError = String((error && error.message) || error);
+  }
+  log.write({
+    event: "CONTACT_INFO_FAILURE",
+    who: lookup.leadName || lookup.linkedinUrl,
+    enrichmentId: lookup.id,
+    ...(diagnostics || {}),
+    // The markup goes to its own file rather than bloating every log line.
+    html: undefined,
+    ...written,
+  });
+  return written;
+}
 
 function contactOverlayUrl(profileUrl) {
   const url = new URL(profileUrl);
@@ -59,58 +139,73 @@ async function readContactInfoWithFallback({ page, lookup, log, onDebug = () => 
   debug(`Verified 1st-degree connection (${degree.evidence}). Opening Contact info with Playwright.`, { degree: "1st", evidence: degree.evidence });
 
   // The Contact info control is part of the profile page, just like Connect.
-  // Click it with Playwright (rather than a synthetic in-page event), then let
-  // the page reader inspect the visible overlay. Limit the locator to the
-  // documented Contact info overlay link in main, never a recommendation rail.
+  // Click it with Playwright (a trusted input, as the invitation lane clicks
+  // Connect), then poll for the overlay. Limit the locator to the documented
+  // Contact info overlay link in main, never a recommendation rail.
   const profileContact = page.locator('main a[href*="/overlay/contact-info"]', { hasText: /contact info/i }).first();
-  let openedWithPlaywright = false;
+  let clickedWithPlaywright = false;
   try {
-    if (await profileContact.isVisible({ timeout: 2500 })) {
+    if (await profileContact.isVisible().catch(() => false)) {
       await profileContact.click({ timeout: 3000, noWaitAfter: true });
-      openedWithPlaywright = true;
+      clickedWithPlaywright = true;
       debug("Clicked this profile's Contact info link with Playwright; waiting for its overlay.", { degree: "1st" });
-      await sleep(900);
     }
   } catch (error) {
-    debug(`Playwright could not click the visible Contact info link: ${String((error && error.message) || error)}`, { status: "failed", degree: "1st" });
+    debug(`Playwright could not click the visible Contact info link: ${String((error && error.message) || error)}`, { degree: "1st" });
   }
 
-  const first = await page.evaluate(readContactInfo, {
-    confirmedFirstDegree: true,
-    alreadyOpen: openedWithPlaywright,
-  });
-  if (first.status !== "failed" || !/Contact info (link|overlay)/i.test(first.result || "")) {
-    debug(first.status === "done"
-      ? `Contact info read — ${first.email ? "email" : "no email"}${first.phone ? " and phone" : ""} available.`
-      : first.result || "Contact lookup finished.", { status: first.status, degree: first.degree, evidence: first.evidence });
-    return first;
-  }
-  debug(`${first.result}; trying LinkedIn's Contact info overlay route.`, { status: "failed", degree: "1st" });
+  const report = (found, message) => {
+    debug(message, { status: found.status, degree: found.degree, evidence: found.evidence });
+    return found;
+  };
+  const readOut = (found) =>
+    `Contact info read — ${found.email ? "email" : "no email"}${found.phone ? " and phone" : ""} available.`;
+
+  // If Playwright could not see the link, the page reader gets one chance to
+  // click it from inside the page instead.
+  const first = await pollContactInfo(page, { clickTrigger: !clickedWithPlaywright });
+  if (first.status === "done") return report(first, readOut(first));
+  if (first.fatal) return report(first, first.result);
+  log.write({ event: "CONTACT_INFO_STATE", who, route: "click", state: first.state, visibleDialogCount: first.visibleDialogCount, result: first.result });
+  debug(`${first.result}; trying LinkedIn's Contact info overlay route.`, { degree: "1st" });
 
   // The deterministic pass already established 1st-degree status. Try the
   // documented overlay route next, even if LinkedIn moved the visible link.
   const overlayUrl = contactOverlayUrl(lookup.linkedinUrl);
+  let direct = null;
   if (overlayUrl) {
     try {
       await page.goto(overlayUrl, { waitUntil: "domcontentloaded" });
-      await sleep(1200);
-      const direct = await page.evaluate(readContactInfo, { confirmedFirstDegree: true, alreadyOpen: true });
-      if (direct.status !== "failed") {
-        debug(direct.status === "done" ? "Contact info opened through the overlay route." : direct.result || "Overlay lookup finished.", { status: direct.status, degree: direct.degree, evidence: direct.evidence });
-        return direct;
-      }
-      log.write({ event: "enrich-direct-overlay-missed", who: lookup.leadName || lookup.linkedinUrl, result: direct.result });
-      debug(`Overlay route did not work: ${direct.result}`, { status: "failed", degree: "1st" });
+      direct = await pollContactInfo(page);
+      if (direct.status === "done") return report(direct, "Contact info opened through the overlay route.");
+      if (direct.fatal) return report(direct, direct.result);
+      log.write({ event: "CONTACT_INFO_STATE", who, route: "overlay-url", state: direct.state, visibleDialogCount: direct.visibleDialogCount, result: direct.result });
+      debug(`Overlay route did not work: ${direct.result}`, { degree: "1st" });
     } catch (error) {
       log.write({ event: "enrich-direct-overlay-failed", error: String((error && error.message) || error) });
-      debug(`Overlay route failed: ${String((error && error.message) || error)}`, { status: "failed", degree: "1st" });
+      debug(`Overlay route failed: ${String((error && error.message) || error)}`, { degree: "1st" });
     }
   }
 
+  // Both routes are spent. Save what the page actually looked like, so the
+  // next fix is written from its markup instead of guessed at again.
+  const worst = direct || first;
+  const diagnostics = worst.diagnostics || (await collectDiagnostics(page));
+  const saved = await captureFailure(page, { lookup, log, diagnostics });
+  debug(
+    saved.htmlFile
+      ? `Contact info could not be read (${worst.state || "unknown"}). Saved the overlay's markup and a screenshot to ${path.dirname(log.file)}.`
+      : `Contact info could not be read (${worst.state || "unknown"}). Saved a screenshot to ${path.dirname(log.file)}.`,
+    { status: "failed", degree: "1st" },
+  );
   return {
     status: "failed",
     degree: "1st",
-    result: "Contact info opened but its overlay could not be read. The Activity log records the exact Playwright and overlay step that failed.",
+    // Keep the specific reason when there is one — "the profile has no Contact
+    // info link" and "the overlay opened and could not be parsed" send whoever
+    // reads this to different places.
+    reasonCode: worst.reasonCode || (worst.state === "CLOSED" ? "overlay_not_detected" : "overlay_unreadable"),
+    result: `Contact info overlay could not be read (state: ${worst.state || worst.reasonCode || "unknown"}). Its markup and a screenshot were saved locally for diagnosis.`,
   };
 }
 
@@ -129,7 +224,7 @@ async function api(apiBase, pathname, { method = "GET", token, body, operation, 
  * other's.
  */
 async function runEnrichmentLane({ page, apiBase, token, cap, log, onEvent = () => {}, shouldStop = () => false }) {
-  const summary = { done: 0, skipped: 0, failed: 0, attempted: 0, stoppedBecause: null };
+  const summary = { done: 0, skipped: 0, failed: 0, retrying: 0, attempted: 0, stoppedBecause: null };
   const emit = (type, payload = {}) => onEvent({ type, ...payload });
   if (cap <= 0) return summary;
 
@@ -186,8 +281,12 @@ async function runEnrichmentLane({ page, apiBase, token, cap, log, onEvent = () 
     }
 
     const status = outcome.status === "done" ? "done" : outcome.status === "skipped" ? "skipped" : "failed";
+    // A failed lookup the server will hand out again is one lead still in
+    // flight, not a second casualty. Reported as "2 failed" before this, it
+    // read as though the queue had two of the same person in it.
+    let retrying = false;
     try {
-      await api(apiBase, "/api/linkedin/enrich/complete", {
+      const reported = await api(apiBase, "/api/linkedin/enrich/complete", {
         method: "POST",
         token,
         operation: "Report contact lookup outcome",
@@ -201,7 +300,15 @@ async function runEnrichmentLane({ page, apiBase, token, cap, log, onEvent = () 
           result: outcome.result,
         },
       });
-      emit("enrich-debug", { who, message: "Lookup outcome recorded with Followthroo.", status });
+      retrying = !!(reported && reported.retrying);
+      const attempt = Number(lookup.attempts || 0) + 1;
+      emit("enrich-debug", {
+        who,
+        message: retrying
+          ? `Attempt ${attempt} of 3 did not work — Followthroo will try this lead again.`
+          : "Lookup outcome recorded with Followthroo.",
+        status,
+      });
     } catch (e) {
       // Best effort, same as the invite lane: a dropped report costs a retry
       // (reclaimStale in lib/linkedin/enrich.ts), not a lost lookup.
@@ -210,6 +317,7 @@ async function runEnrichmentLane({ page, apiBase, token, cap, log, onEvent = () 
 
     if (status === "done") summary.done++;
     else if (status === "skipped") summary.skipped++;
+    else if (retrying) summary.retrying++;
     else summary.failed++;
 
     log.write({ event: "enrich-done", who, status, result: outcome.result, code: outcome.code || null });
@@ -274,14 +382,14 @@ async function runEnrichmentBatch({
     const message = /executable doesn't exist|Failed to launch/i.test(String(error && error.message))
       ? "Google Chrome could not be started. Install Chrome, then try again."
       : String((error && error.message) || error);
-    const summary = { done: 0, skipped: 0, failed: 0, attempted: 0, stoppedBecause: message };
+    const summary = { done: 0, skipped: 0, failed: 0, retrying: 0, attempted: 0, stoppedBecause: message };
     log.write({ event: "run-end", ...summary });
     emit("fatal", { message });
     emit("done", { ...summary, logFile: log.file });
     return summary;
   }
 
-  let summary = { done: 0, skipped: 0, failed: 0, attempted: 0, stoppedBecause: null };
+  let summary = { done: 0, skipped: 0, failed: 0, retrying: 0, attempted: 0, stoppedBecause: null };
   try {
     await context.addInitScript(bannerInitScript);
     emit("status", { message: "Checking your LinkedIn session…" });

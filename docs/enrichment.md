@@ -41,8 +41,9 @@ bypassing the plan boundary.
 Structurally identical to the invite queue (`lib/linkedin/queue.ts`), because
 it is the same kind of thing:
 
-- **One claimer.** `claimEnrichments` is desktop-only, marks a row
-  `in_progress` with a single atomic `UPDATE`, and stops handing out lookups
+- **One claimer.** `claimEnrichments` is desktop-only, marks each row
+  `in_progress` with `status` still in the `WHERE` clause and keeps only the
+  rows whose update matched, and stops handing out lookups
   once the account's `dailyEnrichCap` (150/day default — small on purpose,
   see "Why the cap is so much lower than invites" below) or the workspace's
   credits are exhausted.
@@ -102,11 +103,16 @@ nobody asked to look up.
 - The desktop UI exposes this as its own **Profile enrichment** lane. It has a
   separate peek endpoint and Start button; invitation sending never claims or
   starts enrichment work, and enrichment never claims an invitation.
-- Selector recovery is deterministic: Playwright clicks the current profile's
-  top-card Contact info link first and waits for LinkedIn's visible accessible
-  dialog; the documented `/overlay/contact-info/` route is a second fallback.
-  The Contact-info step does not use an AI click decision, so a visible dialog
-  cannot be mistaken for an assistant-selector failure.
+- Overlay detection is **signal-based, not selector-based**. Four independent
+  routes lead to the panel — a visible dialog container, a `Contact info`
+  heading, a `mailto:`/`tel:` link, and the `/overlay/contact-info` URL — and
+  all of them pierce shadow roots, as `observe()` in `pilot-page.js` has always
+  done for invitations. Playwright clicks the profile's own Contact info link
+  first; the documented `/overlay/contact-info/` route is a second fallback.
+  Each route polls (~8 looks, 400ms apart) rather than deciding from one look,
+  because LinkedIn renders a dialog's shell before its rows. The Contact-info
+  step does not use an AI click decision, so a visible dialog cannot be
+  mistaken for an assistant-selector failure.
 - The **Activity** panel writes the same useful run trace as connection sends:
   it records the profile opening in Playwright, the exact degree evidence,
   which Contact info route was tried, the extraction result, and confirmation
@@ -133,14 +139,36 @@ of profiles fast" is the signature of a scraper, sent or not. 150 is meant to
 sit well below the point that gets noticed, not to be the largest number that
 technically still works.
 
+### When a lookup cannot read the overlay
+
+A failed lookup writes the evidence needed to fix it, beside the run's own log
+in the desktop app-data `logs/` folder:
+
+- `enrichment-<timestamp>-<leadId>-contact-info-failure.html` — up to 20KB of
+  the panel's **real markup**
+- `enrichment-<timestamp>-<leadId>-contact-info-failure.png` — the screen at
+  the moment it was declared absent
+- a `CONTACT_INFO_FAILURE` line in the JSONL log: the URL, the overlay state,
+  which strategy was chosen, how many dialogs and shadow roots were seen, and
+  the row labels that were found
+
+These exist because five releases (1.15.0-1.15.4) each replaced one guessed
+selector with another and each still reported a visibly-open overlay as
+absent — there was no way to see what LinkedIn had actually rendered. They
+contain a real person's contact details, so they stay on the machine that read
+them: local only, never uploaded, and carrying no cookies, tokens or storage.
+
 ### What's unverified
 
-`readContactInfo` accepts both the older `.pv-contact-info` shape and the
-current visible dialog's plain **Email**, **IM**, **Phone**, **Website**, and
-**Connected since** rows. It reads a displayed email even if LinkedIn does not
-provide a `mailto:` link. The fixtures exercise the current nested-row markup,
-but a first successful live extraction is still required because LinkedIn can
-change the overlay markup or profile-link URL without notice.
+A first successful **live** extraction is still required. The fixtures in
+`scripts/verify-linkedin-enrichment-selectors.ts` are modelled on LinkedIn's
+rendered overlay rather than on the reader, and they now cover the four shapes
+that demonstrably broke the previous version — a shadow-root-hosted dialog, a
+shell that renders before its rows, a label worded `Email address` rather than
+`Email`, and a row whose label and value share one element (which the old
+reader "read" as the address `Emaila@example.com` and reported as a success).
+But fixtures are still a model of the page, not the page. Phone, IM and
+`Connected since` have never been observed in real markup at all.
 
 ## Verification
 

@@ -212,7 +212,17 @@ window.ft.onEvent((event) => {
     case "enrich-done": now.textContent = event.result || `${event.who} complete.`; log(`${event.who} — ${event.result}`, event.status, lane); break;
     case "fatal": now.textContent = event.message; el.dot.className = "dot err"; ended[lane] = true; log(event.message, "failed", lane); break;
     case "done": {
-      const parts = lane === "invite" ? [`${event.sent || 0} sent`, `${event.failed || 0} failed`, `${event.skipped || 0} skipped`] : [`${event.done || 0} found`, `${event.failed || 0} failed`, `${event.skipped || 0} skipped`];
+      // "will retry" is its own count, not a failure: a lead Followthroo is
+      // going to try again is still one lead in flight, and counting it beside
+      // the settled failures made one retried lookup read as two dead ones.
+      const parts = lane === "invite"
+        ? [`${event.sent || 0} sent`, `${event.failed || 0} failed`, `${event.skipped || 0} skipped`]
+        : [
+            `${event.done || 0} found`,
+            `${event.failed || 0} failed`,
+            ...(event.retrying ? [`${event.retrying} will retry`] : []),
+            `${event.skipped || 0} skipped`,
+          ];
       log(`Finished — ${parts.join(", ")}.`, event.sent || event.done ? "sent" : null, lane);
       if (event.stoppedBecause) { now.textContent = event.stoppedBecause; ended[lane] = true; }
       break;

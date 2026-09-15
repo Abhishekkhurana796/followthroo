@@ -33,6 +33,18 @@ export interface ChangelogEntry {
 export const CHANGELOG: ChangelogEntry[] = [
   {
     product: "desktop",
+    version: "1.15.5",
+    date: "Sep 2026",
+    items: [
+      "Contact info lookups now find the overlay the way connection invitations find the Connect button — through several independent signals, shadow roots included, and by looking again while LinkedIn finishes rendering instead of deciding from a single glance 0.9 seconds after the click",
+      "A row whose label and value shared one element used to be read as the address \"Emailsomeone@example.com\" and reported as a success; values are now taken from the row itself, so that lands as a real address or not at all",
+      "Phone, IM and Connected since are read from the labelled rows LinkedIn actually renders, rather than from class names it stopped using",
+      "When a lookup still can't read the overlay, the app now saves that overlay's markup and a screenshot beside its run log so the cause can be found instead of guessed at. Both stay on your machine",
+      "A lookup Followthroo is going to retry now says so, instead of appearing in the Activity log as a second, separate failure",
+    ],
+  },
+  {
+    product: "desktop",
     version: "1.15.4",
     date: "Sep 2026",
     items: [
