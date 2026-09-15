@@ -11,7 +11,7 @@
  * preferences that already exist at Settings → Notifications.
  */
 import { prisma } from "./db";
-import { sendSystemEmail } from "./channels/email";
+import { sendSystemEmailDetailed } from "./channels/email";
 import { readPrefs } from "./task-reminders";
 
 export type NotificationKind = "task_assigned" | "lead_assigned" | "task_due" | "escalation";
@@ -35,16 +35,57 @@ export interface NotifyInput {
 }
 
 /**
+ * What one dispatch actually did — every branch, named.
+ *
+ * The email half used to be a fire-and-forget call whose result was thrown
+ * away: `sendSystemEmail(...).catch(console.error)`. So "the bell arrived but
+ * no email did" had six indistinguishable explanations — no address on the
+ * user, the preference off, SMTP unconfigured on that deployment, the
+ * transport rejecting the credentials, the actor being the recipient, or the
+ * notification never being raised at all — and nothing anywhere said which.
+ * That is the actual defect behind "I was never emailed about my task": not a
+ * wrong line, an invisible one.
+ */
+export interface NotifyResult {
+  /** Whether the bell row was written. */
+  notified: boolean;
+  /** Why it wasn't, when it wasn't. */
+  skipped?: "no_recipient" | "self_action";
+  recipientId: string;
+  recipientEmail: string | null;
+  /** Did the caller ask for an email at all? */
+  emailRequested: boolean;
+  /** Did the recipient's preferences permit it? */
+  preferenceAllowed: boolean;
+  /** Did we get as far as handing it to SMTP? */
+  emailAttempted: boolean;
+  emailSent: boolean;
+  emailError?: string;
+}
+
+/**
  * Record a notification, and optionally email it.
  *
- * Returns false without writing anything when the recipient is the actor.
- * Notifying you about something you just did yourself is noise, and noise is
- * how people learn to ignore the bell — which costs you the notifications that
- * do matter.
+ * Writes nothing when the recipient is the actor. Notifying you about
+ * something you just did yourself is noise, and noise is how people learn to
+ * ignore the bell — which costs you the notifications that do matter.
+ *
+ * Mail delivery never throws: the caller receives a structured failure instead.
+ * Database failures still surface to the caller, whose task/lead write path is
+ * responsible for treating the notification itself as best-effort.
  */
-export async function notify(input: NotifyInput): Promise<boolean> {
-  if (!input.userId) return false;
-  if (input.actorId && input.actorId === input.userId) return false;
+export async function notify(input: NotifyInput): Promise<NotifyResult> {
+  const base: NotifyResult = {
+    notified: false,
+    recipientId: input.userId,
+    recipientEmail: null,
+    emailRequested: !!input.email,
+    preferenceAllowed: false,
+    emailAttempted: false,
+    emailSent: false,
+  };
+  if (!input.userId) return { ...base, skipped: "no_recipient" };
+  if (input.actorId && input.actorId === input.userId) return { ...base, skipped: "self_action" };
 
   await prisma.notification.create({
     data: {
@@ -59,6 +100,8 @@ export async function notify(input: NotifyInput): Promise<boolean> {
     },
   });
 
+  const result: NotifyResult = { ...base, notified: true };
+
   if (input.email) {
     const user = await prisma.user.findUnique({
       where: { id: input.userId },
@@ -67,14 +110,39 @@ export async function notify(input: NotifyInput): Promise<boolean> {
     // The bell is not opt-out — it is in-app and costs nothing. Email is, because
     // it competes with the person's actual inbox.
     const prefs = readPrefs(user?.notificationPrefs);
-    const allowed = input.prefKey ? prefs[input.prefKey] !== false : true;
-    if (user?.email && allowed) {
-      await sendSystemEmail(user.email, input.email.subject, input.email.body).catch((e) =>
-        console.error("[notifications] email failed:", e),
-      );
+    result.recipientEmail = user?.email ?? null;
+    result.preferenceAllowed = input.prefKey ? prefs[input.prefKey] !== false : true;
+    result.emailAttempted = !!user?.email && result.preferenceAllowed;
+
+    if (result.emailAttempted) {
+      const sent = await sendSystemEmailDetailed(user!.email, input.email.subject, input.email.body).catch((e) => ({
+        sent: false as const,
+        reason: "send_failed" as const,
+        error: String((e as Error)?.message ?? e).slice(0, 300),
+      }));
+      result.emailSent = sent.sent;
+      if (!sent.sent) result.emailError = sent.reason === "not_configured" ? "not_configured" : (sent.error ?? sent.reason);
     }
   }
-  return true;
+
+  // One line per dispatch, so an undelivered email can be diagnosed from the
+  // logs alone instead of by reasoning about which branch might have run.
+  console.log(
+    JSON.stringify({
+      event: `${input.kind.toUpperCase()}_NOTIFICATION`,
+      kind: input.kind,
+      organizationId: input.organizationId,
+      recipientId: result.recipientId,
+      recipientEmail: result.recipientEmail,
+      emailRequested: result.emailRequested,
+      preferenceAllowed: result.preferenceAllowed,
+      emailAttempted: result.emailAttempted,
+      emailSent: result.emailSent,
+      ...(result.emailError ? { emailError: result.emailError } : {}),
+    }),
+  );
+
+  return result;
 }
 
 export interface NotificationRow {
@@ -179,7 +247,7 @@ export async function notifyLeadAssigned(args: {
   leadName: string;
   /** More than one at a time collapses into a single "N contacts" message. */
   count?: number;
-}): Promise<boolean> {
+}): Promise<NotifyResult> {
   const many = (args.count ?? 1) > 1;
   const title = many ? `${args.count} contacts assigned to you` : args.leadName;
   const href = many ? "/dashboard/leads" : `/dashboard/leads/${args.leadId}`;

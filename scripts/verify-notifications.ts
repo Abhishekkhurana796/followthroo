@@ -5,15 +5,23 @@
  * a bell that buzzes for things you did yourself is one people learn to ignore,
  * which costs you the notifications that mattered.
  *
- *   npx tsx --env-file=.env.local scripts/verify-notifications.ts
+ *   npx tsx --env-file=.env scripts/verify-notifications.ts
+ *
+ * SMTP is cleared below before the application is dynamically imported, so this never puts
+ * real mail on the wire: the recipients here are @t.local throwaways, and
+ * bouncing three of those off the production Zoho account on every run is not
+ * a test, it is backscatter. What gets asserted instead is every branch the
+ * dispatcher takes *before* the transport — which is where the logic lives.
  */
-import { prisma } from "../lib/db";
-import { notify, listNotifications, markRead, notifyLeadAssigned } from "../lib/notifications";
-import { createTask, updateTask } from "../lib/tasks";
-import { readPrefs } from "../lib/task-reminders";
+process.env.SYSTEM_EMAIL_DRY_RUN = "1";
+for (const key of ["SMTP_HOST", "SMTP_USER", "SMTP_PASS"]) delete process.env[key];
+
+let dbClient: (typeof import("../lib/db"))["prisma"] | undefined;
 
 let pass = 0;
 let fail = 0;
+let orgId: string | null = null;
+const fixtureUserIds: string[] = [];
 const ok = (c: boolean, m: string, extra = "") => {
   if (c) {
     pass++;
@@ -24,7 +32,41 @@ const ok = (c: boolean, m: string, extra = "") => {
   }
 };
 
-async function main() {
+async function cleanup() {
+  const prisma = dbClient;
+  if (!orgId || !prisma) return;
+
+  // The production-only database can briefly drop its pooled connection. Each
+  // operation is idempotent, so retrying the complete cleanup is safe even when
+  // an earlier attempt got halfway through.
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      await prisma.notification.deleteMany({ where: { organizationId: orgId } });
+      await prisma.task.deleteMany({ where: { organizationId: orgId } });
+      await prisma.lead.deleteMany({ where: { organizationId: orgId } });
+      await prisma.member.deleteMany({ where: { organizationId: orgId } });
+      if (fixtureUserIds.length) await prisma.user.deleteMany({ where: { id: { in: fixtureUserIds } } });
+      await prisma.organization.deleteMany({ where: { id: orgId } });
+      return;
+    } catch (error) {
+      lastError = error;
+      if (attempt < 3) await new Promise((resolve) => setTimeout(resolve, attempt * 750));
+    }
+  }
+  throw lastError;
+}
+
+async function main(): Promise<number> {
+  // Static imports are hoisted: clearing process.env above a static application
+  // import is not an ordering guarantee. Dynamic imports are, and lib/env now
+  // sees SMTP as absent when it builds its cached configuration.
+  const { prisma } = await import("../lib/db");
+  dbClient = prisma;
+  const { notify, listNotifications, markRead, notifyLeadAssigned } = await import("../lib/notifications");
+  const { createTask, updateTask, notifyTaskAssigned } = await import("../lib/tasks");
+  const { readPrefs } = await import("../lib/task-reminders");
+
   // Defaults on for someone who has never opened the settings.
   const d = readPrefs(null);
   ok(d.taskAssigned && d.leadAssigned, "new preferences default to on");
@@ -33,20 +75,22 @@ async function main() {
 
   const stamp = Date.now();
   const org = await prisma.organization.create({ data: { name: "notif-test", slug: `notif-test-${stamp}` } });
-  const orgId = org.id;
+  const createdOrgId = org.id;
+  orgId = createdOrgId;
 
   const mk = async (handle: string) => {
     const u = await prisma.user.create({
       data: { name: handle, email: `${handle}-${stamp}@t.local`, emailVerified: true },
     });
-    await prisma.member.create({ data: { organizationId: orgId, userId: u.id, role: "member" } });
+    fixtureUserIds.push(u.id);
+    await prisma.member.create({ data: { organizationId: createdOrgId, userId: u.id, role: "member" } });
     return u.id;
   };
   const manager = await mk("mgr");
   const rep = await mk("rep");
   const other = await mk("other");
 
-  const countFor = async (userId: string) => (await listNotifications(orgId, userId)).unread;
+  const countFor = async (userId: string) => (await listNotifications(createdOrgId, userId)).unread;
 
   // ---- task assignment ----------------------------------------------------
   await createTask({ organizationId: orgId, title: "Call the client", ownerId: rep, createdBy: manager });
@@ -74,6 +118,53 @@ async function main() {
   await updateTask(orgId, unowned.id, { ownerId: other }, manager);
   ok((await countFor(other)) === otherBefore, "re-saving the same owner does not re-notify");
 
+  // ---- the email half ------------------------------------------------------
+  // Every one of these used to be indistinguishable from the outside: the
+  // result of the send was discarded and nothing was logged, so "no email
+  // arrived" could equally have been the preference, the address, the actor
+  // check, or SMTP. Each branch now reports itself.
+  const emailTask = { id: "t1", organizationId: orgId, title: "Ring the client", dueAt: null, leadId: null };
+
+  // Dedicated recipients: these assertions raise real notifications, and the
+  // lead-assignment checks further down count rep's unread.
+  const mailee = await mk("mailee");
+  const muteds = await mk("muted");
+  const toOther = await notifyTaskAssigned({ ...emailTask, ownerId: mailee }, manager);
+  ok(toOther?.notified === true, "assigning to someone else raises the notification");
+  ok(toOther?.emailRequested === true, "...and asks for an email");
+  ok(toOther?.preferenceAllowed === true, "...which their preferences allow by default");
+  ok(toOther?.emailAttempted === true, "...so the email is handed to the transport", `email=${toOther?.recipientEmail}`);
+  ok(toOther?.recipientEmail?.startsWith("mailee-") === true, "...addressed to the assignee, not the assigner");
+
+  const toSelf = await notifyTaskAssigned({ ...emailTask, ownerId: manager }, manager);
+  ok(toSelf?.notified === false, "assigning to yourself raises nothing");
+  ok(toSelf?.skipped === "self_action", "...and says why", `skipped=${toSelf?.skipped}`);
+  ok(toSelf?.emailAttempted === false, "...and sends no email");
+
+  // Preference off: the bell still rings, the email does not.
+  await prisma.user.update({ where: { id: muteds }, data: { notificationPrefs: { taskAssigned: false } } });
+  const muted = await notifyTaskAssigned({ ...emailTask, ownerId: muteds }, manager);
+  ok(muted?.notified === true, "a muted recipient still gets the in-app notification");
+  ok(muted?.preferenceAllowed === false, "...but the preference blocks the email");
+  ok(muted?.emailAttempted === false, "...so nothing is handed to the transport");
+
+  // A recipient the user table cannot resolve — a stale ownerId, which is
+  // possible because Task.ownerId and Notification.userId are raw ids with no
+  // foreign key. The bell row is still written; there is simply nobody to mail.
+  // (Blanking a real user's email would be the more literal test, but User.email
+  // is unique, so `""` can only ever exist once in the whole database.)
+  const noAddress = await notifyTaskAssigned({ ...emailTask, ownerId: `missing-${stamp}` }, manager);
+  ok(noAddress?.notified === true, "an unresolvable recipient still gets the bell");
+  ok(noAddress?.recipientEmail === null, "...with no address found", `email=${String(noAddress?.recipientEmail)}`);
+  ok(noAddress?.emailAttempted === false, "...and no email is attempted");
+
+  // SMTP unreachable/unconfigured must not take the task with it.
+  const survived = await createTask({ organizationId: orgId, title: "Survives a dead mailer", ownerId: mailee, createdBy: manager });
+  ok(!!survived?.id, "a task is still created when the email cannot be sent");
+  const lastAttempt = await notifyTaskAssigned({ ...emailTask, ownerId: mailee }, manager);
+  ok(lastAttempt?.emailSent === false, "...the send reports failure rather than throwing");
+  ok(lastAttempt?.emailError === "dry_run", "...naming the reason", `reason=${lastAttempt?.emailError}`);
+
   // ---- lead assignment ----------------------------------------------------
   const lead = await prisma.lead.create({
     data: { organizationId: orgId, firstName: "Rahul", email: `rahul-${stamp}@lead.local` },
@@ -89,7 +180,7 @@ async function main() {
     leadName: "Rahul",
     count: 40,
   });
-  ok(batched, "a batch produces one notification, not forty");
+  ok(batched.notified, "a batch produces one notification, not forty");
   const repItems = (await listNotifications(orgId, rep)).items;
   ok(!!repItems.find((i) => i.title.includes("40 contacts")), "and says how many", repItems[0]?.title);
 
@@ -112,21 +203,24 @@ async function main() {
   const stolen = await markRead(orgId, rep, [otherItems[0].id]);
   ok(stolen === 0, "you cannot mark someone else's notification read", `marked=${stolen}`);
 
-  // cleanup
-  await prisma.notification.deleteMany({ where: { organizationId: orgId } });
-  await prisma.task.deleteMany({ where: { organizationId: orgId } });
-  await prisma.lead.deleteMany({ where: { organizationId: orgId } });
-  await prisma.member.deleteMany({ where: { organizationId: orgId } });
-  await prisma.user.deleteMany({ where: { id: { in: [manager, rep, other] } } });
-  await prisma.organization.delete({ where: { id: orgId } });
-
   console.log(`\n${pass} passed, ${fail} failed`);
-  process.exit(fail === 0 ? 0 : 1);
+  return fail === 0 ? 0 : 1;
 }
 
-main()
-  .catch((e) => {
+void (async () => {
+  let exitCode = 1;
+  try {
+    exitCode = await main();
+  } catch (e) {
     console.error(e);
-    process.exit(1);
-  })
-  .finally(() => prisma.$disconnect());
+  } finally {
+    try {
+      await cleanup();
+    } catch (e) {
+      console.error("[verify-notifications] fixture cleanup failed:", e);
+      exitCode = 1;
+    }
+    await dbClient?.$disconnect();
+    process.exitCode = exitCode;
+  }
+})();

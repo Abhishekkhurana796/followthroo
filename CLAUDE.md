@@ -3,7 +3,7 @@
 > Master context file. Claude Code reads this every session. If it conflicts with
 > what you see in code, trust the code and update this file.
 
-**Last updated:** 2026-09-12
+**Last updated:** 2026-09-15
 **Status:** draft
 
 ---
@@ -170,6 +170,7 @@ sequence. A premium Next.js UI sits on top.
 | [docs/pricing.md](docs/pricing.md) | Plans, credits and top-ups as settled; where credits are charged; the costs they have to cover |
 | [docs/enrichment.md](docs/enrichment.md) | Email/phone from LinkedIn Contact info: the credit engine, the campaign Enrich step, the desktop DOM logic and what's still unverified |
 | [docs/posts.md](docs/posts.md) | AI-written LinkedIn posts and Autopilot: scheduling arithmetic, trending topics, models, credits, what's unverified |
+| [docs/notifications_tasks.md](docs/notifications_tasks.md) | Task & lead assignment notification architecture, dual-channel dispatching, preference gating, and sweeps |
 | [docs/security.md](docs/security.md) | OAuth2, secrets, encryption, RBAC, GDPR |
 | [docs/domains-and-mailboxes.md](docs/domains-and-mailboxes.md) | Sending domains via the reseller storefront, DNS verification, mailbox connect |
 | [docs/crm-data-model.md](docs/crm-data-model.md) | Lead schema, logs, CSV import/export |

@@ -82,16 +82,16 @@ export async function createTask(input: {
  * you just did yourself is noise, and noise is how people learn to ignore the
  * bell entirely.
  */
-async function notifyTaskAssigned(
+export async function notifyTaskAssigned(
   task: { id: string; organizationId: string; ownerId: string | null; title: string; dueAt: Date | null; leadId: string | null },
   actorId: string | null,
 ) {
-  if (!task.ownerId) return;
+  if (!task.ownerId) return null;
   const { notify } = await import("./notifications");
   const due = task.dueAt ? ` Due ${task.dueAt.toLocaleDateString("en-IN", { day: "numeric", month: "short" })}.` : "";
   const href = task.leadId ? `/dashboard/leads/${task.leadId}` : "/dashboard/tasks";
 
-  await notify({
+  return notify({
     organizationId: task.organizationId,
     userId: task.ownerId,
     actorId,
