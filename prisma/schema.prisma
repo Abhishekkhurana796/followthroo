@@ -66,6 +66,14 @@ model Lead {
   custom         Json      @default("{}") // extra CSV columns → template variables
   optedOut       Boolean   @default(false)
   consent        Json      @default("{}") // per-channel opt-in + timestamps (GDPR)
+  /// The LinkedIn message a campaign's message step sends this person, written
+  /// by AI (lib/linkedin/message-writer.ts) or by hand. Null means the step
+  /// falls back to its template. Its own column because `custom` is replaced
+  /// wholesale on CSV re-import and would lose it.
+  linkedinMessage          String?
+  /// ai | edited. A hand edit is never overwritten by a later bulk generate.
+  linkedinMessageSource    String?
+  linkedinMessageUpdatedAt DateTime?
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
 

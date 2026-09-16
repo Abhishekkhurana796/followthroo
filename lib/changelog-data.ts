@@ -32,6 +32,18 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    product: "webapp",
+    version: "0.32.0",
+    date: "Sep 2026",
+    items: [
+      "AI LinkedIn messages: a LinkedIn message column on Leads with Generate for one lead, and Generate LinkedIn messages for a selection — each written separately for that person, with progress and a retry for any that failed",
+      "Messages are written only from what's on the lead's record (name, title, company, tags, descriptive custom fields, recent notes, enrichment) and never from email addresses, phone numbers or links; a reply with a leftover placeholder is refused rather than saved",
+      "Every message is reviewed and editable before anything is sent. A hand edit is kept by later bulk runs; Regenerate replaces it only when you ask",
+      "A campaign's LinkedIn message step now sends the lead's saved message, and falls back to the step's template for anyone without one. Invitation notes are unchanged",
+      "2 credits per message written, charged only for messages actually saved",
+    ],
+  },
+  {
     product: "desktop",
     version: "1.16.2",
     date: "Sep 2026",

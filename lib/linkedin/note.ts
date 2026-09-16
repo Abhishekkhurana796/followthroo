@@ -53,3 +53,10 @@ export function worstCaseNoteLength(body: string): number {
   total += body.length - lastIndex;
   return total;
 }
+
+/**
+ * Ceiling on a saved LinkedIn message for a lead. LinkedIn allows thousands of
+ * characters in a DM; this keeps a first message to something a person reads.
+ * Here rather than in the writer so the browser can import it.
+ */
+export const LINKEDIN_MESSAGE_MAX = 600;

@@ -5,6 +5,26 @@ import { enqueueLinkedInAction } from "../linkedin/queue";
 import { INVITE_NOTE_MAX } from "../linkedin/note";
 
 /**
+ * The text a queued LinkedIn action carries.
+ *
+ * A message step sends the lead's own saved message when there is one — written
+ * by AI or by hand on the Leads screen — and otherwise the step's template, as
+ * it always did, so no lead is held up for lack of one. Invitations keep using
+ * the template: a saved message is a direct message, and LinkedIn caps an
+ * invitation note at 300 characters.
+ */
+export function stepNote(input: {
+  kind: string;
+  noteFor?: string;
+  savedMessage?: string | null;
+  rendered: RenderedMessage;
+}): string | null {
+  if (input.noteFor === "none") return null;
+  const saved = input.kind === "message" ? input.savedMessage?.trim() : "";
+  return saved || input.rendered.body || input.rendered.subject || null;
+}
+
+/**
  * LinkedIn sending is handled by the companion Chrome extension, not a server API —
  * LinkedIn does not grant invite/DM access through the developer program (see
  * docs/channels.md). A "send" here enqueues a LinkedInAction; the extension, running in
@@ -30,7 +50,7 @@ export const linkedinChannel: Channel = {
 
     const dbLead = await prisma.lead.findUnique({
       where: { id: lead.id },
-      select: { organizationId: true, linkedinUrl: true },
+      select: { organizationId: true, linkedinUrl: true, linkedinMessage: true },
     });
     if (!dbLead?.organizationId) return { ok: false, skipped: true, reason: "lead has no organization" };
 
@@ -38,7 +58,7 @@ export const linkedinChannel: Channel = {
     // A step set to "No one" sends plain connection requests: the template is
     // not a note there, so it is neither stored nor held to the 300 limit.
     const noteFor = kind === "message" ? undefined : ctx?.noteFor;
-    const note = noteFor === "none" ? null : rendered.body || rendered.subject || null;
+    const note = stepNote({ kind, noteFor, savedMessage: dbLead.linkedinMessage, rendered });
 
     // The 300-character ceiling is LinkedIn's, and it only applies to an invite
     // note — a DM has room for thousands. Refusing here rather than letting the

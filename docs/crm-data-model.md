@@ -260,3 +260,28 @@ in-app notifications remain available independently.
 **`User` gained** `notificationPrefs Json?` and `lastDigestAt DateTime?`. Both
 nullable with no default, for the same reason as the other app-owned user fields:
 better-auth owns that table and a non-nullable addition reads as drift.
+
+## LinkedIn message (per lead)
+
+`Lead.linkedinMessage`, `linkedinMessageSource` (`ai` | `edited`) and
+`linkedinMessageUpdatedAt` hold one saved LinkedIn direct message per lead. They
+are real columns rather than a key in `custom`, because the CSV importer replaces
+`custom` wholesale on re-import.
+
+- **Written by** `lib/linkedin/message-writer.ts`, through
+  `POST /api/leads/linkedin-message` (at most 5 leads per request, so the Leads
+  screen can show progress; scoped with `leadScope`). The model sees only facts on
+  the record — name, title, company, tags, descriptive custom columns, the three
+  newest notes, the enrichment's connected-since date — and never email, phone or
+  link columns. Uses `OPENROUTER_API_KEY2` (its own uncapped key) and
+  `OPENROUTER_MODEL`. 2 credits (`ai_linkedin_message`), charged only when a
+  message is saved.
+- **Edited by** `PUT /api/leads/linkedin-message`, which marks it `edited`. A bulk
+  generate never overwrites an edited message, including one edited while the
+  model was writing; only a single Regenerate (`overwriteEdited`) replaces it.
+- **Sent by** a campaign's LinkedIn *message* step: `stepNote` in
+  `lib/channels/linkedin.ts` uses the saved message, else the step's template.
+  Invitation notes and `auto` steps keep the template. Generating never sends.
+- **Queued already?** Saving a message (generated or edited) also rewrites that
+  lead's `pending` LinkedIn *message* actions, so a message written after the
+  campaign queued the lead is still the one sent. Claimed actions are untouched.

@@ -6,12 +6,12 @@ import useSWR from "swr";
 import { useSearchParams } from "next/navigation";
 import {
   Trash2, Upload, Plus, Tag, FolderPlus, X, Pencil, Check, Users, Linkedin,
-  AlertTriangle, CircleDot, Search, ArrowRight, Building2, Download, IdCard,
+  AlertTriangle, CircleDot, Search, ArrowRight, Building2, Download, IdCard, Sparkles, Loader2,
 } from "lucide-react";
 import { api } from "@/lib/client";
 import { cn } from "@/lib/cn";
 import { Badge, Banner, DashHeader, Dialog, EmptyState, Input, Label, NoResults, Panel, Select, Skeleton, Textarea, useConfirm, usePrompt } from "@/components/ui";
-import { INVITE_NOTE_MAX, worstCaseNoteLength } from "@/lib/linkedin/note";
+import { INVITE_NOTE_MAX, LINKEDIN_MESSAGE_MAX, worstCaseNoteLength } from "@/lib/linkedin/note";
 import { CREDIT_COSTS } from "@/lib/billing/plans";
 import { SUMMARY_KEY, type Summary } from "@/components/dashboard/billing/types";
 import { tourTarget } from "@/components/dashboard/tour/target";
@@ -35,7 +35,14 @@ type Lead = {
   createdKind: string;
   lastActivityAt: string | null;
   nextAction: NextAction | null;
+  /** Saved LinkedIn message a campaign's message step sends. */
+  linkedinMessage: string | null;
+  /** ai | edited */
+  linkedinMessageSource: string | null;
 };
+
+type MessageResult = { leadId: string; status: "written" | "kept_edit" | "failed"; message?: string; reason?: string };
+type BulkGeneration = { done: number; total: number; written: number; kept: number; failed: string[]; running: boolean; lastError?: string };
 
 type LeadsResponse = { items: Lead[]; total: number; page: number; pageSize: number; totalPages: number };
 type Assignees = { self: string; members: { userId: string; name: string; email: string | null; isSelf: boolean }[] };
@@ -112,6 +119,9 @@ export default function LeadsPage() {
   const [busy, setBusy] = useState(false);
   const [managingGroup, setManagingGroup] = useState<Segment | null>(null);
   const [inviteOpen, setInviteOpen] = useState(false);
+  const [messageFor, setMessageFor] = useState<Lead | null>(null);
+  const [generatingOne, setGeneratingOne] = useState<string | null>(null);
+  const [bulkGen, setBulkGen] = useState<BulkGeneration | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -165,6 +175,63 @@ export default function LeadsPage() {
   }, [leads, tagFilter]);
 
   const allSelected = leads.length > 0 && leads.every((l) => selected.has(l.id));
+
+  // ---- LinkedIn messages ---------------------------------------------------
+  // Generating only saves a message on the lead. A campaign's LinkedIn message
+  // step is what sends it, so writing, reviewing and sending stay separate.
+  async function generateOne(l: Lead) {
+    setGeneratingOne(l.id);
+    try {
+      const { results } = await api<{ results: MessageResult[] }>("/api/leads/linkedin-message", { body: { leadIds: [l.id] } });
+      const r = results[0];
+      if (!r || r.status === "failed") {
+        setMsg({ kind: "error", text: `Couldn't write a message for ${displayName(l)}: ${r?.reason ?? "no response"}` });
+      } else if (r.message) {
+        // Straight to review: generate, read it, edit if needed, save.
+        setMessageFor({ ...l, linkedinMessage: r.message, linkedinMessageSource: r.status === "kept_edit" ? "edited" : "ai" });
+      }
+      await mutate();
+    } catch (e) {
+      setMsg({ kind: "error", text: (e as Error).message });
+    } finally {
+      setGeneratingOne(null);
+    }
+  }
+
+  async function bulkGenerate(ids: string[], retry = false) {
+    if (!ids.length) return;
+    if (!retry) {
+      const go = await confirm({
+        title: `Write a LinkedIn message for ${ids.length} lead${ids.length === 1 ? "" : "s"}?`,
+        body: `Each is written for that person from what's on their record. ${CREDIT_COSTS.ai_linkedin_message} credits each, only for messages actually written. Messages you've edited by hand are kept, and nothing is sent.`,
+        confirmLabel: `Write ${ids.length}`,
+      });
+      if (!go) return;
+    }
+    const state: BulkGeneration = { done: 0, total: ids.length, written: 0, kept: 0, failed: [], running: true };
+    setBulkGen({ ...state });
+    for (let i = 0; i < ids.length; i += 5) {
+      const batch = ids.slice(i, i + 5);
+      try {
+        const { results } = await api<{ results: MessageResult[] }>("/api/leads/linkedin-message", { body: { leadIds: batch } });
+        for (const r of results) {
+          if (r.status === "written") state.written++;
+          else if (r.status === "kept_edit") state.kept++;
+          else {
+            state.failed.push(r.leadId);
+            state.lastError = r.reason;
+          }
+        }
+      } catch (e) {
+        state.failed.push(...batch);
+        state.lastError = (e as Error).message;
+      }
+      state.done = Math.min(ids.length, i + batch.length);
+      setBulkGen({ ...state, failed: [...state.failed] });
+    }
+    setBulkGen({ ...state, failed: [...state.failed], running: false });
+    await mutate();
+  }
 
   function toggle(id: string) {
     setSelected((prev) => {
@@ -480,6 +547,34 @@ export default function LeadsPage() {
 
       <div className="space-y-4 p-8">
         {msg ? <Banner kind={msg.kind}>{msg.text}</Banner> : error ? <Banner kind="error">{(error as Error).message}</Banner> : null}
+        {bulkGen && (
+          <Banner kind={bulkGen.running ? "info" : bulkGen.failed.length ? "warn" : "success"}>
+            <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
+              {bulkGen.running ? (
+                <>
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" /> Generating messages… {bulkGen.done} / {bulkGen.total}
+                </>
+              ) : (
+                <>
+                  <span>
+                    {bulkGen.written} written
+                    {bulkGen.kept ? ` · ${bulkGen.kept} kept (edited by hand)` : ""}
+                    {bulkGen.failed.length ? ` · ${bulkGen.failed.length} failed` : ""}
+                  </span>
+                  {bulkGen.failed.length > 0 && bulkGen.lastError && <span className="text-xs opacity-80">{bulkGen.lastError}</span>}
+                  {bulkGen.failed.length > 0 && (
+                    <button onClick={() => bulkGenerate(bulkGen.failed, true)} className="font-semibold underline">
+                      Retry failed
+                    </button>
+                  )}
+                  <button onClick={() => setBulkGen(null)} className="ml-auto text-xs opacity-70 hover:opacity-100">
+                    Dismiss
+                  </button>
+                </>
+              )}
+            </span>
+          </Banner>
+        )}
 
         {/* Filters */}
         <div className="flex flex-wrap items-center gap-3">
@@ -595,6 +690,14 @@ export default function LeadsPage() {
               <span className="font-mono text-[10px] text-ink-invert/60">up to {CREDIT_COSTS.enrich} each</span>
             </button>
             )}
+            <button
+              onClick={() => bulkGenerate(selectedIds())}
+              disabled={!!bulkGen?.running}
+              className="flex items-center gap-1 rounded-lg bg-ink-invert/15 px-2.5 py-1 hover:bg-ink-invert/25 disabled:opacity-50"
+            >
+              <Sparkles className="h-3.5 w-3.5" /> Generate LinkedIn messages
+              <span className="font-mono text-[10px] text-ink-invert/60">{CREDIT_COSTS.ai_linkedin_message} credits each</span>
+            </button>
             <button onClick={() => setSelected(new Set())} className="ml-auto text-ink-invert/70 hover:text-ink-invert">Clear</button>
           </div>
         )}
@@ -608,6 +711,7 @@ export default function LeadsPage() {
                 </th>
                 <th className="px-4 py-3">Lead</th>
                 <th className="px-4 py-3">Company</th>
+                <th className="px-4 py-3">LinkedIn message</th>
                 <th className="px-4 py-3">Source</th>
                 <th className="px-4 py-3">Stage</th>
                 <th className="px-4 py-3">Owner</th>
@@ -624,14 +728,14 @@ export default function LeadsPage() {
                 Array.from({ length: 8 }).map((_, i) => (
                   <tr key={`sk-${i}`}>
                     <td className="px-4 py-3"><Skeleton className="h-4 w-4" /></td>
-                    {Array.from({ length: 9 }).map((__, c) => (
+                    {Array.from({ length: 10 }).map((__, c) => (
                       <td key={c} className="px-4 py-3"><Skeleton className={`h-3.5 ${c === 0 ? "w-32" : "w-20"}`} /></td>
                     ))}
                   </tr>
                 ))
               ) : leads.length === 0 ? (
                 <tr>
-                  <td colSpan={10} className="px-4 py-10">
+                  <td colSpan={11} className="px-4 py-10">
                     {hasFilters ? (
                       <NoResults
                         query={debouncedSearch.trim() || undefined}
@@ -661,6 +765,25 @@ export default function LeadsPage() {
                       {l.email && <div className="truncate text-xs text-ink-soft">{l.email}</div>}
                     </td>
                     <td className="px-4 py-3 text-ink-soft">{l.company ?? "—"}</td>
+                    <td className="max-w-[240px] px-4 py-3">
+                      {l.linkedinMessage ? (
+                        <button onClick={() => setMessageFor(l)} className="group block w-full text-left" title={l.linkedinMessage}>
+                          <span className="block truncate text-xs text-ink-soft group-hover:text-ink">{l.linkedinMessage}</span>
+                          <span className="text-[11px] font-semibold text-accent-strong">
+                            {l.linkedinMessageSource === "edited" ? "Edited · " : ""}View / edit
+                          </span>
+                        </button>
+                      ) : (
+                        <button
+                          onClick={() => generateOne(l)}
+                          disabled={generatingOne === l.id}
+                          title={`Write a LinkedIn message for ${displayName(l)} · ${CREDIT_COSTS.ai_linkedin_message} credits`}
+                          className="inline-flex items-center gap-1 rounded-lg border border-line px-2 py-1 text-xs font-semibold text-ink-soft transition-colors hover:bg-tint hover:text-ink disabled:opacity-50"
+                        >
+                          {generatingOne === l.id ? <Loader2 className="h-3 w-3 animate-spin" /> : <Sparkles className="h-3 w-3" />} Generate
+                        </button>
+                      )}
+                    </td>
                     <td className="px-4 py-3">
                       {l.source ? <Badge tone="neutral">{l.source}</Badge> : <span className="text-ink-faint">—</span>}
                     </td>
@@ -735,6 +858,16 @@ export default function LeadsPage() {
           </div>
         )}
       </div>
+
+      <LinkedInMessageDialog
+        lead={messageFor}
+        onClose={() => setMessageFor(null)}
+        onSaved={(text) => {
+          setMessageFor(null);
+          setMsg({ kind: "success", text });
+          mutate();
+        }}
+      />
 
       <InviteDialog
         open={inviteOpen}
@@ -1409,6 +1542,105 @@ function GroupMembersModal({ segment, selectedLeadIds, onClose, onSaved }: Group
             className="rounded-xl bg-ink px-4 py-2 text-sm font-semibold text-ink-invert transition hover:opacity-90 disabled:opacity-40"
           >
             {saving ? "Saving…" : `Save changes${dirty ? ` (${pendingIds.length} leads)` : ""}`}
+          </button>
+        </div>
+      </div>
+    </Dialog>
+  );
+}
+
+/**
+ * Review and edit one lead's LinkedIn message. Saving marks it as edited, so a
+ * later bulk generate keeps it; Regenerate deliberately replaces it. Nothing is
+ * sent from here.
+ */
+function LinkedInMessageDialog({
+  lead,
+  onClose,
+  onSaved,
+}: {
+  lead: Lead | null;
+  onClose: () => void;
+  onSaved: (text: string) => void;
+}) {
+  const [text, setText] = useState("");
+  const [busy, setBusy] = useState<"save" | "regenerate" | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setText(lead?.linkedinMessage ?? "");
+    setError(null);
+  }, [lead]);
+
+  const name = lead ? displayName(lead) : "";
+  const length = text.trim().length;
+  const over = length > LINKEDIN_MESSAGE_MAX;
+
+  async function save() {
+    if (!lead) return;
+    setBusy("save");
+    setError(null);
+    try {
+      await api("/api/leads/linkedin-message", { method: "PUT", body: { leadId: lead.id, message: text.trim() || null } });
+      onSaved(text.trim() ? `Saved the LinkedIn message for ${name}.` : `Cleared the LinkedIn message for ${name}.`);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function regenerate() {
+    if (!lead) return;
+    setBusy("regenerate");
+    setError(null);
+    try {
+      const { results } = await api<{ results: MessageResult[] }>("/api/leads/linkedin-message", {
+        body: { leadIds: [lead.id], overwriteEdited: true },
+      });
+      const r = results[0];
+      if (!r || r.status === "failed") setError(r?.reason ?? "The message could not be written.");
+      else if (r.message) setText(r.message);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  return (
+    <Dialog
+      open={!!lead}
+      onClose={onClose}
+      title={`LinkedIn message for ${name}`}
+      description="A campaign's LinkedIn message step sends this. Nothing is sent from here."
+      size="md"
+    >
+      <div className="space-y-3">
+        {error && <Banner kind="error">{error}</Banner>}
+        <Textarea
+          rows={7}
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          aria-label={`LinkedIn message for ${name}`}
+          placeholder="Write a message, or Regenerate to have AI write one."
+        />
+        <div className="flex items-center justify-between gap-3 text-xs text-ink-soft">
+          <span>{lead?.linkedinMessageSource === "edited" ? "Edited by hand — bulk generate keeps it." : "Edit freely; saving keeps your version. Save it empty to clear it."}</span>
+          <span className={cn("shrink-0 font-mono", over && "font-semibold text-danger")}>
+            {length} / {LINKEDIN_MESSAGE_MAX}
+          </span>
+        </div>
+        <div className="flex flex-wrap items-center gap-2 pt-1">
+          <button onClick={save} disabled={!!busy || over} className="btn btn-primary !py-2 !text-sm disabled:opacity-50">
+            {busy === "save" ? "Saving…" : "Save"}
+          </button>
+          <button onClick={regenerate} disabled={!!busy} className="btn btn-ghost !py-2 !text-sm disabled:opacity-50">
+            {busy === "regenerate" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />} Regenerate
+            <span className="font-mono text-[10px] text-ink-soft">{CREDIT_COSTS.ai_linkedin_message} credits</span>
+          </button>
+          <button onClick={onClose} disabled={!!busy} className="ml-auto text-sm text-ink-soft hover:text-ink">
+            Cancel
           </button>
         </div>
       </div>

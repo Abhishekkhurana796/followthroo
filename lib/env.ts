@@ -83,6 +83,10 @@ export const env = {
   // ("anthropic/claude-...", "minimax/..."), NOT bare Anthropic ids.
   openrouter: {
     apiKey: get("OPENROUTER_API_KEY"),
+    // The AI LinkedIn message writer bills to its own key so bulk generation
+    // can't drain the capped key the agent, posts and desktop pilot share.
+    // Falls back to the main key where only one is configured.
+    messagesApiKey: get("OPENROUTER_API_KEY2") ?? get("OPENROUTER_API_KEY"),
     baseUrl: url("OPENROUTER_BASE_URL") ?? "https://openrouter.ai/api",
     model: get("OPENROUTER_MODEL") ?? "minimax/minimax-m2",
     classifierModel: get("OPENROUTER_CLASSIFIER_MODEL") ?? get("OPENROUTER_MODEL") ?? "minimax/minimax-m2",

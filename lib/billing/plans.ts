@@ -121,6 +121,8 @@ export type CreditAction =
   | "whatsapp_send"
   | "sms_send"
   | "ai_draft"
+  /** One AI-written LinkedIn message for one lead. */
+  | "ai_linkedin_message"
   | "ai_post_standard"
   | "ai_post_premium"
   /** Claude Fable 5.1 only — priced above the other premium models; see lib/posts/models.ts. */
@@ -138,6 +140,7 @@ export const CREDIT_COSTS: Record<CreditAction, number> = {
   whatsapp_send: 1,
   sms_send: 1,
   ai_draft: 2,
+  ai_linkedin_message: 2,
   ai_post_standard: 10,
   ai_post_premium: 20,
   /**
